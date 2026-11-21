@@ -1,0 +1,22 @@
+{
+  "by_category": {
+    "hardware": 615435,
+    "meals": 605018,
+    "office": 513725,
+    "software": 522754,
+    "training": 383431,
+    "travel": 567316
+  },
+  "by_month": {
+    "2025-11": 1057528,
+    "2025-12": 1119461,
+    "2026-01": 1030690
+  },
+  "largest": {
+    "amount_cents": 59853,
+    "id": "EX-230081"
+  },
+  "rejected_rows": 13,
+  "total_cents": 3207679,
+  "valid_rows": 168
+}

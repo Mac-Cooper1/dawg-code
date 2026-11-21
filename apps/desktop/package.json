@@ -1,0 +1,8 @@
+{
+  "name": "@dawg/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "The Electron app. Scaffolded in Phase 1."
+}

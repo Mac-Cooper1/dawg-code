@@ -1,0 +1,10 @@
+{
+  "name": "teamboard-api",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "description": "In-memory API for a small team task board.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

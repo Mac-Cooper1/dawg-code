@@ -1,0 +1,21 @@
+symbol,name,dimension,factor
+m,metre,length,1
+km,kilometre,length,1000
+cm,centimetre,length,0.01
+mm,millimetre,length,0.001
+in,inch,length,0.0254
+ft,foot,length,0.3408
+yd,yard,length,0.9144
+mi,mile,length,1609.344
+kg,kilogram,mass,1
+g,gram,mass,0.001
+lb,pound,mass,0.45359237
+oz,ounce,mass,0.028349523125
+st,stone,mass,6.35029318
+s,second,time,1
+min,minute,time,60
+h,hour,time,3600
+d,day,time,86400
+l,litre,volume,1
+ml,millilitre,volume,0.001
+gal,US gallon,volume,3.785411784

@@ -1,0 +1,28 @@
+# Dependencies and build output
+node_modules/
+dist/
+out/
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Personal project settings
+.dawg/settings.local.json
+.dawg/worktrees/
+.claude/settings.local.json
+
+# Fetched runtime binaries and test models (see scripts/fetch-runtime)
+apps/desktop/resources/runtime/
+.cache/
+
+# Eval output that is not a committed baseline
+evals/results/tmp/
+evals/.workspaces/
+
+# OS and editor
+.DS_Store
+*.log
+coverage/

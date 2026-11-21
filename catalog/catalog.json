@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "version": 1,
+  "entries": [
+    {
+      "id": "gpt-oss-20b-q4",
+      "displayName": "gpt-oss 20B (4-bit)",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "url": "https://huggingface.co/openai/gpt-oss-20b/blob/main/LICENSE"
+      },
+      "source": {
+        "repo": "unsloth/gpt-oss-20b-GGUF",
+        "revision": "d449b42d93e1c2c7bda5312f5c25c8fb91dfa9b4",
+        "file": "gpt-oss-20b-Q4_K_M.gguf",
+        "sha256": "c27536640e410032865dc68781d80a08b98f8db5e93575919af8ccc0568aeb4f",
+        "sizeBytes": 11624759488
+      },
+      "minMemoryBytes": 25769803776,
+      "context": { "default": 65536, "max": 131072 },
+      "capabilities": { "tools": true, "vision": false, "reasoning": true },
+      "profile": "gpt-oss",
+      "rank": 10
+    },
+    {
+      "id": "qwen3.8-27b-q4",
+      "displayName": "Qwen3.8 27B (4-bit)",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "url": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE"
+      },
+      "source": {
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+        "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+        "sha256": "1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529",
+        "sizeBytes": 16564259744
+      },
+      "projector": {
+        "file": "mmproj-F16.gguf",
+        "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
+        "sizeBytes": 927607488
+      },
+      "minMemoryBytes": 34359738368,
+      "context": { "default": 65536, "max": 262144 },
+      "capabilities": { "tools": true, "vision": true, "reasoning": true },
+      "profile": "qwen3.8",
+      "rank": 20
+    },
+    {
+      "id": "qwen3.6-35b-a3b-q4",
+      "displayName": "Qwen3.6 35B-A3B (4-bit)",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/blob/main/LICENSE"
+      },
+      "source": {
+        "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+        "file": "Qwen3.6-35B-A3B-UD-IQ4_NL.gguf",
+        "sha256": "0d17e255dc257a11f398ed4bc8d62412d8ce9ca24b3fce2947d962e4bfed5758",
+        "sizeBytes": 18040888288
+      },
+      "projector": {
+        "file": "mmproj-F16.gguf",
+        "sha256": "8971ee4f331ff0a4c609374f32984b3d4e6dc086c0aa35f1d637fad1829e887f",
+        "sizeBytes": 899283680
+      },
+      "minMemoryBytes": 34359738368,
+      "chipClasses": ["base", "pro"],
+      "context": { "default": 131072, "max": 262144 },
+      "capabilities": { "tools": true, "vision": true, "reasoning": true },
+      "profile": "qwen3.6",
+      "rank": 30
+    },
+    {
+      "id": "laguna-xs-2.1-q4",
+      "displayName": "Laguna XS 2.1 (4-bit)",
+      "licence": {
+        "spdx": "LicenseRef-OpenMDW-1.1",
+        "url": "https://huggingface.co/poolside/Laguna-XS-2.1-GGUF/blob/main/LICENSE.md"
+      },
+      "source": {
+        "repo": "poolside/Laguna-XS-2.1-GGUF",
+        "revision": "1a37c0a5fb8c7a18e6106decb6be6327d1b63fa6",
+        "file": "Laguna-XS-2.1-Q4_K_M.gguf",
+        "sha256": "1ac7079101fca5a6df8c5a7523a3c30ea7d1c0e4b1258090e7d6d4039287f6cb",
+        "sizeBytes": 20274300032
+      },
+      "minMemoryBytes": 38654705664,
+      "chipClasses": ["base", "pro"],
+      "context": { "default": 65536, "max": 262144 },
+      "capabilities": { "tools": true, "vision": false, "reasoning": true },
+      "profile": "laguna-xs-2.1",
+      "rank": 35
+    },
+    {
+      "id": "qwen3.8-27b-q6",
+      "displayName": "Qwen3.8 27B (6-bit)",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "url": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE"
+      },
+      "source": {
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+        "file": "Qwen3.8-27B-UD-Q6_K.gguf",
+        "sha256": "6cac55f876015d6d4b94b1656d23f79f424ac9b583652aedf0633dba116576a8",
+        "sizeBytes": 21980441504
+      },
+      "projector": {
+        "file": "mmproj-F16.gguf",
+        "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
+        "sizeBytes": 927607488
+      },
+      "minMemoryBytes": 51539607552,
+      "context": { "default": 131072, "max": 262144 },
+      "capabilities": { "tools": true, "vision": true, "reasoning": true },
+      "profile": "qwen3.8",
+      "rank": 40
+    },
+    {
+      "id": "qwen3.8-27b-q8",
+      "displayName": "Qwen3.8 27B (8-bit)",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "url": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE"
+      },
+      "source": {
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+        "file": "Qwen3.8-27B-Q8_0.gguf",
+        "sha256": "a680f44a06920e5d689774823782006aa3acc8db95750323373b24139b67e348",
+        "sizeBytes": 29047086048
+      },
+      "projector": {
+        "file": "mmproj-F16.gguf",
+        "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
+        "sizeBytes": 927607488
+      },
+      "minMemoryBytes": 68719476736,
+      "context": { "default": 204800, "max": 262144 },
+      "capabilities": { "tools": true, "vision": true, "reasoning": true },
+      "profile": "qwen3.8",
+      "rank": 50
+    }
+  ]
+}

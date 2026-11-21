@@ -1,0 +1,110 @@
+{
+  "table": {
+    "length": {
+      "base": "m",
+      "units": {
+        "cm": {
+          "name": "centimetre",
+          "toBase": 0.01
+        },
+        "ft": {
+          "name": "foot",
+          "toBase": 0.3048
+        },
+        "in": {
+          "name": "inch",
+          "toBase": 0.0254
+        },
+        "km": {
+          "name": "kilometre",
+          "toBase": 1000
+        },
+        "m": {
+          "name": "metre",
+          "toBase": 1
+        },
+        "mi": {
+          "name": "mile",
+          "toBase": 1609.344
+        },
+        "mm": {
+          "name": "millimetre",
+          "toBase": 0.001
+        },
+        "yd": {
+          "name": "yard",
+          "toBase": 0.9144
+        }
+      }
+    },
+    "mass": {
+      "base": "kg",
+      "units": {
+        "g": {
+          "name": "gram",
+          "toBase": 0.001
+        },
+        "kg": {
+          "name": "kilogram",
+          "toBase": 1
+        },
+        "lb": {
+          "name": "pound",
+          "toBase": 0.45359237
+        },
+        "oz": {
+          "name": "ounce",
+          "toBase": 0.028349523125
+        },
+        "st": {
+          "name": "stone",
+          "toBase": 6.35029318
+        }
+      }
+    },
+    "time": {
+      "base": "s",
+      "units": {
+        "d": {
+          "name": "day",
+          "toBase": 86400
+        },
+        "h": {
+          "name": "hour",
+          "toBase": 3600
+        },
+        "min": {
+          "name": "minute",
+          "toBase": 60
+        },
+        "s": {
+          "name": "second",
+          "toBase": 1
+        }
+      }
+    },
+    "volume": {
+      "base": "l",
+      "units": {
+        "gal": {
+          "name": "US gallon",
+          "toBase": 3.785411784
+        },
+        "l": {
+          "name": "litre",
+          "toBase": 1
+        },
+        "ml": {
+          "name": "millilitre",
+          "toBase": 0.001
+        }
+      }
+    }
+  },
+  "checks": {
+    "1 mi in km": 1.609344,
+    "1 ft in cm": 30.48,
+    "1 lb in g": 453.59237,
+    "1 d in min": 1440
+  }
+}

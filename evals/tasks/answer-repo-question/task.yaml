@@ -1,0 +1,27 @@
+id: answer-repo-question
+title: Answer questions about how the webhook relay works
+prompt: |
+  I'm new to this codebase and need a few facts about how webhook delivery
+  works. Please read the code and answer the questions below in a new file
+  `ANSWER.md` in the repository root. Don't change any other files.
+
+  Use this format for each question: a heading `## Q1` (through `## Q5`),
+  then a line starting with `Answer:` that holds only the short answer, then
+  any explanation on the following lines.
+
+  Q1. With the shipped config file `relay.ini`, how many delivery attempts in
+  total (counting the first one) does a webhook get before relay gives up on
+  it, if every attempt fails with HTTP 503?
+
+  Q2. With `relay.ini`, after the third failed attempt, how many seconds does
+  the worker wait before making the fourth attempt?
+
+  Q3. Which hash function does the HMAC request signature use?
+
+  Q4. Which 4xx HTTP status codes does the worker retry, instead of giving up
+  immediately?
+
+  Q5. What is the name of the file that a delivery is written to once relay
+  has given up on it?
+tags: [python, comprehension, read-only, question-answering]
+timeout_seconds: 600

@@ -1,0 +1,11 @@
+{
+  "name": "shelfstock",
+  "version": "0.4.1",
+  "private": true,
+  "type": "module",
+  "description": "Tiny inventory toolkit: catalog, carts, CSV import and stock reports.",
+  "bin": { "shelfstock": "bin/stock.js" },
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,5 @@
+id: slow-check
+title: Checker that never finishes
+prompt: |
+  Nothing to do.
+trials: 1

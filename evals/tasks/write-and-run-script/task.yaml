@@ -1,0 +1,32 @@
+id: write-and-run-script
+title: Write and run a script that summarises an expenses export
+prompt: |
+  Finance wants a summary of `data/expenses.csv` (columns: id, date,
+  description, category, amount). Please write a Python script
+  `summarize.py` in the repository root, run as
+
+      python3 summarize.py INPUT_CSV OUTPUT_JSON
+
+  that writes a JSON object with exactly these keys:
+
+  - `valid_rows`: number of rows that were counted
+  - `rejected_rows`: number of rows skipped because their amount is invalid
+  - `total_cents`: sum of all valid amounts, as an integer number of cents
+  - `by_category`: object mapping category to total cents; category names
+    are trimmed and lowercased first, so " Travel" and "TRAVEL " are both
+    "travel"
+  - `by_month`: object mapping `YYYY-MM` (taken from the date) to total cents
+  - `largest`: `{"id": ..., "amount_cents": ...}` for the largest valid
+    expense; if several share the largest amount, the one that comes first
+    in the file. `id` is the id string from the file.
+
+  An amount is valid only if it is a plain positive decimal number with at
+  most two decimal places, such as `12`, `12.5` or `1520.75`: no sign, no
+  currency symbol, no thousands separator, not zero. Every other row is
+  rejected. Dates are always well-formed.
+
+  Use only the Python standard library. Then run the script on
+  `data/expenses.csv` so that the summary is written to
+  `reports/summary.json`.
+tags: [python, scripting, data, csv, run-command]
+timeout_seconds: 900

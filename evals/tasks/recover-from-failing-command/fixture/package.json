@@ -1,0 +1,10 @@
+{
+  "name": "unitkit",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Unit conversion tables generated from data/units.csv.",
+  "scripts": {
+    "ci": "bash ci.sh"
+  }
+}

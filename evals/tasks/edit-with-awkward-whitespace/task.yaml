@@ -1,0 +1,17 @@
+id: edit-with-awkward-whitespace
+title: Three small edits in a tab-indented file with trailing whitespace
+prompt: |
+  Three changes to `src/settings.js`, please:
+
+  1. Raise the network request timeout from 1.5 seconds to 2.5 seconds.
+  2. Drop the `legacy-xml` format; we no longer support it.
+  3. Rename the theme's `colour` key to `color`, and update the code in the
+     same file that reads it.
+
+  Change nothing else. The release tooling compares this file byte-for-byte
+  with the reviewed copy, so keep every other byte exactly as it is: the
+  file is indented with tabs and has trailing whitespace on some lines, and
+  all of that must stay, including on the lines you edit. Don't modify any
+  other file.
+tags: [javascript, edit, whitespace, tabs, exact-diff]
+timeout_seconds: 600

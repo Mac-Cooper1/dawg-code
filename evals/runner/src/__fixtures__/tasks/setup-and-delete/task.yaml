@@ -1,0 +1,5 @@
+id: setup-and-delete
+title: Answer from generated input and remove the obsolete file
+prompt: |
+  Write the contents of generated.txt, uppercased, to answer.txt and delete obsolete.txt.
+tags: [smoke]

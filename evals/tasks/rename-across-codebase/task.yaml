@@ -1,0 +1,11 @@
+id: rename-across-codebase
+title: Rename normalizeSku to canonicalSku everywhere
+prompt: |
+  We're renaming `normalizeSku` to `canonicalSku` in shelfstock, because it
+  does more than normalise. Please do the rename across the whole project:
+  the function itself, every import and call site, the re-export, the CLI,
+  the tests, comments and the README. Don't leave a compatibility alias or
+  any other mention of the old name behind. Behaviour must not change, and
+  the test suite (`node --test`) must still pass.
+tags: [javascript, refactor, rename, multi-file]
+timeout_seconds: 900

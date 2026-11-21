@@ -1,0 +1,9 @@
+id: fix-failing-test
+title: Fix the bug behind a failing invoice test
+prompt: |
+  One of the tests in this invoicing library has started failing
+  (run them with `python3 -m unittest discover -s tests`). The test is
+  correct; the library code is wrong. Please find the bug and fix it in the
+  library, and make sure the whole test suite passes afterwards.
+tags: [python, debugging, unittest, small]
+timeout_seconds: 600

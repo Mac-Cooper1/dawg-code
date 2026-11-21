@@ -1,0 +1,13 @@
+id: long-context-many-files
+title: Implement the permission model across every API route
+prompt: |
+  Our API has no access control yet. `docs/permissions.md` describes the
+  model we agreed on: scopes, which scope each route needs, and the 401/403
+  responses. Please implement it for every route in this service.
+
+  Decide each route's scope from what its code actually does, including
+  the services it calls, not from its HTTP method or its name. Keep the
+  existing behaviour of every route for callers who are allowed to use it,
+  and keep the test suite (`node --test`) passing.
+tags: [javascript, long-context, cross-cutting, multi-file, security]
+timeout_seconds: 1500

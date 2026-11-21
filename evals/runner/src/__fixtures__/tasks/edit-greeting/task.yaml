@@ -1,0 +1,7 @@
+id: edit-greeting
+title: Change the greeting
+prompt: |
+  Change the text in greeting.txt to "hello, world".
+tags: [smoke, text]
+timeout_seconds: 30
+trials: 2

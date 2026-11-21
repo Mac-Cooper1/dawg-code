@@ -1,0 +1,61 @@
+{
+  "models": [
+    {
+      "name": "/models/SmolLM2-135M-Instruct-Q4_0.gguf",
+      "model": "/models/SmolLM2-135M-Instruct-Q4_0.gguf",
+      "modified_at": "",
+      "size": "",
+      "digest": "",
+      "type": "model",
+      "description": "",
+      "tags": [
+        ""
+      ],
+      "capabilities": [
+        "completion"
+      ],
+      "parameters": "",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "",
+        "families": [
+          ""
+        ],
+        "parameter_size": "",
+        "quantization_level": ""
+      }
+    }
+  ],
+  "object": "list",
+  "data": [
+    {
+      "id": "/models/SmolLM2-135M-Instruct-Q4_0.gguf",
+      "aliases": [
+        "/models/SmolLM2-135M-Instruct-Q4_0.gguf"
+      ],
+      "tags": [],
+      "object": "model",
+      "architecture": {
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "created": 1795234561,
+      "owned_by": "llamacpp",
+      "meta": {
+        "vocab_type": 2,
+        "n_vocab": 49152,
+        "n_ctx": 2048,
+        "n_ctx_train": 8192,
+        "n_embd": 576,
+        "n_params": 134515008,
+        "size": 90107136,
+        "ftype": "Q4_0"
+      }
+    }
+  ]
+}

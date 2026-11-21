@@ -1,0 +1,11 @@
+id: recover-from-failing-command
+title: Get a failing CI script passing on a fresh clone
+prompt: |
+  `bash ci.sh` is failing. It's what CI runs on every push, starting from a
+  fresh clone of the repo, so it has to work from a clean checkout, not just
+  on a machine where things happen to be lying around already. Please find
+  out why it fails and fix the actual problems so that it passes. Don't
+  remove or skip any of its steps, and don't change the tests: they are
+  correct.
+tags: [javascript, debugging, build, run-command, recovery]
+timeout_seconds: 900

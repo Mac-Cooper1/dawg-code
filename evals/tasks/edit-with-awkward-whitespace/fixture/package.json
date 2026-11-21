@@ -1,0 +1,9 @@
+{
+  "name": "syncd-config",
+  "version": "4.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

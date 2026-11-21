@@ -1,0 +1,2 @@
+{"seq":1,"api":"openai.chat","status":200,"usage":{"prompt_tokens":5000,"completion_tokens":100,"cached_tokens":null},"timings":null,"tool_calls":[{"name":"Edit","arguments_valid_json":true,"schema_valid":null,"error":null}]}
+{"seq":2,"api":"openai.chat","status":200,"usage":{"prompt_tokens":5200,"completion_tokens":null,"cached_tokens":null},"timings":null}

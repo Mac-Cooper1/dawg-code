@@ -1,0 +1,7 @@
+id: needs-mcp
+title: A task that needs MCP
+prompt: |
+  Use the provided MCP tool to write result.txt.
+tags: [mcp]
+trials: 1
+requires: [mcp]

@@ -1,0 +1,14 @@
+id: change-deep-in-long-file
+title: Fix one broken card in a 3,000-line file
+prompt: |
+  Players are reporting that the card "Ember Tithe" is broken. It's meant to
+  drain 2 health from every opponent and heal the player by the total amount
+  drained. In games with several opponents the player is healed far too
+  little, and if it's played when no opponent is left in the game, the game
+  crashes.
+
+  All the cards are in `cardgame/cards.py`, which is a long file. Please fix
+  Ember Tithe without changing how any other card behaves, and keep the
+  tests passing (`python3 -m unittest discover -s tests`).
+tags: [python, debugging, long-file, navigation]
+timeout_seconds: 900

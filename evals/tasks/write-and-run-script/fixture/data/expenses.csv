@@ -1,0 +1,241 @@
+id,date,description,category,amount
+EX-070001,2026-09-22,Cloud credits,travel,18.86
+EX-070002,2026-08-17,Coffee for workshop,Training,203.00
+EX-070003,2026-10-19,Conference ticket, Office,281.0
+EX-070004,2026-07-09,Train ticket,meals,79
+EX-070005,2026-07-10,Coffee for workshop,Meals  ,343.61
+EX-070006,2026-09-26,Cloud credits,office ,"1,200.00"
+EX-070007,2026-07-26,USB-C dock,Software,29.37
+EX-070008,2026-07-22,Licence renewal,software,580.24
+EX-070009,2026-07-03,"Taxi, airport to hotel",hardware,29.52
+EX-070010,2026-10-28,Train ticket,office ,67.41
+EX-070011,2026-09-28,Coffee for workshop, SOFTWARE,175.81
+EX-070012,2026-07-10,Cloud credits,TRAINING,151.73
+EX-070013,2026-08-20,"Book: ""Refactoring notes""",Software,80
+EX-070014,2026-07-02,Train ticket, SOFTWARE,66.16
+EX-070015,2026-07-15,"Printer paper, toner",travel,41.36
+EX-070016,2026-09-07,Cloud credits,Hardware,131
+EX-070017,2026-09-02,Conference ticket,Meals,235.95
+EX-070018,2026-08-22,Licence renewal, Office,393.36
+EX-070019,2026-09-02,"Printer paper, toner",Software,0.00
+EX-070020,2026-07-04,Team lunch,office ,0.00
+EX-070021,2026-09-08,Train ticket, Travel,67.91
+EX-070022,2026-08-16,"Printer paper, toner",Software,45.23
+EX-070023,2026-08-11,Train ticket, Office,39.77
+EX-070024,2026-09-03,"Hotel, 2 nights",hardware,96.71
+EX-070025,2026-09-01,USB-C dock,hardware,224.00
+EX-070026,2026-09-08,Licence renewal,TRAINING,47.04
+EX-070027,2026-08-20,Conference ticket,office ,70.17
+EX-070028,2026-10-16,Conference ticket,office ,5.94
+EX-070029,2026-07-15,USB-C dock,meals,56.61
+EX-070030,2026-08-28,USB-C dock,TRAINING,35.1
+EX-070031,2026-09-13,Train ticket,hardware,291.00
+EX-070032,2026-07-18,"Printer paper, toner",hardware,65.61
+EX-070033,2026-10-10,"Printer paper, toner",Hardware,17.79
+EX-070034,2026-08-14,USB-C dock,Hardware,464.25
+EX-070035,2026-09-09,Coffee for workshop, Travel,451.41
+EX-070036,2026-09-22,"Book: ""Refactoring notes""",TRAVEL ,99
+EX-070037,2026-07-14,"Taxi, airport to hotel",hardware,256.87
+EX-070038,2026-10-14,Train ticket,hardware,515.77
+EX-070039,2026-10-09,Conference ticket,TRAINING,84.45
+EX-070040,2026-07-26,Monitor arm,Hardware,"1,200.00"
+EX-070041,2026-10-27,"Hotel, 2 nights",TRAINING,220.0
+EX-070042,2026-08-16,"Taxi, airport to hotel",TRAINING,446.57
+EX-070043,2026-09-03,Coffee for workshop,Hardware,311.03
+EX-070044,2026-10-24,Conference ticket,Training,90.0
+EX-070045,2026-07-05,"Printer paper, toner",Meals  ,104.35
+EX-070046,2026-08-21,"Book: ""Refactoring notes""",Hardware,81.95
+EX-070047,2026-10-07,"Printer paper, toner",Office,303.71
+EX-070048,2026-08-01,Monitor arm,Office,99.79
+EX-070049,2026-07-02,"Taxi, airport to hotel",Hardware,62.81
+EX-070050,2026-08-22,Cloud credits,TRAINING,314.95
+EX-070051,2026-10-20,"Hotel, 2 nights", SOFTWARE,97
+EX-070052,2026-08-06,Team lunch,TRAINING,224
+EX-070053,2026-10-06,Team lunch,meals,489.57
+EX-070054,2026-08-18,Team lunch,hardware,
+EX-070055,2026-07-22,Conference ticket,travel,1
+EX-070056,2026-08-24,USB-C dock,Hardware,37.00
+EX-070057,2026-10-16,Coffee for workshop,Travel,503.23
+EX-070058,2026-07-05,USB-C dock,Training,41.08
+EX-070059,2026-09-12,"Book: ""Refactoring notes""",meals,12.345
+EX-070060,2026-08-14,"Printer paper, toner",hardware,83.35
+EX-070061,2026-08-09,Train ticket,Training,321.1
+EX-070062,2026-08-10,"Hotel, 2 nights",Software,562.32
+EX-070063,2026-10-24,"Book: ""Refactoring notes""",Meals,165.88
+EX-070064,2026-10-18,Conference ticket, Travel,"1,200.00"
+EX-070065,2026-08-17,Team lunch,Meals  ,274.00
+EX-070066,2026-10-16,Team lunch,software,19.57
+EX-070067,2026-08-02,"Book: ""Refactoring notes""",TRAINING,115.00
+EX-070068,2026-10-13,"Hotel, 2 nights",office ,38.06
+EX-070069,2026-09-24,Monitor arm,Meals  ,0
+EX-070070,2026-09-05,"Book: ""Refactoring notes""", Office,32.88
+EX-070071,2026-10-02,"Taxi, airport to hotel",TRAINING,51
+EX-070072,2026-10-16,Coffee for workshop,office ,59.91
+EX-070073,2026-08-09,"Printer paper, toner",TRAVEL ,57.0
+EX-070074,2026-08-19,USB-C dock,Software,89.54
+EX-070075,2026-09-16,"Printer paper, toner",Training,246.00
+EX-070076,2026-10-27,Licence renewal,travel,39.63
+EX-070077,2026-10-04,Licence renewal,office ,53.00
+EX-070078,2026-10-13,"Printer paper, toner",Travel,37
+EX-070079,2026-08-03,Monitor arm,Hardware,185
+EX-070080,2026-10-19,"Hotel, 2 nights",Meals,14.51
+EX-070081,2026-08-17,Team lunch,hardware,31.24
+EX-070082,2026-07-20,Conference ticket,TRAINING,45.47
+EX-070083,2026-07-26,Monitor arm,Software,53.74
+EX-070084,2026-09-24,"Taxi, airport to hotel", Office,41.42
+EX-070085,2026-08-11,"Taxi, airport to hotel",Office,162
+EX-070086,2026-07-23,"Hotel, 2 nights",office ,$40
+EX-070087,2026-07-08,Licence renewal, Travel,277
+EX-070088,2026-09-13,Monitor arm,office ,379.89
+EX-070089,2026-08-07,"Taxi, airport to hotel",Training,290
+EX-070090,2026-08-08,Conference ticket,Meals,73.98
+EX-070091,2026-09-20,USB-C dock,TRAINING,27.12
+EX-070092,2026-10-13,"Taxi, airport to hotel", Travel,42.26
+EX-070093,2026-10-20,Team lunch,TRAVEL ,507.50
+EX-070094,2026-10-02,Conference ticket, SOFTWARE,90.0
+EX-070095,2026-09-04,Team lunch,software,56.75
+EX-070096,2026-10-12,"Hotel, 2 nights",Hardware,255.16
+EX-070097,2026-07-09,Cloud credits, SOFTWARE,38.94
+EX-070098,2026-10-24,"Taxi, airport to hotel",Meals,124.00
+EX-070099,2026-07-10,USB-C dock,Meals  ,172.75
+EX-070100,2026-09-20,Coffee for workshop,TRAVEL ,39.96
+EX-070101,2026-10-05,Team lunch,Hardware,"1,200.00"
+EX-070102,2026-10-11,"Book: ""Refactoring notes""",travel,561.72
+EX-070103,2026-10-20,Coffee for workshop,Hardware,269
+EX-070104,2026-07-07,"Hotel, 2 nights",Training,89.08
+EX-070105,2026-08-27,Team lunch,Office,0
+EX-070106,2026-07-05,Coffee for workshop,Meals,483.05
+EX-070107,2026-09-09,Licence renewal,Training,188
+EX-070108,2026-08-07,USB-C dock, Office,88.83
+EX-070109,2026-07-09,Cloud credits,hardware,17.08
+EX-070110,2026-07-05,"Book: ""Refactoring notes""",Meals,131.00
+EX-070111,2026-07-07,"Printer paper, toner",Meals  ,46.45
+EX-070112,2026-08-06,Monitor arm, Office,92
+EX-070113,2026-09-25,"Printer paper, toner",Travel,160.23
+EX-070114,2026-08-14,Monitor arm,Training,203.00
+EX-070115,2026-10-14,Licence renewal,Meals,133
+EX-070116,2026-10-09,"Printer paper, toner",office ,37.11
+EX-070117,2026-08-15,Train ticket,TRAINING,295.00
+EX-070118,2026-08-15,Coffee for workshop,meals,53.96
+EX-070119,2026-07-12,Conference ticket,travel,105.06
+EX-070120,2026-08-28,"Hotel, 2 nights",Training,83.03
+EX-070121,2026-10-23,"Printer paper, toner", SOFTWARE,438.92
+EX-070122,2026-07-27,"Printer paper, toner", Office,226.0
+EX-070123,2026-09-06,USB-C dock,meals,9.41
+EX-070124,2026-07-10,Conference ticket,Meals  ,369.79
+EX-070125,2026-07-14,Train ticket,travel,85
+EX-070126,2026-10-14,Train ticket,TRAVEL ,213.46
+EX-070127,2026-10-15,Conference ticket,Travel,261.12
+EX-070128,2026-09-27,Train ticket,Meals,-12.00
+EX-070129,2026-09-04,Coffee for workshop,Software,3.5.1
+EX-070130,2026-08-22,USB-C dock,TRAVEL ,135.0
+EX-070131,2026-07-03,Monitor arm,Hardware,"1,200.00"
+EX-070132,2026-09-16,Team lunch, Travel,71.00
+EX-070133,2026-09-16,"Printer paper, toner", Office,45.66
+EX-070134,2026-08-28,Team lunch,hardware,22.41
+EX-070135,2026-07-19,Train ticket,office ,57.00
+EX-070136,2026-10-20,"Taxi, airport to hotel",TRAVEL ,3
+EX-070137,2026-10-28,"Book: ""Refactoring notes""", Travel,134
+EX-070138,2026-09-12,"Book: ""Refactoring notes""",Meals,34.24
+EX-070139,2026-07-23,Team lunch,TRAINING,98.78
+EX-070140,2026-08-23,Cloud credits, Office,€5.00
+EX-070141,2026-08-16,"Book: ""Refactoring notes""",Meals  ,n/a
+EX-070142,2026-10-23,"Taxi, airport to hotel",Software,97.39
+EX-070143,2026-08-02,"Taxi, airport to hotel",Software,51.19
+EX-070144,2026-10-09,"Taxi, airport to hotel",software,80.2
+EX-070145,2026-09-19,Conference ticket,TRAINING,566.98
+EX-070146,2026-07-05,"Hotel, 2 nights",software,34
+EX-070147,2026-09-04,Monitor arm,Meals  ,82.19
+EX-070148,2026-09-23,"Hotel, 2 nights",travel,17.04
+EX-070149,2026-09-07,Licence renewal,Meals  ,57.76
+EX-070150,2026-08-22,Licence renewal,Software,234.14
+EX-070151,2026-07-28,USB-C dock,Training,59.34
+EX-070152,2026-10-01,Train ticket, SOFTWARE,116.00
+EX-070153,2026-10-06,Cloud credits, SOFTWARE,-0.50
+EX-070154,2026-08-19,Coffee for workshop,Office,10.15
+EX-070155,2026-07-26,"Taxi, airport to hotel",software,2.49
+EX-070156,2026-09-06,"Taxi, airport to hotel",Office,55.84
+EX-070157,2026-08-18,"Book: ""Refactoring notes""",Training,65.09
+EX-070158,2026-08-28,Train ticket,Travel,49.81
+EX-070159,2026-10-27,USB-C dock,software,0.24
+EX-070160,2026-08-21,Train ticket,Training,32.00
+EX-070161,2026-10-08,Train ticket,office ,137.81
+EX-070162,2026-08-07,"Book: ""Refactoring notes""",Meals,€5.00
+EX-070163,2026-10-22,Coffee for workshop,hardware,81.03
+EX-070164,2026-10-11,Train ticket,hardware,209.06
+EX-070165,2026-08-22,"Book: ""Refactoring notes""",TRAINING,12.00
+EX-070166,2026-07-02,Conference ticket, Travel,146.08
+EX-070167,2026-08-21,Train ticket,meals,31.78
+EX-070168,2026-10-18,Team lunch,Meals  ,186
+EX-070169,2026-10-02,"Taxi, airport to hotel",office ,83.00
+EX-070170,2026-09-11,Team lunch, Office,222
+EX-070171,2026-09-01,Licence renewal, Travel,118.00
+EX-070172,2026-09-20,Monitor arm,Travel,55
+EX-070173,2026-10-22,Cloud credits,hardware,37.84
+EX-070174,2026-09-16,Conference ticket,travel,94.27
+EX-070175,2026-09-10,Coffee for workshop,TRAINING,269.82
+EX-070176,2026-08-07,"Book: ""Refactoring notes""",software,86.55
+EX-070177,2026-07-09,"Taxi, airport to hotel", Office,80.15
+EX-070178,2026-10-13,Cloud credits,office ,17.56
+EX-070179,2026-10-12,Conference ticket,Training,335.97
+EX-070180,2026-09-12,"Taxi, airport to hotel",Office,47.46
+EX-070181,2026-08-17,Licence renewal, SOFTWARE,47.4
+EX-070182,2026-08-23,Monitor arm,Office,57.17
+EX-070183,2026-09-19,Licence renewal,TRAINING,1.95
+EX-070184,2026-08-05,Cloud credits,Meals,3
+EX-070185,2026-10-25,"Printer paper, toner",software,90.0
+EX-070186,2026-09-16,Licence renewal,hardware,104.0
+EX-070187,2026-09-22,Coffee for workshop,Office,85.07
+EX-070188,2026-10-09,Licence renewal,hardware,513.85
+EX-070189,2026-08-25,Team lunch, SOFTWARE,171.0
+EX-070190,2026-07-27,Cloud credits,Hardware,245.00
+EX-070191,2026-09-15,Coffee for workshop,travel,308.27
+EX-070192,2026-10-07,Monitor arm,TRAINING,28.66
+EX-070193,2026-08-05,Licence renewal,Meals,379.3
+EX-070194,2026-07-19,Cloud credits,office ,12.12
+EX-070195,2026-09-28,USB-C dock, SOFTWARE,33.78
+EX-070196,2026-08-23,"Hotel, 2 nights",TRAINING,3.54
+EX-070197,2026-08-01,Team lunch,travel,179.00
+EX-070198,2026-07-24,Team lunch,hardware,€5.00
+EX-070199,2026-09-20,Licence renewal,Travel,51.87
+EX-070200,2026-10-07,"Printer paper, toner", SOFTWARE,205.0
+EX-070201,2026-10-06,Conference ticket,Travel,92
+EX-070202,2026-10-19,Train ticket,Training,231.00
+EX-070203,2026-10-18,"Printer paper, toner", SOFTWARE,181.0
+EX-070204,2026-08-19,Coffee for workshop,Hardware,190.93
+EX-070205,2026-09-19,Conference ticket,Hardware,180.22
+EX-070206,2026-08-11,"Book: ""Refactoring notes""",Office,245.00
+EX-070207,2026-07-14,Team lunch,TRAVEL ,303.92
+EX-070208,2026-10-02,Licence renewal,Meals,40.68
+EX-070209,2026-09-02,USB-C dock,Hardware,€5.00
+EX-070210,2026-07-02,Train ticket,hardware,21
+EX-070211,2026-07-04,Monitor arm,Hardware,257.59
+EX-070212,2026-07-21,Team lunch, Office,67.54
+EX-070213,2026-10-02,Coffee for workshop, SOFTWARE,182
+EX-070214,2026-08-16,Conference ticket, SOFTWARE,40
+EX-070215,2026-09-26,Coffee for workshop,Hardware,341.31
+EX-070216,2026-07-21,"Printer paper, toner",Hardware,€5.00
+EX-070217,2026-10-02,Monitor arm,Meals,341.13
+EX-070218,2026-09-04,Monitor arm,Training,140.77
+EX-070219,2026-10-12,"Hotel, 2 nights",TRAINING,-0.50
+EX-070220,2026-10-18,Train ticket, Office,268.00
+EX-070221,2026-09-07,Train ticket,software,3.5.1
+EX-070222,2026-08-13,Train ticket,Meals  ,204.01
+EX-070223,2026-08-05,Cloud credits,Travel,76.86
+EX-070224,2026-10-09,Licence renewal,Meals,96
+EX-070225,2026-08-06,Monitor arm,Meals,94.98
+EX-070226,2026-08-12,USB-C dock,Meals,49.99
+EX-070227,2026-07-26,Train ticket,Hardware,10.76
+EX-070228,2026-08-02,"Taxi, airport to hotel",Hardware,259.78
+EX-070229,2026-08-09,"Hotel, 2 nights",Software,240.05
+EX-070230,2026-07-07,Train ticket,Meals  ,55.0
+EX-070231,2026-08-10,Team lunch, Office,332.87
+EX-070232,2026-09-07,Cloud credits,Meals  ,30.00
+EX-070233,2026-08-04,USB-C dock,TRAVEL ,249.2
+EX-070234,2026-09-24,Cloud credits, SOFTWARE,
+EX-070235,2026-08-22,"Taxi, airport to hotel",Office,209
+EX-070236,2026-08-07,"Hotel, 2 nights",Meals  ,2.67
+EX-070237,2026-07-03,"Taxi, airport to hotel",hardware,180.2
+EX-070238,2026-10-26,"Printer paper, toner", Office,37.59
+EX-070239,2026-10-27,Cloud credits, SOFTWARE,0
+EX-070240,2026-09-03,"Book: ""Refactoring notes""", Office,110

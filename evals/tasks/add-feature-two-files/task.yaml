@@ -1,0 +1,17 @@
+id: add-feature-two-files
+title: Add days to the duration parser and formatter
+prompt: |
+  tickspan only knows hours, minutes and seconds. Please add days.
+
+  - `parseDuration` should accept `d` (24 hours) in the compact syntax, e.g.
+    `"2d3h"` or `"1d 30m"`. Days follow the same rules as the other units:
+    at most once, and in largest-to-smallest order (so `"1h2d"` is an error).
+  - `formatDuration` should use days as well, e.g. 93784 seconds becomes
+    `"1d2h3m4s"`, and in the long form `"1 day 2 hours 3 minutes 4 seconds"`
+    (`day` / `days`, like the other units).
+
+  Days are the largest unit; there are no weeks. Everything else should keep
+  working exactly as it does now. Add tests for the new behaviour and keep the
+  existing test suite (`node --test`) passing.
+tags: [javascript, feature, node-test, multi-file]
+timeout_seconds: 900

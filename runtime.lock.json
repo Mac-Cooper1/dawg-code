@@ -1,0 +1,34 @@
+{
+  "llamaCpp": {
+    "repo": "ggml-org/llama.cpp",
+    "tag": "b12359",
+    "release": "v1.0.0",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "publishedAt": "2026-11-13T10:21:06Z",
+    "note": "The v1.0.0 release carries no binaries; its notes name build b12359, which is the same commit. Bump deliberately: update every field, re-check the server README flags against --help, and re-run the smoke job.",
+    "archives": {
+      "arm64": {
+        "name": "llama-b12359-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-macos-arm64.tar.gz",
+        "sizeBytes": 16907811,
+        "sha256": "82b00abc740160e1b9980e6cc79c117345fa34af058c80e6c0a69aa8ddccde75"
+      },
+      "x64": {
+        "name": "llama-b12359-bin-macos-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-macos-x64.tar.gz",
+        "sizeBytes": 12661621,
+        "sha256": "25320d529077ef5a3d16e7b5da26438f221d88c8c0930a32b0c79457f5eede56"
+      }
+    }
+  },
+  "testModel": {
+    "repo": "bartowski/SmolLM2-135M-Instruct-GGUF",
+    "revision": "09816acd5d99df7be770d85ea30822623dab342c",
+    "file": "SmolLM2-135M-Instruct-Q4_0.gguf",
+    "url": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/09816acd5d99df7be770d85ea30822623dab342c/SmolLM2-135M-Instruct-Q4_0.gguf",
+    "sizeBytes": 91893088,
+    "sha256": "bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03",
+    "licence": "Apache-2.0",
+    "note": "Used only by the opt-in runtime integration test and the CI smoke job. Downloaded into .cache/test-models/."
+  }
+}

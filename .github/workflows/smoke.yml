@@ -1,0 +1,73 @@
+name: Smoke
+
+# Exercises the pinned llama-server on Apple Silicon: fetch and verify the runtime, load a tiny
+# model, chat, warm and restore the prompt cache, survive kill -9, stop cleanly.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Runtime smoke (macOS arm64)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Fetch the pinned llama-server
+        run: node scripts/fetch-runtime.ts
+
+      - name: Read the test model pin
+        id: pin
+        run: echo "sha256=$(node -p "require('./runtime.lock.json').testModel.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the test model
+        id: model-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .cache/test-models
+          key: test-model-${{ steps.pin.outputs.sha256 }}
+
+      - name: Fetch and verify the test model
+        run: node scripts/fetch-runtime.ts --test-model
+
+      # Saved before the tests run, so a failing test does not cost the next run a download.
+      - name: Save the test model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .cache/test-models
+          key: test-model-${{ steps.pin.outputs.sha256 }}
+
+      - name: Runtime integration test
+        env:
+          DAWG_RUNTIME_TESTS: "1"
+          DAWG_RUNTIME_TEST_LOG_DIR: ${{ runner.temp }}/runtime-logs
+        run: pnpm --filter @dawg/models exec vitest run src/runtime/integration.test.ts
+
+      - name: Runtime log
+        if: failure()
+        run: tail -n 300 "${{ runner.temp }}/runtime-logs/runtime.log" || true
+
+      - name: No llama-server left running
+        if: always()
+        run: |
+          if pgrep -fl llama-server; then
+            echo "::error::llama-server is still running after the tests"
+            exit 1
+          fi
