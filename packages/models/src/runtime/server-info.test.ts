@@ -110,6 +110,7 @@ describe("deriveCapabilities", () => {
       model: "/models/SmolLM2-135M-Instruct-Q4_0.gguf",
       contextWindow: 2048,
       capabilities: { tools: false, vision: false, reasoning: false, cacheControl: true },
+      template: { parallelToolCalls: false, reasoningEffortLevels: [] },
     });
   });
 });

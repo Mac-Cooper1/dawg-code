@@ -1,0 +1,24 @@
+{
+  "note": "Captured from llama-server b12359 (x64, CPU) with SmolLM2-135M-Instruct-Q4_0; model path shortened.",
+  "request": {
+    "model": "x",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant."
+      },
+      {
+        "role": "user",
+        "content": "Say hello in one short sentence."
+      }
+    ],
+    "stream": true,
+    "max_tokens": 12,
+    "temperature": 0
+  },
+  "status": 401,
+  "contentType": "application/json; charset=utf-8",
+  "chunks": [
+    "{\"error\":{\"message\":\"Invalid API Key\",\"type\":\"authentication_error\",\"code\":401}}"
+  ]
+}

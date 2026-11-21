@@ -1,0 +1,32 @@
+{
+  "ripgrep": {
+    "repo": "BurntSushi/ripgrep",
+    "version": "15.2.0",
+    "tag": "15.2.0",
+    "commit": "e89fff89ac9af12e8d4ce9d5fd07beb408ca730f",
+    "publishedAt": "2026-07-15T16:26:10Z",
+    "licence": "MIT OR Unlicense",
+    "licenceFiles": ["COPYING", "LICENSE-MIT", "UNLICENSE"],
+    "note": "Hashes are the release's published digests, confirmed by hashing the downloads. Bump deliberately: update every field, re-check the flags the Grep tool passes against rg --help, and run the Grep tests.",
+    "archives": {
+      "darwin-arm64": {
+        "name": "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+        "sizeBytes": 1764284,
+        "sha256": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4"
+      },
+      "darwin-x64": {
+        "name": "ripgrep-15.2.0-x86_64-apple-darwin.tar.gz",
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-apple-darwin.tar.gz",
+        "sizeBytes": 1878284,
+        "sha256": "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1"
+      },
+      "linux-x64": {
+        "name": "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+        "sizeBytes": 2265718,
+        "sha256": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c"
+      }
+    }
+  }
+}

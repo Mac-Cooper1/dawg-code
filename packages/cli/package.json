@@ -5,17 +5,23 @@
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+    ".": "./src/index.ts"
   },
-  "files": [
-    "dist"
-  ],
+  "bin": {
+    "dawg": "./src/main.ts"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@dawg/compat": "workspace:*",
+    "@dawg/engine": "workspace:*",
+    "@dawg/models": "workspace:*",
+    "@dawg/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@dawg/mock-model": "workspace:*"
   }
 }

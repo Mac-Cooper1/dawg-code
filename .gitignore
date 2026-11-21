@@ -14,8 +14,9 @@ out/
 .dawg/worktrees/
 .claude/settings.local.json
 
-# Fetched runtime binaries and test models (see scripts/fetch-runtime)
+# Fetched runtime binaries and test models (see scripts/fetch-runtime, scripts/fetch-ripgrep)
 apps/desktop/resources/runtime/
+apps/desktop/resources/bin/
 .cache/
 
 # Eval output that is not a committed baseline

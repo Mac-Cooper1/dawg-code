@@ -95,6 +95,7 @@ describe("RuntimeSupervisor with a fake llama-server", () => {
       model: model.path,
       contextWindow: 4096, // -c 8192 split over 2 slots, as /props reports
       capabilities: { tools: false, vision: false, reasoning: false, cacheControl: true },
+      template: { parallelToolCalls: false, reasoningEffortLevels: [] },
     });
     expect(sup.serverInfo?.totalSlots).toBe(2);
     expect(sup.serverInfo?.trainedContext).toBe(8192);

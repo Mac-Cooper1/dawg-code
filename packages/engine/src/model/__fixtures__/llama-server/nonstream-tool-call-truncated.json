@@ -1,0 +1,63 @@
+{
+  "note": "Captured from llama-server b12359 (x64, CPU) with SmolLM2-135M-Instruct-Q4_0; model path shortened.",
+  "request": {
+    "model": "x",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "description": "Read a file",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      }
+    ],
+    "stream": false,
+    "max_tokens": 6,
+    "temperature": 0,
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant."
+      },
+      {
+        "role": "user",
+        "content": "Weather in Paris and in Rome? Call the tool twice."
+      }
+    ],
+    "tool_choice": "required"
+  },
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "chunks": [
+    "{\"choices\":[{\"finish_reason\":\"length\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"<tool_call>\\n\"}}],\"created\":1795279926,\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":6,\"prompt_tokens\":229,\"total_tokens\":235,\"prompt_tokens_details\":{\"cached_tokens\":228}},\"id\":\"chatcmpl-5lP2GMthJbFJiPJ5oVwLq10FstPaFpWm\",\"timings\":{\"cache_n\":228,\"prompt_n\":1,\"prompt_ms\":4.618,\"prompt_per_token_ms\":4.618,\"prompt_per_second\":216.54395842355996,\"predicted_n\":6,\"predicted_ms\":20.265,\"predicted_per_token_ms\":4.053,\"predicted_per_second\":246.7308166790032}}"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "note": "Captured from llama-server b12359 (x64, CPU) with SmolLM2-135M-Instruct-Q4_0; model path shortened.",
+  "status": 404,
+  "contentType": "application/json; charset=utf-8",
+  "chunks": [
+    "{\"error\":{\"message\":\"File Not Found\",\"type\":\"not_found_error\",\"code\":404}}"
+  ]
+}

@@ -27,6 +27,16 @@ Then:
 pnpm install
 ```
 
+Fetch the pinned binaries the tests and the app use (the `llama-server` runtime and ripgrep). Each is checked against a recorded SHA-256 before it is unpacked:
+
+```bash
+pnpm fetch-runtime
+```
+
+```bash
+pnpm fetch-ripgrep
+```
+
 ```bash
 pnpm build
 ```
@@ -51,6 +61,7 @@ Without `corepack enable`, prefix commands with `corepack` and call the recursiv
 | `packages/compat`   | Readers for Claude Code configuration conventions             |
 | `packages/models`   | Hardware probe, model catalog, downloader, runtime supervisor |
 | `packages/cli`      | The headless `dawg` command                                   |
+| `packages/mock-model` | A scripted model server for deterministic tests             |
 | `evals/runner`      | Eval task runner and scoreboard                               |
 | `evals/proxy`       | Recording proxy used by evals                                 |
 | `evals/tasks`       | Eval tasks                                                    |

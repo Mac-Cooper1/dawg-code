@@ -134,5 +134,9 @@ export function bundledEndpoint(
     model: info.modelId,
     contextWindow: info.contextWindow,
     capabilities: { ...deriveCapabilities(info, catalog), cacheControl: true },
+    template: {
+      parallelToolCalls: info.templateCaps.supports_parallel_tool_calls === true,
+      reasoningEffortLevels: info.templateCaps.reasoning_effort_levels ?? [],
+    },
   };
 }

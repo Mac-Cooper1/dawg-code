@@ -163,6 +163,8 @@ Names and input fields follow Claude Code's public tool reference so that permis
 3. Ignoring differences in leading indentation, re-indenting the replacement to fit the file.
 4. Normalising line endings and common Unicode look-alikes (smart quotes, non-breaking spaces).
 
+The implementation adds three tolerant steps after these, each for a failure seen on the eval fixtures: differences in spacing inside a line, `old_string` pasted with the line-number prefixes `Read` prints, and literal `\n` escapes. Whichever step matches, the change is applied to the file's own text, so untouched bytes, line endings and indentation style are kept, and the result tells the model what had to be ignored.
+
 Zero matches returns the closest region of the file with a short diff against `old_string`. Several matches returns their line numbers and asks for more context. A file changed on disk since it was read is refused with a request to read it again.
 
 **Shared behaviour.** Every tool returns either a result or a structured error the model can act on. Oversized results are saved under the session's `tool-results/` folder and replaced by a summary plus the path. Read-only tools (`Read`, `Glob`, `Grep`) may run concurrently; everything else runs in the order the model emitted it.
@@ -171,13 +173,19 @@ Zero matches returns the closest region of the file with a short diff against `o
 
 **Modes**
 
-| Mode                | File edits                           | Shell commands          | Notes                                                                   |
-| ------------------- | ------------------------------------ | ----------------------- | ----------------------------------------------------------------------- |
-| `default`           | Ask                                  | Ask                     | Read-only tools never ask                                               |
-| `acceptEdits`       | Allow inside the working directories | Ask                     |                                                                         |
-| `plan`              | Blocked                              | Read-only commands only | Leaves via `ExitPlanMode` approval                                      |
-| `dontAsk`           | Deny whatever would have asked       | Same                    | For unattended runs                                                     |
-| `bypassPermissions` | Allow                                | Allow                   | Deny rules still apply; cannot be enabled from a project's own settings |
+| Mode                | File edits                           | Shell commands                         | Notes                                                                   |
+| ------------------- | ------------------------------------ | -------------------------------------- | ----------------------------------------------------------------------- |
+| `default`           | Ask                                  | Ask, except read-only commands         | Read-only tools never ask                                               |
+| `acceptEdits`       | Allow inside the working directories | Ask, except read-only commands         |                                                                         |
+| `plan`              | Blocked                              | Read-only commands run; others ask     | Leaves via `ExitPlanMode` approval                                      |
+| `dontAsk`           | Deny whatever would have asked       | Same                                   | For unattended runs                                                     |
+| `bypassPermissions` | Allow                                | Allow                                  | Deny rules still apply; cannot be enabled from a project's own settings |
+
+A **read-only command** is one on a conservative allow-list of programs and flags that cannot change anything (listing, reading, searching, read-only git subcommands). Such commands run without a prompt inside the working directories, as Claude Code's public docs describe, and still obey deny and ask rules. Anything that writes a file, runs another program or is not on the list is not read-only.
+
+A **redirection that writes a file** (`>`, `>>` and the like) is judged as a file edit in its own right, whatever rule allowed the command. So `Bash(echo *)` does not let `echo x > src/a.ts` through in `default` mode. Files a program writes through its own operands (`cp`, `tee`) stay covered by an explicit rule for that program.
+
+In `bypassPermissions`, explicit ask rules still ask, and so do commands that cannot be parsed and removals of the filesystem root, a home directory or a working directory.
 
 **Rules** use the documented `Tool(specifier)` form in `permissions.allow`, `.ask` and `.deny`:
 
@@ -190,7 +198,9 @@ Zero matches returns the closest region of the file with a short diff against `o
 
 **Decision order:** deny rules, then ask rules, then allow rules, then the mode's default. Precedence details are confirmed against the public permissions page during implementation.
 
-**Shell command matching** parses the command first. A command joined with `&&`, `;`, `|` or containing substitutions is split, and _every_ part must be allowed, so an allowed prefix cannot smuggle a second command.
+**Shell command matching** parses the command first. A command joined with `&&`, `;`, `|` or containing substitutions is split, and _every_ part must be allowed, so an allowed prefix cannot smuggle a second command. A command the parser cannot read with confidence is never allowed by a rule: it asks. Commands always run in bash, never the user's login shell, because the parser models bash and zsh reads some constructs differently.
+
+**Rules are not a sandbox.** An allowed `python -c` or package script can do anything. A broad rule such as `Bash(cat *)` allows reading any file; deny rules such as `Read(./.env)` win over it and are the way to protect secrets. Real isolation is the sandbox in Phase 4.
 
 **Asking.** A request emits `permission.requested` and sets the session to `waiting`. The answers are: allow once; allow always (a rule is written to `.dawg/settings.local.json`); deny, optionally with a message that is given to the model.
 
@@ -212,10 +222,11 @@ Permission lists are combined across levels; single values are overridden. From 
 Loaded as documented for Claude Code's memory files:
 
 - `~/.claude/CLAUDE.md`, then each `CLAUDE.md` and `CLAUDE.local.md` from the filesystem root down to the working directory.
-- `AGENTS.md` is read wherever a `CLAUDE.md` would be and none exists.
-- `@path` imports inside those files, up to five levels deep.
-- `.claude/rules/*.md`, with optional `paths:` front matter limiting when a rule applies.
+- `AGENTS.md` files are read only when no `CLAUDE.md` exists in the working directory or anywhere above it, as the public docs describe. The check is made once for the session, not per directory.
+- `@path` imports inside those files, up to five files deep (four hops).
+- `.claude/rules/**/*.md`, with optional `paths:` front matter limiting when a rule applies.
 - A `CLAUDE.md` in a subdirectory is added (as an appended note) the first time the agent reads a file there.
+- An import that points outside the project is blocked and reported until the person allows it. Imports in the user's own files are trusted.
 
 ### Sessions
 
@@ -259,12 +270,30 @@ dawg -p "<prompt>" [--output-format text|json|stream-json] [--model <id>] [--end
 
 - `text` prints the final message. `json` prints one object with the result, usage and session id. `stream-json` prints protocol events as newline-delimited JSON.
 - With no one to ask, a permission request is denied unless a rule allows it.
-- Exit code 0 on success, non-zero on error, turn limit or interrupt.
+- Exit codes: 0 completed, 1 model or engine error, 2 bad usage, 3 turn limit, 130 interrupted.
 - `dawg` with no `-p` starts a minimal interactive prompt, enough for development before the app exists.
+- The model comes from `--endpoint <url>` (any OpenAI-compatible server, probed for its real context window) or `--model-file <path.gguf>` (run through the bundled runtime). The API key is read only from the `DAWG_API_KEY` environment variable and is removed from the environment before any command runs.
+- `dawg serve` runs the protocol server on standard input and output, so another process can drive the engine.
+- The command runs the engine in-process but talks to it through the protocol, the same path the app uses. Full reference: `packages/cli/README.md`.
 
 ### Mock model server
 
 A scripted OpenAI-compatible server used by tests in this and later phases. A script is a list of replies (text, reasoning, tool calls, or faults such as malformed JSON, a dropped stream, an empty reply), matched to incoming requests in order. It records every request so tests can assert on what the engine sent.
+
+### Findings from the first implementation
+
+Settled while building, on the pinned runtime (llama.cpp build `b12359`):
+
+- **Packages import each other's source directly.** Each package's `exports` points at `src/index.ts`; Node runs it as is. No build step sits between packages.
+- **The mock model server is its own package**, `packages/mock-model`, so later phases can use it without the engine.
+- **Ripgrep is pinned and fetched** like the runtime: `ripgrep.lock.json` and `pnpm fetch-ripgrep`, into `apps/desktop/resources/bin/<platform>-<arch>/`.
+- **Forcing a tool call is not available.** `tool_choice: "required"` was not enforced, and a custom grammar cannot be sent together with tools. Reliability rests on the repair pipeline. Seen with the small test model; to be re-checked with a catalog model.
+- **Stored tool-call arguments must always be valid JSON.** The server rejects a history that holds a call with unparseable arguments. An unusable call is stored with `{}` and the raw text kept beside it.
+- **A streamed tool call cut off by the output limit arrives as an empty reply** with finish reason `length`. The loop treats that as "output cut off", not as an empty reply.
+- **A cut-off call is never repaired.** Only purely structural closers are added; a call that ends inside a string, or arrives with finish reason `length`, is refused.
+- **`GET /props` needs the API key**, like `/v1/models`. A context overflow is an HTTP 400 that reports the prompt size and the window.
+- **`TaskOutput` is gone from the public tools reference.** A background command's output is read from its file with `Read`; `TaskStop` stops it.
+- **Session files are flushed in batches.** Every record is written before `append` returns, so a crash or kill loses nothing; a power cut can lose about the last second.
 
 ## Work breakdown
 
@@ -300,6 +329,8 @@ A scripted OpenAI-compatible server used by tests in this and later phases. A sc
 
 ## Open questions
 
-- Whether to request grammar-constrained tool arguments on every call or only after a failure. Decide on eval results and speed.
+- Whether grammar-constrained tool arguments can be had at all on the pinned runtime (see the findings above). Re-check with a catalog model on the reference Mac.
+- Workspace trust: a project's own allow rules and extra directories apply at once. Claude Code holds them back until the folder is trusted.
+- Whether commands should see the user's shell startup files (aliases, functions, `PATH` additions), and how the app builds a full `PATH` when launched from Finder.
 - How many recent turns to keep verbatim through compaction.
 - Whether reasoning from older turns can be dropped at compaction for models whose cards allow it.

@@ -1,0 +1,20 @@
+{
+  "note": "Captured from llama-server b12359 (x64, CPU) with SmolLM2-135M-Instruct-Q4_0; model path shortened.",
+  "comment": "a streaming request whose prompt does not fit: plain HTTP 400 before any event",
+  "request": {
+    "model": "x",
+    "messages": [
+      {
+        "role": "user",
+        "content": "word0 and more word1 and more ... (900 numbered phrases, trimmed)"
+      }
+    ],
+    "stream": true,
+    "max_tokens": 8
+  },
+  "status": 400,
+  "contentType": "application/json; charset=utf-8",
+  "chunks": [
+    "{\"error\":{\"code\":400,\"message\":\"request (5320 tokens) exceeds the available context size (2048 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":5320,\"n_ctx\":2048}}"
+  ]
+}

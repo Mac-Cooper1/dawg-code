@@ -1,0 +1,63 @@
+{
+  "note": "Captured from llama-server b12359 (x64, CPU) with SmolLM2-135M-Instruct-Q4_0; model path shortened.",
+  "request": {
+    "model": "x",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "description": "Read a file",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      }
+    ],
+    "stream": false,
+    "max_tokens": 48,
+    "temperature": 0,
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant."
+      },
+      {
+        "role": "user",
+        "content": "Weather in Paris and in Rome? Call the tool twice."
+      }
+    ],
+    "tool_choice": "required"
+  },
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "chunks": [
+    "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"},\"id\":\"3HnEKhyzylc3E8qS3UlloNKf2LwIx1dc\"}]}}],\"created\":1795279926,\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":31,\"prompt_tokens\":229,\"total_tokens\":260,\"prompt_tokens_details\":{\"cached_tokens\":0}},\"id\":\"chatcmpl-kcbqgE63aeOky1IrfXlfokJccPKqUEdQ\",\"timings\":{\"cache_n\":0,\"prompt_n\":229,\"prompt_ms\":257.369,\"prompt_per_token_ms\":1.1238820960698692,\"prompt_per_second\":889.773049590277,\"predicted_n\":31,\"predicted_ms\":218.41,\"predicted_per_token_ms\":7.280333333333333,\"predicted_per_second\":137.3563481525571}}"
+  ]
+}

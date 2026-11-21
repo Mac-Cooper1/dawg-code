@@ -129,7 +129,7 @@ These flags were checked against the pinned build's `--help`. The pin is llama.c
 Findings from the first implementation, on the pinned build:
 
 - `--no-webui` is deprecated in favour of `--no-ui`.
-- `GET /v1/models` requires the API key; `GET /health` does not.
+- `GET /v1/models` and `GET /props` require the API key; `GET /health` does not.
 - A warm-up request must ask for one token: zero still generates one.
 - The server does not validate slot ids, and restoring a missing slot file returns a misleading error, so the supervisor checks both itself.
 - `--log-file` truncates on each launch. The supervisor keeps its own rotated capture in `runtime.log`.

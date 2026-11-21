@@ -34,7 +34,7 @@ These apply to every phase. A spec only repeats them where it adds something.
 - A pnpm workspace with TypeScript in strict mode, ES modules only.
 - Vitest for unit and integration tests, Playwright for app end-to-end tests, Biome for lint and formatting.
 - The Node version is the one bundled with the pinned Electron release. `packages/*` must run on plain Node with no Electron imports, so the engine also works headless.
-- Layout as in PLAN.md section 5: `apps/desktop`, `packages/{protocol,engine,compat,models,cli}`, `evals/`, `catalog/`.
+- Layout as in PLAN.md section 5: `apps/desktop`, `packages/{protocol,engine,compat,models,cli,mock-model}`, `evals/`, `catalog/`.
 
 ### Processes
 

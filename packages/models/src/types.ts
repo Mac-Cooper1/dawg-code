@@ -65,4 +65,10 @@ export interface Endpoint {
     /** Slots, prompt warm-up and cache save/restore are available. */
     cacheControl: boolean;
   };
+  /** What the model's chat template supports, where the server reports it. */
+  template?: {
+    parallelToolCalls?: boolean;
+    /** Effort levels the template accepts, weakest first. Empty or absent means none. */
+    reasoningEffortLevels?: string[];
+  };
 }

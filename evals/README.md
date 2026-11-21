@@ -71,7 +71,7 @@ node evals/runner/src/cli.ts report evals/results/2026-11-20-*.jsonl --out evals
 | `--keep`                   | Keep the workspace of runs that did not pass; the path is printed                |
 | `--label <text>`           | Stored in every row; use it for the provider and precision                       |
 | `--agent-cmd <template>`   | Command template for `--agent command`                                           |
-| `--agent-bin <path>`       | Executable for `opencode`, `pi`, `claude-code` or `dawg`                         |
+| `--agent-bin <path>`       | Executable for `opencode`, `pi`, `claude-code` or `dawg` (for `dawg` it replaces `node` and the entry point) |
 | `--agent-features a,b`     | Extra features the agent claims (matched against `requires`)                     |
 | `--proxy-cmd <command>`    | How to launch the proxy. Default `node evals/proxy/src/cli.ts`                   |
 | `--tasks-dir`, `--results-dir` | Defaults `evals/tasks`, `evals/results`                                      |
@@ -90,7 +90,7 @@ For each task × trial:
 4. Stop the proxy (SIGTERM, so it flushes), save the agent's diff against the starting commit (`diff.patch`, including untracked files and the agent's own commits), then run `check.sh` (60 s limit).
 5. Append a result row, compute metrics from the proxy records, delete the temp directory (unless `--keep` and the run did not pass).
 
-Artefacts per run go to `evals/results/tmp/<run-id>/`: `agent.stdout.log`, `agent.stderr.log` (for `opencode`, `pi`, `claude-code` and `dawg` stdout is the JSON event transcript), `setup.*.log`, `check.*.log`, `diff.patch`, `proxy.jsonl`, `proxy.stderr.log`.
+Artefacts per run go to `evals/results/tmp/<run-id>/`: `agent.stdout.log`, `agent.stderr.log` (for `opencode`, `pi`, `claude-code` and `dawg` stdout is the JSON event transcript), `setup.*.log`, `check.*.log`, `diff.patch`, `proxy.jsonl`, `proxy.stderr.log`. A `dawg` run also keeps its session store in `dawg-home/` (the session transcript and its event log).
 
 ### Results and metrics
 
@@ -132,7 +132,9 @@ interface AgentAdapter {
 | `opencode`    | `opencode run --standalone --auto --format json --model dawg-eval/<model> <prompt>`, provider config in `$HOME/.config/opencode/opencode.json` | Unverified |
 | `pi`          | `pi --mode json --no-session --provider dawg-eval --model <model> <prompt>`, `models.json` in `$PI_CODING_AGENT_DIR` | Unverified |
 | `claude-code` | `claude -p <prompt> --output-format stream-json --verbose --model <model> --dangerously-skip-permissions` with `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` | Unverified |
-| `dawg`        | `dawg -p` with the Phase 2 headless flags                                                    | Placeholder     |
+| `dawg`        | `node packages/cli/src/main.ts -p <prompt> --output-format stream-json --model <model> --endpoint <proxy> --permission-mode bypassPermissions --max-turns 200 --cwd <workspace>` from this checkout, with the dummy key in `DAWG_API_KEY` and `DAWG_HOME=<artefacts>/dawg-home` | Tested end to end (mock model) |
+
+`dawg` is tested by `runner/src/adapters/dawg.test.ts`: the runner, the recording proxy and the CLI run a fixture task against the scripted mock model and the task passes. Its unattended freedom matches the other harnesses: bypass mode inside the throwaway workspace, where deny rules from settings still apply.
 
 "Unverified" means the command, environment and config files were built from each tool's public documentation (URLs in `runner/src/adapters/external.ts`) and are unit-tested, but have not been run against the real binary. Check them before the first baseline run.
 

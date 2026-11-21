@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { splitArgs } from "../proc.ts";
 import { executeLaunch, requireEndpoint, slugify } from "./launch.ts";
 import type { AgentAdapter, LaunchSpec, RunContext } from "./types.ts";
@@ -270,16 +271,30 @@ export function claudeCodeAdapter(opts: ExternalAdapterOptions = {}): AgentAdapt
 }
 
 // ---------------------------------------------------------------------------------------------
-// dawg — placeholder for our own CLI, which does not exist yet.
-// Flags from docs/specs/phase-2-engine-core.md "Headless CLI". How the CLI takes its API key is not
-// specified yet; DAWG_API_KEY is a guess to revisit in Phase 2.
+// dawg: our own command-line tool (packages/cli, README there), run from this checkout.
+// `-p` with stream-json output (every protocol event, one per line: the transcript), the proxy as
+// `--endpoint` and the dummy key in DAWG_API_KEY, which the CLI reads from the environment only
+// and keeps out of the commands the agent runs. Same freedom as the other harnesses
+// (--dangerously-skip-permissions, --auto): bypassPermissions inside the task's throwaway
+// workspace. Sessions are stored under the run's artefacts, so the transcript survives the run.
 // ---------------------------------------------------------------------------------------------
 
-export function buildDawgLaunch(ctx: RunContext, bin = "dawg"): LaunchSpec {
+/** The CLI's entry point in this checkout, run with the runner's own Node. */
+export const DAWG_CLI_ENTRY = fileURLToPath(
+  new URL("../../../../packages/cli/src/main.ts", import.meta.url),
+);
+
+/** Model requests one eval turn may make: the engine's default limit, stated explicitly. */
+export const DAWG_EVAL_MAX_TURNS = 200;
+
+export function buildDawgLaunch(ctx: RunContext, bin?: string): LaunchSpec {
   const ep = requireEndpoint(ctx, "dawg");
+  const [command, prefix] =
+    bin === undefined ? [process.execPath, [DAWG_CLI_ENTRY]] : [bin, [] as string[]];
   return {
-    command: bin,
+    command,
     args: [
+      ...prefix,
       "-p",
       ctx.prompt,
       "--output-format",
@@ -290,10 +305,15 @@ export function buildDawgLaunch(ctx: RunContext, bin = "dawg"): LaunchSpec {
       ep.openaiBaseUrl,
       "--permission-mode",
       "bypassPermissions",
+      "--max-turns",
+      String(DAWG_EVAL_MAX_TURNS),
       "--cwd",
       ctx.workspace,
     ],
-    env: { DAWG_API_KEY: ep.apiKey },
+    env: {
+      DAWG_API_KEY: ep.apiKey,
+      DAWG_HOME: join(ctx.artifactsDir, "dawg-home"),
+    },
     files: {},
     transcriptPath: join(ctx.artifactsDir, "agent.stdout.log"),
   };

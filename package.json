@@ -16,6 +16,8 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "fetch-runtime": "node scripts/fetch-runtime.ts",
+    "fetch-ripgrep": "node scripts/fetch-ripgrep.ts",
+    "dawg": "node packages/cli/src/main.ts",
     "eval": "node evals/runner/src/cli.ts",
     "eval:validate": "node evals/runner/src/cli.ts validate"
   },

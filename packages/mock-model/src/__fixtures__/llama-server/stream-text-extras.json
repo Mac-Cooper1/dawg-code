@@ -1,0 +1,37 @@
+{
+  "note": "Captured from llama-server b12359 (x64, CPU) with SmolLM2-135M-Instruct-Q4_0; model path shortened.",
+  "comment": "cache_prompt, id_slot, timings_per_token, return_progress and include_usage; second identical request so the prefix is cached",
+  "request": {
+    "model": "x",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant."
+      },
+      {
+        "role": "user",
+        "content": "Say hello in one short sentence."
+      }
+    ],
+    "stream": true,
+    "max_tokens": 12,
+    "temperature": 0,
+    "cache_prompt": true,
+    "id_slot": 0,
+    "timings_per_token": true,
+    "return_progress": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "status": 200,
+  "contentType": "text/event-stream",
+  "chunks": [
+    "data: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null}}],\"created\":1795279463,\"id\":\"chatcmpl-9rcYT3MKwykuZ3YIi4sTEUS13PFl0dMq\",\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion.chunk\",\"timings\":{\"cache_n\":26,\"prompt_n\":0,\"prompt_ms\":0.0,\"prompt_per_token_ms\":0.0,\"prompt_per_second\":0.0,\"predicted_n\":0,\"predicted_ms\":0.0,\"predicted_per_token_ms\":0.0,\"predicted_per_second\":0.0},\"prompt_progress\":{\"total\":27,\"cache\":26,\"processed\":26,\"time_ms\":0}}\n\n",
+    "data: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null}}],\"created\":1795279463,\"id\":\"chatcmpl-9rcYT3MKwykuZ3YIi4sTEUS13PFl0dMq\",\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion.chunk\",\"timings\":{\"cache_n\":26,\"prompt_n\":1,\"prompt_ms\":3.194,\"prompt_per_token_ms\":3.194,\"prompt_per_second\":313.08703819661866,\"predicted_n\":0,\"predicted_ms\":0.0,\"predicted_per_token_ms\":0.0,\"predicted_per_second\":0.0},\"prompt_progress\":{\"total\":27,\"cache\":26,\"processed\":27,\"time_ms\":3}}\n\n",
+    "data: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null}}],\"created\":1795279463,\"id\":\"chatcmpl-9rcYT3MKwykuZ3YIi4sTEUS13PFl0dMq\",\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion.chunk\"}\n\ndata: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"content\":\"Hello\"}}],\"created\":1795279463,\"id\":\"chatcmpl-9rcYT3MKwykuZ3YIi4sTEUS13PFl0dMq\",\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion.chunk\",\"timings\":{\"cache_n\":26,\"prompt_n\":1,\"prompt_ms\":3.312,\"prompt_per_token_ms\":3.312,\"prompt_per_second\":301.9323671497585,\"predicted_n\":1,\"predicted_ms\":0.001,\"predicted_per_token_ms\":0.0,\"predicted_per_second\":0.0}}\n\n",
+    "data: {\"choices\":[{\"finish_reason\":null,\"index\":0,\"delta\":{\"content\":\".\"}}],\"created\":1795279463,\"id\":\"chatcmpl-9rcYT3MKwykuZ3YIi4sTEUS13PFl0dMq\",\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion.chunk\",\"timings\":{\"cache_n\":26,\"prompt_n\":1,\"prompt_ms\":3.312,\"prompt_per_token_ms\":3.312,\"prompt_per_second\":301.9323671497585,\"predicted_n\":2,\"predicted_ms\":3.319,\"predicted_per_token_ms\":3.319,\"predicted_per_second\":301.29557095510694}}\n\n",
+    "data: {\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"delta\":{}}],\"created\":1795279463,\"id\":\"chatcmpl-9rcYT3MKwykuZ3YIi4sTEUS13PFl0dMq\",\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion.chunk\"}\n\ndata: {\"choices\":[],\"created\":1795279463,\"id\":\"chatcmpl-9rcYT3MKwykuZ3YIi4sTEUS13PFl0dMq\",\"model\":\"SmolLM2-135M-Instruct-Q4_0.gguf\",\"system_fingerprint\":\"b12359-b1b770d90\",\"object\":\"chat.completion.chunk\",\"usage\":{\"completion_tokens\":3,\"prompt_tokens\":27,\"total_tokens\":30,\"prompt_tokens_details\":{\"cached_tokens\":26}},\"timings\":{\"cache_n\":26,\"prompt_n\":1,\"prompt_ms\":3.312,\"prompt_per_token_ms\":3.312,\"prompt_per_second\":301.9323671497585,\"predicted_n\":3,\"predicted_ms\":6.7,\"predicted_per_token_ms\":3.35,\"predicted_per_second\":298.5074626865672}}\n\n",
+    "data: [DONE]\n\n"
+  ]
+}

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { TASKS } from "../__fixtures__/paths.ts";
@@ -9,6 +10,7 @@ import {
   buildOpencodeLaunch,
   buildPiLaunch,
   createAdapter,
+  DAWG_CLI_ENTRY,
   launchEnv,
   type RunContext,
   unmetRequirements,
@@ -189,11 +191,12 @@ describe("claude-code adapter (unverified against the real binary)", () => {
   });
 });
 
-describe("dawg adapter (placeholder; the CLI does not exist yet)", () => {
-  test("follows the Phase 2 headless CLI flags", () => {
+describe("dawg adapter", () => {
+  test("runs this checkout's CLI with the headless flags, the proxy and the dummy key", () => {
     const spec = buildDawgLaunch(ctx());
-    expect(spec.command).toBe("dawg");
+    expect(spec.command).toBe(process.execPath);
     expect(spec.args).toEqual([
+      DAWG_CLI_ENTRY,
       "-p",
       PROMPT,
       "--output-format",
@@ -204,9 +207,28 @@ describe("dawg adapter (placeholder; the CLI does not exist yet)", () => {
       "http://127.0.0.1:4567/v1",
       "--permission-mode",
       "bypassPermissions",
+      "--max-turns",
+      "200",
       "--cwd",
       "/w/workspace",
     ]);
+    expect(existsSync(DAWG_CLI_ENTRY)).toBe(true);
+    expect(DAWG_CLI_ENTRY.endsWith(join("packages", "cli", "src", "main.ts"))).toBe(true);
+    expect(spec.env).toEqual({
+      DAWG_API_KEY: "dawg-eval-dummy-key",
+      DAWG_HOME: "/w/artifacts/dawg-home",
+    });
+    expect(spec.files).toEqual({});
+    expect(spec.transcriptPath).toBe("/w/artifacts/agent.stdout.log");
+    const env = launchEnv(ctx(), spec);
+    expect(env.HOME).toBe("/w/home");
+    expect(env.DAWG_API_KEY).toBe("dawg-eval-dummy-key");
+  });
+
+  test("an --agent-bin replaces node and the entry point", () => {
+    const spec = buildDawgLaunch(ctx(), "/opt/dawg");
+    expect(spec.command).toBe("/opt/dawg");
+    expect(spec.args[0]).toBe("-p");
   });
 });
 

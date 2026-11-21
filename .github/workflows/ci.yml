@@ -26,6 +26,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: Fetch the pinned ripgrep (the Grep tool's tests need it)
+        run: pnpm fetch-ripgrep
       - run: pnpm test
 
   build:
@@ -44,6 +46,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Fetch the pinned ripgrep (the Grep tool's tests need it)
+        run: pnpm fetch-ripgrep
       - run: pnpm test
       - name: Validate eval tasks (fixture fails, reference solution passes)
         run: pnpm eval:validate
