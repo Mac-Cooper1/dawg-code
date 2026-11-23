@@ -48,7 +48,7 @@ Renderer (React) ──typed preload API──▶ Main ──▶ terminals, git,
 | ------------------- | --------------------------------------------------------------------- |
 | Framework and build | React, Vite                                                           |
 | State               | A normalised client store (Zustand), fed by a single event reducer    |
-| Styling             | CSS variables for design tokens; light and dark follow the system     |
+| Styling             | CSS variables for design tokens; dark and light themes (see below)    |
 | Primitives          | Headless accessible components (Radix) with our own styling           |
 | Code and diffs      | Monaco                                                                |
 | Terminal            | xterm.js in the renderer, node-pty in main                            |
@@ -68,6 +68,30 @@ interface AppState {
 ```
 
 One reducer turns protocol events into state changes. The same reducer runs in tests against recorded event streams.
+
+### Visual design
+
+Approved on 2026-11-22 from a clickable mockup of first run, the main window, decision cards, the panes and Settings, each in dark and light: https://claude.ai/artifact/Az8BmEJRkbGRkmTxpPKoyN (private to the project owner).
+
+- **Themes.** Dark and light are both first-class: every screen is designed and tested in both, and designs are shown dark first. Settings → General → Appearance offers Match macOS (the default), Dark and Light. A moon or sun button in each window's title bar switches between Dark and Light and saves that choice.
+- **Colour.** Graphite neutrals and one lime accent. The accent fills primary buttons and marks selection. On light backgrounds, accent-coloured text and progress bars use dark olive so they stay readable.
+
+| Token                    | Light                                      | Dark                                       |
+| ------------------------ | ------------------------------------------ | ------------------------------------------ |
+| Window background        | `#F7F7F4`                                  | `#131416`                                  |
+| Sidebar and title bar    | `#EEEEE9`                                  | `#18191C`                                  |
+| Panels and cards         | `#FFFFFF`                                  | `#1E1F23`                                  |
+| Lines                    | `#E2E2DB`                                  | `#2C2E33`                                  |
+| Text, secondary, muted   | `#17181A`, `#45484D`, `#61656C`            | `#ECEDEF`, `#B9BCC2`, `#90949B`            |
+| Accent fill, accent text | `#C8F03C`, `#4A6600`                       | `#C8F03C`, `#C8F03C`                       |
+| Amber, blue, red, green  | `#A34A00`, `#1D5BD1`, `#C2261E`, `#1A7536` | `#F6B44A`, `#7EA8FF`, `#FF7B72`, `#6CD38D` |
+
+- **Status colours.** Amber means "Needs you", blue means done-unread and cached tokens, red means an error, green means success.
+- **Type.** UI text at 13 px, code at 12 px in a monospace face. The mockup uses Geist and Geist Mono; see Open questions.
+- **Status marks** differ in shape as well as colour: a spinning ring (working), an amber "!" (needs you), a blue dot (done, unread), a dashed ring (queued), a red × (error), and no mark (idle).
+- **Tool calls** open "what needs a look" by default: failed commands and edits are open; reads, searches and passing commands are closed. Settings → General also offers All closed and All open.
+- **Decision cards** appear inline in the transcript where the agent stopped, and the session's sidebar row says what is needed ("Needs you: run a command"). Text sent from the composer while a card is open answers that card: it denies the command with that note, answers the question, or keeps planning with that feedback. An answered card leaves a one-line record with "Show the card again".
+- **Stopping a turn** holds any queued message. It stays above the composer, unsent, with Send now and Remove.
 
 ### Window layout
 
@@ -163,12 +187,12 @@ The Changes pane then shows the branch's diff against its base.
 
 ### Settings
 
-| Page        | Controls                                                       |
-| ----------- | -------------------------------------------------------------- |
-| Models      | From Phase 1: installed and available models, endpoints        |
-| Permissions | Default mode; view and edit allow / ask / deny rules per scope |
-| General     | Theme, notifications, default worktree behaviour, idle unload  |
-| Shortcuts   | View the keyboard map                                          |
+| Page        | Controls                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------- |
+| Models      | From Phase 1: running model and memory, idle unload, installed and available models, endpoints |
+| Permissions | Default mode; view and edit allow / ask / deny rules per scope                                 |
+| General     | Appearance, how tool calls open, notifications, default worktree behaviour                     |
+| Shortcuts   | View the keyboard map                                                                          |
 
 ### Keyboard
 
@@ -225,4 +249,5 @@ As in the shared baseline, plus:
 
 - Whether several windows are needed at launch, or one window with multiple sessions is enough.
 - How much of the Files pane editor to build before people simply open their own editor. An "open in editor" action may cover most of the need.
-- The visual identity: colours, type, icon. Needs a design pass before the first public build.
+- Fonts. The mockup uses Geist and Geist Mono, which are under the SIL Open Font License, outside the dependency licence rule in PLAN.md section 12. Either use the macOS system fonts (SF Pro and SF Mono, nothing to bundle) or allow OFL for fonts. Default: the system fonts.
+- The app icon. The paw mark in the mockup is a placeholder.

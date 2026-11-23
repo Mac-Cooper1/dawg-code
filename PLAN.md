@@ -261,7 +261,7 @@ Not legal advice; these are the practical rules the project follows.
 - **Our own prompts.** System prompts and tool descriptions are written from scratch.
 - **Naming.** No "Claude", "Anthropic" or lookalike names and logos in the product, repo name or icon. Anthropic has pushed projects to rename before. Say "compatible with Claude Code configuration files" and add a not-affiliated line to the README. The current GitHub repo description leans on the name and is worth rewording.
 - **Look and feel.** Match the workflow and layout conventions; use our own visual design and wording.
-- **Dependencies.** MIT and Apache-2.0 only, with notices kept. Do not copy from AGPL, GPL or source-available projects (opcode, CloudCLI, Zed, Crush).
+- **Dependencies.** Permissive licences only: MIT, Apache-2.0, ISC and 0BSD, with notices kept. Do not copy from AGPL, GPL or source-available projects (opcode, CloudCLI, Zed, Crush).
 - **Models.** Show each model's licence before download; most defaults are Apache-2.0, a few are not.
 
 ## 13. Open decisions
