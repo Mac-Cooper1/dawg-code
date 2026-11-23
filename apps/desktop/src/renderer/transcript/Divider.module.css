@@ -1,0 +1,86 @@
+/* Thin centred dividers with a short label (notes, "Queued message sent", compaction). */
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.error {
+  color: var(--red);
+}
+
+.error::before,
+.error::after {
+  background: color-mix(in srgb, var(--red) 35%, var(--line));
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 80%;
+  text-align: center;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 80%;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  text-align: center;
+}
+
+.toggle:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.chevron {
+  flex: none;
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.summary {
+  font-size: 13.5px;
+  line-height: 1.6;
+  max-height: 300px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.summaryError {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  white-space: pre-wrap;
+  color: var(--red);
+}
+
+/* The line under a finished turn. */
+.turnMeta {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}

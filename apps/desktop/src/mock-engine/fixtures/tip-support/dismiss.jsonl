@@ -1,0 +1,22 @@
+{"event":"request.resolved","payload":{"sessionId":"tip-support","seq":40,"time":1795338022630,"kind":"question","turnId":"turn-2","requestId":"request-tip-support-split","outcome":"answered","response":{"outcome":"dismissed"}}}
+{"event":"session.status","payload":{"sessionId":"tip-support","seq":41,"time":1795338022630,"status":"working","waitingOn":null,"message":"Working"}}
+{"event":"tool.finished","payload":{"sessionId":"tip-support","seq":42,"time":1795338022633,"turnId":"turn-2","toolCallId":"call-463627fc6f42","toolName":"AskUserQuestion","outcome":"success","content":[{"type":"text","text":"The person closed the questions without answering.\nDo not ask the same questions again; continue with your best judgement, or stop and explain what you need."}],"display":null,"durationMs":7880}}
+{"event":"message.started","payload":{"sessionId":"tip-support","seq":43,"time":1795338024348,"turnId":"turn-2","messageId":"message-a866b7a734e0"}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":44,"time":1795338024403,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"No "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":45,"time":1795338024448,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"problem. "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":46,"time":1795338024510,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"I’ll "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":47,"time":1795338024558,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"leave "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":48,"time":1795338024634,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"tips out "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":49,"time":1795338024675,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"and "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":50,"time":1795338024741,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"finish "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":51,"time":1795338024822,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"the "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":52,"time":1795338024911,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"rest; "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":53,"time":1795338024966,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"ask "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":54,"time":1795338025030,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"me again "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":55,"time":1795338025106,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"when "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":56,"time":1795338025182,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"you’ve "}}
+{"event":"message.delta","payload":{"sessionId":"tip-support","seq":57,"time":1795338025269,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"decided."}}
+{"event":"message.finished","payload":{"sessionId":"tip-support","seq":58,"time":1795338025306,"turnId":"turn-2","messageId":"message-a866b7a734e0","text":"No problem. I’ll leave tips out and finish the rest; ask me again when you’ve decided.","reasoning":null,"toolCalls":[]}}
+{"event":"usage.updated","payload":{"sessionId":"tip-support","seq":59,"time":1795338025306,"usage":{"contextWindow":204800,"contextUsed":25578,"last":{"promptTokens":25154,"completionTokens":424,"cachedTokens":24883,"promptTokensPerSecond":1262,"completionTokensPerSecond":25.1},"totals":{"requests":3,"promptTokens":64706,"completionTokens":2612,"cachedTokens":56787,"malformedToolCalls":0}}}}
+{"event":"turn.finished","payload":{"sessionId":"tip-support","seq":60,"time":1795338025306,"turnId":"turn-2","stopReason":"completed","finalText":"No problem. I’ll leave tips out and finish the rest; ask me again when you’ve decided.","error":null,"durationMs":25306}}
+{"event":"session.status","payload":{"sessionId":"tip-support","seq":61,"time":1795338025306,"status":"idle","waitingOn":null,"message":null}}

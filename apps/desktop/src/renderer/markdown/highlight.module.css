@@ -1,0 +1,67 @@
+/*
+ * Syntax colours for Prism tokens, from the theme's own variables so they read well in dark and
+ * light alike: keywords blue, strings green, comments muted, numbers amber, functions and types in
+ * the accent text colour, properties and tags red.
+ */
+
+.comment {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+.punctuation {
+  color: var(--ink-2);
+}
+
+.operator {
+  color: var(--ink-2);
+}
+
+.keyword {
+  color: var(--blue);
+}
+
+.string {
+  color: var(--green);
+}
+
+.number {
+  color: var(--amber);
+}
+
+.regex {
+  color: var(--amber);
+}
+
+.function {
+  color: var(--acc-text);
+}
+
+.property {
+  color: var(--red);
+}
+
+.namespace {
+  color: var(--ink-2);
+}
+
+.title {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+.inserted {
+  color: var(--add-ink);
+}
+
+.deleted {
+  color: var(--del-ink);
+}
+
+.bold {
+  font-weight: 600;
+}
+
+.italic {
+  font-style: italic;
+}

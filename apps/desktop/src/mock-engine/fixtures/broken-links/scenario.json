@@ -1,0 +1,17 @@
+{
+  "id": "broken-links",
+  "session": {
+    "title": "Fix broken links in docs",
+    "cwd": "~/code/dawg-site",
+    "projectDir": "~/code/dawg-site",
+    "mode": "acceptEdits",
+    "model": "qwen3.8-27b-q8",
+    "effort": null
+  },
+  "storedEndedAgoMs": 93600000,
+  "stored": "stored.jsonl",
+  "live": null,
+  "queuedBehind": null,
+  "branches": {},
+  "turns": []
+}

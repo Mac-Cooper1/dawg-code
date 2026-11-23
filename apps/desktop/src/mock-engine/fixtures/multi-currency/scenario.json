@@ -1,0 +1,31 @@
+{
+  "id": "multi-currency",
+  "session": {
+    "title": "Multi-currency totals",
+    "cwd": "~/code/tally/.dawg/worktrees/multi-currency",
+    "projectDir": "~/code/tally",
+    "mode": "default",
+    "model": "qwen3.8-27b-q8",
+    "effort": null
+  },
+  "storedEndedAgoMs": 1260000,
+  "stored": "stored.jsonl",
+  "live": null,
+  "queuedBehind": null,
+  "branches": {
+    "request-multi-currency-plan": {
+      "approve:acceptEdits": "approve-accept-edits.jsonl",
+      "approve": "approve.jsonl",
+      "reject": "reject.jsonl"
+    },
+    "request-multi-currency-edit": {
+      "allow": "approve-edit-allow.jsonl",
+      "deny": "approve-edit-deny.jsonl"
+    },
+    "request-multi-currency-plan-2": {
+      "approve": "reject-approve.jsonl",
+      "reject": "reject-reject.jsonl"
+    }
+  },
+  "turns": []
+}

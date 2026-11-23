@@ -1,0 +1,322 @@
+/* The composer (mockup .cp, .cpi, .qd, .box, .ta, .cbar, .pill, .sep, .ring, .send, .stk, .kv, .sw). */
+
+.composer {
+  flex: none;
+  padding: 6px 32px 16px;
+}
+
+.inner {
+  position: relative;
+  max-width: var(--transcript-max-width);
+  margin: 0 auto;
+}
+
+/* Queued and held messages */
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.queued {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.queuedText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queuedText b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* The box */
+
+.box {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-2xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+}
+
+.box:focus-within {
+  border-color: var(--ink-3);
+  box-shadow:
+    var(--shadow-1),
+    0 0 0 1px var(--ink-3);
+}
+
+.box[data-disabled="true"] {
+  opacity: 0.6;
+}
+
+/* Grows with its text up to about ten lines, then scrolls. */
+.textarea {
+  display: block;
+  width: 100%;
+  min-height: 54px;
+  max-height: calc(14px * 1.5 * 10 + 14px);
+  field-sizing: content;
+  padding: 12px 14px 2px;
+  border: 0;
+  background: none;
+  resize: none;
+  outline: none;
+  overflow-y: auto;
+  font-size: var(--text-chat);
+  line-height: 1.5;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px 8px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 4px;
+}
+
+.separator {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--line);
+  flex: none;
+}
+
+.iconButton {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 7px;
+  color: var(--ink-2);
+}
+
+.iconButton[aria-disabled="true"] {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.tooltip {
+  z-index: 60;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow-1);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.pill:hover:not(:disabled),
+.pill[data-state="open"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.pill:disabled {
+  cursor: default;
+}
+
+/* Mode tones (mockup .m-acc, .m-plan, .m-dont, .m-byp). */
+.toneAccent,
+.toneAccent:hover:not(:disabled) {
+  color: var(--acc-text);
+}
+
+.toneBlue,
+.toneBlue:hover:not(:disabled) {
+  color: var(--blue);
+}
+
+.toneAmber,
+.toneAmber:hover:not(:disabled) {
+  color: var(--amber);
+}
+
+.toneRed,
+.toneRed:hover:not(:disabled) {
+  color: var(--red);
+}
+
+.send {
+  width: 32px;
+  height: 32px;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--acc-edge);
+  background: var(--acc);
+  color: var(--acc-ink);
+}
+
+/* Only a failed connection disables Send: neutral, not a faded accent. */
+.send:disabled {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.stop {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+}
+
+/* Slash-command menu */
+
+.commandMenu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 380px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.options {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.argumentHint {
+  font-weight: 400;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+/* Context meter */
+
+.ring {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.ringTrack,
+.ringValue {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.ringTrack {
+  stroke: var(--line);
+}
+
+.ringValue {
+  stroke: var(--acc-text);
+}
+
+.contextPopover {
+  width: 350px;
+}
+
+.stack {
+  display: flex;
+  height: 8px;
+  margin: 4px 9px 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.stackPart {
+  display: block;
+  height: 100%;
+}
+
+.breakdown {
+  margin: 0;
+}
+
+.breakdownRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 9px;
+  font-size: 12.5px;
+}
+
+.breakdownLabel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.breakdownValue {
+  margin: 0;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.swatchCached {
+  background: var(--blue);
+}
+
+.swatchUsed {
+  background: var(--acc-text);
+}
+
+.swatchFree {
+  background: var(--line);
+}
+
+.contextFooter {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.contextLine {
+  margin: 0;
+}

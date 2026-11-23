@@ -1,0 +1,7 @@
+/* A reply: chat-size Markdown, no bubble. */
+
+.text {
+  font-size: var(--text-chat);
+  line-height: 1.62;
+  color: var(--ink);
+}

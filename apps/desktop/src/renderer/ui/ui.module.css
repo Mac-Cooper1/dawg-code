@@ -1,0 +1,175 @@
+/* Shared primitives: buttons, icon buttons, keyboard hints, chips, tags, spinner. */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--ink-3);
+}
+
+.button:disabled {
+  opacity: 0.5;
+}
+
+.primary {
+  background: var(--acc);
+  border-color: var(--acc-edge);
+  color: var(--acc-ink);
+  font-weight: 600;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--acc);
+  border-color: var(--acc-edge);
+  filter: brightness(0.96);
+}
+
+.danger {
+  color: var(--red);
+}
+
+.ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--ink-2);
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.sm {
+  height: 26px;
+  padding: 0 8px;
+  font-size: var(--text-sm);
+}
+
+.lg {
+  height: 40px;
+  padding: 0 18px;
+  font-size: 14px;
+  border-radius: var(--radius-lg);
+}
+
+.iconButton {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 7px;
+  color: var(--ink-2);
+}
+
+.iconButton:hover:not(:disabled),
+.iconButton[data-active="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.iconButtonSmall {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+}
+
+.kbd {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 15px;
+}
+
+.primary .kbd {
+  color: var(--acc-ink);
+  border-color: rgba(0, 0, 0, 0.22);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--hover);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.tagGreen {
+  background: var(--ok-bg);
+  color: var(--green);
+}
+
+.tagAmber {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.tagAccent {
+  background: var(--sel);
+  color: var(--acc-text);
+}
+
+.tagRed {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.spinner {
+  display: inline-block;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--acc-text);
+  border-right-color: transparent;
+  animation: spinnerTurn 0.9s linear infinite;
+}
+
+/* Local to this module: CSS modules rename animation names, so the global keyframes in
+   base.css cannot be referenced from here. */
+@keyframes spinnerTurn {
+  to {
+    transform: rotate(360deg);
+  }
+}

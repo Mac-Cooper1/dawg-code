@@ -1,0 +1,17 @@
+{
+  "id": "python-313",
+  "session": {
+    "title": "Bump to Python 3.13",
+    "cwd": "~/code/notes-cli",
+    "projectDir": "~/code/notes-cli",
+    "mode": "acceptEdits",
+    "model": "qwen3.8-27b-q8",
+    "effort": null
+  },
+  "storedEndedAgoMs": 421200000,
+  "stored": "stored.jsonl",
+  "live": null,
+  "queuedBehind": null,
+  "branches": {},
+  "turns": []
+}

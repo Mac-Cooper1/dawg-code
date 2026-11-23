@@ -1,0 +1,22 @@
+{
+  "id": "flaky-csv",
+  "session": {
+    "title": "Flaky CSV import test",
+    "cwd": "~/code/tally",
+    "projectDir": "~/code/tally",
+    "mode": "default",
+    "model": "qwen3.8-27b-q8",
+    "effort": null
+  },
+  "storedEndedAgoMs": 180000,
+  "stored": "stored.jsonl",
+  "live": null,
+  "queuedBehind": null,
+  "branches": {
+    "request-flaky-csv-uv-add": {
+      "allow": "allow.jsonl",
+      "deny": "deny.jsonl"
+    }
+  },
+  "turns": []
+}

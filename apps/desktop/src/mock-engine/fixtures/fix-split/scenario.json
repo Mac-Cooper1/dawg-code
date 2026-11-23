@@ -1,0 +1,19 @@
+{
+  "id": "fix-split",
+  "session": {
+    "title": "Fix the failing split test",
+    "cwd": "~/code/tally/.dawg/worktrees/split-cents",
+    "projectDir": "~/code/tally",
+    "mode": "acceptEdits",
+    "model": "qwen3.8-27b-q8",
+    "effort": "xhigh"
+  },
+  "storedEndedAgoMs": 0,
+  "stored": "stored.jsonl",
+  "live": "live.jsonl",
+  "queuedBehind": null,
+  "branches": {},
+  "turns": [
+    "turn-3.jsonl"
+  ]
+}
