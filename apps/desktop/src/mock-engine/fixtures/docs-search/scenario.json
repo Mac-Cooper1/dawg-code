@@ -1,0 +1,17 @@
+{
+  "id": "docs-search",
+  "session": {
+    "title": "Docs search page",
+    "cwd": "~/code/dawg-site",
+    "projectDir": "~/code/dawg-site",
+    "mode": "acceptEdits",
+    "model": "qwen3.8-27b-q8",
+    "effort": null
+  },
+  "storedEndedAgoMs": 60000,
+  "stored": "stored.jsonl",
+  "live": "live.jsonl",
+  "queuedBehind": "fix-split",
+  "branches": {},
+  "turns": []
+}

@@ -1,0 +1,379 @@
+/* Decision cards: an amber frame and header bar, and the one-line record once answered. */
+
+.card {
+  border: 1.5px solid var(--amber);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.readOnly {
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-1);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.readOnly .header {
+  background: var(--panel-2);
+  color: var(--ink-2);
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.aside {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  font-weight: 500;
+  min-width: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headerChip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.body {
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-chat);
+  font-weight: 600;
+}
+
+.why {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.command {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.change {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--code);
+  overflow: hidden;
+}
+
+.changePath {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  color: var(--ink-2);
+}
+
+.changePath > :first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add {
+  color: var(--add-ink);
+}
+
+.del {
+  color: var(--del-ink);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.chosen {
+  /* The answer given, when a card is shown again. */
+  box-shadow: 0 0 0 2px var(--acc-text);
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.rule {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.link {
+  color: var(--acc-text);
+  font-weight: 500;
+  font-size: inherit;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.fieldLabel {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.field {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  background: var(--panel);
+  resize: vertical;
+  font-size: var(--text);
+}
+
+.field:focus-visible {
+  outline-offset: 0;
+}
+
+.input {
+  height: 32px;
+  width: 100%;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  background: var(--panel);
+}
+
+.ruleInput {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+.quote {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--line-2);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--red);
+}
+
+/* Questions */
+
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.questionText {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-chat);
+  font-weight: 600;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.option {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.option:hover {
+  border-color: var(--line-2);
+  background: var(--panel-2);
+}
+
+.option:has(input:checked) {
+  border-color: var(--acc-text);
+  background: var(--sel);
+}
+
+.option:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.option:has(input:disabled) {
+  cursor: default;
+}
+
+/* The native control stays in place for VoiceOver and the keyboard; the mark is drawn. */
+.nativeInput {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: inherit;
+}
+
+.mark {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-2);
+  background: var(--panel);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--acc-ink);
+}
+
+.markSquare {
+  border-radius: 4px;
+}
+
+.option:has(input[type="radio"]:checked) .mark {
+  border: 5px solid var(--acc-text);
+}
+
+.option:has(input[type="checkbox"]:checked) .mark {
+  background: var(--acc-text);
+  border-color: var(--acc-text);
+  color: var(--panel);
+}
+
+.optionText {
+  flex: 1;
+  min-width: 0;
+}
+
+.optionLabel {
+  display: block;
+  font-weight: 600;
+}
+
+.optionDescription {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+/* Plans */
+
+.plan {
+  font-size: 13.5px;
+  line-height: 1.6;
+  max-height: 300px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+/* Records */
+
+.record {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.recordText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.record .link {
+  flex: none;
+  font-size: 12.5px;
+}
+
+.answered {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

@@ -1,0 +1,292 @@
+/* Settings (mockup .snav, .sn, .sc, .h1, .h2, .lead, .thms, .thm, .thl, .rad, .pv, .pm, .pvx, .opts, .opt). */
+
+/*
+ * The previews depict the two themes, so they use fixed colours (the window, sidebar and line
+ * colours of each theme, from tokens.css) whatever theme is showing. Nothing else here does.
+ */
+.previewLight {
+  --preview-bg: #f7f7f4;
+  --preview-side: #eeeee9;
+  --preview-line: #deded6;
+}
+
+.previewDark {
+  --preview-bg: #131416;
+  --preview-side: #1c1d21;
+  --preview-line: #34363c;
+}
+
+.window {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.nav {
+  width: 210px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  background: var(--side);
+  border-right: 1px solid var(--line);
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  color: var(--ink-2);
+}
+
+.navItem:hover {
+  background: var(--hover);
+}
+
+.navItem[aria-current="page"] {
+  background: var(--active);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 26px 34px 40px;
+}
+
+.h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0 8px;
+  font-size: var(--text);
+  font-weight: 650;
+}
+
+.lead {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+}
+
+.muted {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.note {
+  margin: 8px 0 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 96px 32px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.emptyText {
+  margin: 0;
+  max-width: 380px;
+}
+
+/* Radio marks shared by the appearance cards and the options. */
+
+.radio {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-2);
+  background: var(--panel);
+}
+
+/* Appearance cards */
+
+.themes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 640px;
+}
+
+.themeCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  text-align: left;
+}
+
+.themeCard:hover {
+  border-color: var(--line-2);
+}
+
+.themeCard[data-state="checked"] {
+  border-color: var(--acc-text);
+  box-shadow: 0 0 0 1px var(--acc-text);
+  background: var(--sel);
+}
+
+.themeTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.previewSlot {
+  display: block;
+}
+
+.preview {
+  position: relative;
+  display: flex;
+  height: 86px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--preview-bg);
+  /* A neutral edge that shows on both themes. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink-3) 45%, transparent);
+}
+
+.previewSide {
+  display: block;
+  width: 30%;
+  flex: none;
+  background: var(--preview-side);
+}
+
+.previewMain {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 10px;
+}
+
+.previewLine,
+.previewAccent {
+  display: block;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--preview-line);
+}
+
+.previewLine:first-child {
+  width: 72%;
+}
+
+.previewLine:nth-child(2) {
+  width: 92%;
+}
+
+.previewAccent {
+  width: 38%;
+  margin-top: auto;
+  background: var(--acc);
+}
+
+/* Match macOS: the dark preview covers the right part of the light one, on a slant. */
+.previewSplit {
+  position: relative;
+  display: block;
+}
+
+.previewHalf {
+  position: absolute;
+  inset: 0;
+  box-shadow: none;
+  clip-path: polygon(60% 0, 100% 0, 100% 100%, 40% 100%);
+}
+
+/* Tool-call options */
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  text-align: left;
+}
+
+.option .radio {
+  margin-top: 1px;
+}
+
+.option:hover {
+  border-color: var(--line-2);
+  background: var(--panel-2);
+}
+
+.option[data-state="checked"] {
+  border-color: var(--acc-text);
+  background: var(--sel);
+}
+
+.optionText {
+  flex: 1;
+  min-width: 0;
+}
+
+.optionTitle {
+  display: block;
+  font-weight: 600;
+}
+
+.optionDescription {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+/* The checked radio mark, for both the cards and the options. */
+.themeCard[data-state="checked"] .radio,
+.option[data-state="checked"] .radio {
+  border: 5px solid var(--acc-text);
+}

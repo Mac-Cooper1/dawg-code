@@ -1,0 +1,42 @@
+/*
+ * A zero-width strip on the border between two columns, with an 8 px hit area that overlaps
+ * both, so the columns keep their exact widths.
+ */
+
+.handle {
+  position: relative;
+  width: 0;
+  flex: none;
+  z-index: 5;
+  outline: none;
+}
+
+.handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+  pointer-events: none;
+}
+
+.handle:hover::after {
+  background: var(--line-2);
+}
+
+.handle:focus-visible::after {
+  background: var(--focus);
+}

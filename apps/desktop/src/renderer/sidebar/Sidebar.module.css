@@ -1,0 +1,340 @@
+/* The sidebar (mockup .sb, .sbt, .newb, .srch, .sbl, .pg, .ph, .sr, .mkw, .mk, .sbf). */
+
+.sidebar {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--side);
+  border-right: 1px solid var(--line);
+}
+
+.top {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 10px 6px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.newButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  font-weight: 500;
+}
+
+.newButton:hover {
+  background: var(--panel-2);
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--radius);
+  background: var(--hover);
+  color: var(--ink-3);
+}
+
+/* The field draws no outline of its own; the box shows the focus ring. */
+.search:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font-size: var(--text);
+}
+
+.searchInput::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 8px 10px;
+}
+
+.emptyList {
+  margin: 16px 8px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+.group {
+  margin-top: 12px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 0 0 6px;
+  color: var(--ink-2);
+}
+
+.groupName {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.groupPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Rows */
+
+.row {
+  position: relative;
+  border-radius: var(--radius);
+}
+
+.rowButton {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  color: var(--ink);
+  text-align: left;
+}
+
+.row:hover .rowButton {
+  background: var(--hover);
+}
+
+.rowButton[aria-current="true"],
+.row:hover .rowButton[aria-current="true"] {
+  background: var(--active);
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowTitle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktreeIcon {
+  margin-left: 5px;
+  vertical-align: -1px;
+  color: var(--ink-3);
+}
+
+.rowSubtitle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.rowTime {
+  flex: none;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* The "…" button sits over the time and shows on hover and keyboard focus. */
+.more {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+}
+
+.row:hover .more,
+.row:focus-within .more,
+.more[data-state="open"] {
+  opacity: 1;
+}
+
+.row:hover .rowTime,
+.row:focus-within .rowTime {
+  visibility: hidden;
+}
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  margin: -2px 0;
+  padding: 0 6px;
+  border: 1px solid var(--focus);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  outline: none;
+  font-size: var(--text);
+}
+
+/* Status marks: shape and colour differ. */
+
+.markSlot {
+  width: 14px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.markWorking {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--acc-text);
+  border-right-color: transparent;
+  animation: markSpin 0.9s linear infinite;
+}
+
+.markNeedsYou {
+  background: var(--amber);
+  color: var(--on-amber);
+}
+
+.markNeedsYou::after {
+  content: "!";
+}
+
+.markUnread::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blue);
+}
+
+.markQueued {
+  width: 12px;
+  height: 12px;
+  border: 1.5px dashed var(--ink-3);
+}
+
+.markError {
+  background: var(--red);
+  color: var(--on-red);
+  font-size: 11px;
+}
+
+.markError::after {
+  content: "\00D7";
+}
+
+@keyframes markSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Footer: the running model */
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+.footer:hover {
+  background: var(--hover);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--green);
+}
+
+.dot[data-ready="false"] {
+  background: var(--line-2);
+}
+
+.footerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.footerLabel {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.footerDetail {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.footerIcon {
+  color: var(--ink-2);
+}

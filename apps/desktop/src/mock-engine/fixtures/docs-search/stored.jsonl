@@ -1,0 +1,2 @@
+{"event":"session.status","payload":{"sessionId":"docs-search","seq":1,"time":1795338000000,"status":"working","waitingOn":null,"message":"Queued: waits for the model"}}
+{"event":"turn.started","payload":{"sessionId":"docs-search","seq":2,"time":1795338000000,"turnId":"turn-2","prompt":{"content":[{"type":"text","text":"Add a search page to the docs. Client-side only, no server."}],"mentions":[]},"command":null}}

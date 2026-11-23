@@ -1,0 +1,24 @@
+/* A command's immediate answer: the command like a user line, the answer in a quiet card. */
+
+.command {
+  align-self: flex-end;
+  max-width: 82%;
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px 14px 4px 14px;
+  padding: 7px 14px;
+  font-family: var(--mono);
+  font-size: 13px;
+  box-shadow: var(--shadow-1);
+  overflow-wrap: anywhere;
+}
+
+.output {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel-2);
+  font-size: 13.5px;
+  line-height: 1.6;
+}

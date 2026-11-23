@@ -1,0 +1,61 @@
+/* "Reading the conversation" while the model reads a long prompt. */
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-lg);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+  display: flex;
+}
+
+.cached,
+.read {
+  display: block;
+  height: 100%;
+  transition: width 0.3s;
+}
+
+.cached {
+  background: var(--blue);
+}
+
+.read {
+  background: var(--acc-text);
+}
+
+.detail {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cacheText {
+  color: var(--blue);
+}

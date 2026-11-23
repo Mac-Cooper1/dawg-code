@@ -1,0 +1,51 @@
+/* Links in model output: a button that looks like a link, and the confirmation popover. */
+
+.link {
+  display: inline;
+  color: var(--acc-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--acc-text) 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.link:hover {
+  text-decoration-color: var(--acc-text);
+}
+
+.plain {
+  color: inherit;
+}
+
+.popover {
+  z-index: 50;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+  color: var(--ink);
+  font-size: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.question {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.url {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  word-break: break-all;
+  color: var(--ink);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}

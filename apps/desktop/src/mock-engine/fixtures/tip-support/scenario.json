@@ -1,0 +1,25 @@
+{
+  "id": "tip-support",
+  "session": {
+    "title": "Add tip support",
+    "cwd": "~/code/tally",
+    "projectDir": "~/code/tally",
+    "mode": "acceptEdits",
+    "model": "qwen3.8-27b-q8",
+    "effort": null
+  },
+  "storedEndedAgoMs": 540000,
+  "stored": "stored.jsonl",
+  "live": null,
+  "queuedBehind": null,
+  "branches": {
+    "request-tip-support-split": {
+      "answer:Evenly, with the bill": "answer-1.jsonl",
+      "answer:By what each person ordered": "answer-2.jsonl",
+      "answer:Only among people who opt in": "answer-3.jsonl",
+      "answer": "answer-text.jsonl",
+      "dismiss": "dismiss.jsonl"
+    }
+  },
+  "turns": []
+}

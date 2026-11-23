@@ -1,0 +1,91 @@
+/*
+ * Terminal colours mapped to the theme, so output reads on the dark and the light background.
+ * Magenta and cyan have no token of their own: they are mixed from the theme's red, blue and
+ * green, which keeps them theme-aware.
+ */
+
+.fgBlack,
+.fgGray {
+  color: var(--ink-3);
+}
+
+.fgRed {
+  color: var(--red);
+}
+
+.fgGreen {
+  color: var(--green);
+}
+
+.fgYellow {
+  color: var(--amber);
+}
+
+.fgBlue {
+  color: var(--blue);
+}
+
+.fgMagenta {
+  color: color-mix(in srgb, var(--red) 55%, var(--blue));
+}
+
+.fgCyan {
+  color: color-mix(in srgb, var(--blue) 50%, var(--green));
+}
+
+.fgWhite {
+  color: var(--ink);
+}
+
+.bgBlack,
+.bgWhite {
+  background: var(--active);
+}
+
+.bgGray {
+  background: var(--hover);
+}
+
+.bgRed {
+  background: var(--red-bg);
+}
+
+.bgGreen {
+  background: var(--ok-bg);
+}
+
+.bgYellow {
+  background: var(--amber-bg);
+}
+
+.bgBlue {
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+}
+
+.bgMagenta {
+  background: color-mix(in srgb, color-mix(in srgb, var(--red) 55%, var(--blue)) 16%, transparent);
+}
+
+.bgCyan {
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--blue) 50%, var(--green)) 16%,
+    transparent
+  );
+}
+
+.bold {
+  font-weight: 650;
+}
+
+.dim {
+  opacity: 0.7;
+}
+
+.italic {
+  font-style: italic;
+}
+
+.underline {
+  text-decoration: underline;
+}

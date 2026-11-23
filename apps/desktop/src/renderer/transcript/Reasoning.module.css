@@ -1,0 +1,48 @@
+/* Folded reasoning: a quiet toggle, and the reasoning text under it when open. */
+
+.reasoning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  padding: 2px 6px 2px 2px;
+  border-radius: var(--radius-sm);
+}
+
+.toggle:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.spinnerBox {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chevron {
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  padding: 0 0 0 22px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

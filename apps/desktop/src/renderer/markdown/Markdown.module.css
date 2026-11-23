@@ -1,0 +1,157 @@
+/*
+ * Rendered Markdown. Font size and line height come from the container (14 px chat text in the
+ * transcript, 13.5 px in the plan card), so the same component fits both.
+ */
+
+.markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 0 0 8px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 14px 0 6px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.markdown h1 {
+  font-size: 1.3em;
+}
+
+.markdown h2 {
+  font-size: 1.15em;
+}
+
+.markdown h3 {
+  font-size: 1.05em;
+}
+
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 1em;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 8px;
+  padding-left: 22px;
+}
+
+.markdown li {
+  margin: 2px 0;
+}
+
+.markdown li > p {
+  margin: 0 0 4px;
+}
+
+.markdown li > ul,
+.markdown li > ol {
+  margin: 2px 0 0;
+}
+
+/* GitHub task lists: the checkbox replaces the bullet. */
+.markdown ul:has(> li > input[type="checkbox"]) {
+  list-style: none;
+  padding-left: 4px;
+}
+
+.markdown input[type="checkbox"] {
+  margin: 0 7px 0 0;
+  vertical-align: -2px;
+  accent-color: var(--acc-text);
+}
+
+.markdown blockquote {
+  margin: 0 0 8px;
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--line-2);
+  color: var(--ink-2);
+}
+
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+
+.markdown strong {
+  font-weight: 650;
+}
+
+.markdown del {
+  color: var(--ink-3);
+}
+
+.inlineCode {
+  font-family: var(--mono);
+  font-size: 0.89em;
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 4px;
+  overflow-wrap: anywhere;
+}
+
+.tableScroll {
+  margin: 4px 0 10px;
+  overflow-x: auto;
+}
+
+.tableScroll table {
+  border-collapse: collapse;
+  font-size: 0.93em;
+}
+
+.tableScroll th,
+.tableScroll td {
+  border: 1px solid var(--line);
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.tableScroll th {
+  background: var(--panel-2);
+  font-weight: 600;
+}
+
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 16px;
+  margin-left: 2px;
+  vertical-align: -3px;
+  background: var(--acc-text);
+  animation: caretBlink 1.1s step-end infinite;
+}
+
+@keyframes caretBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    display: none;
+  }
+}

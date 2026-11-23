@@ -1,0 +1,17 @@
+{
+  "id": "receipt-pdf",
+  "session": {
+    "title": "Receipt PDF layout",
+    "cwd": "~/code/tally",
+    "projectDir": "~/code/tally",
+    "mode": "acceptEdits",
+    "model": "qwen3.8-27b-q8",
+    "effort": null
+  },
+  "storedEndedAgoMs": 4000,
+  "stored": "stored.jsonl",
+  "live": "live.jsonl",
+  "queuedBehind": null,
+  "branches": {},
+  "turns": []
+}
