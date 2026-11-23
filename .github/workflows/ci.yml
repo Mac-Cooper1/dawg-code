@@ -48,6 +48,9 @@ jobs:
       - run: pnpm build
       - name: Fetch the pinned ripgrep (the Grep tool's tests need it)
         run: pnpm fetch-ripgrep
-      - run: pnpm test
+      # One package at a time: the Mac runners have few, slow cores, and running several
+      # packages' tests at once makes the ones that start child processes or local servers time out.
+      - name: Test (one package at a time)
+        run: pnpm -r --no-bail --if-present --workspace-concurrency=1 test
       - name: Validate eval tasks (fixture fails, reference solution passes)
         run: pnpm eval:validate
