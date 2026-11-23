@@ -230,6 +230,13 @@ describe("dawg adapter", () => {
     expect(spec.command).toBe("/opt/dawg");
     expect(spec.args[0]).toBe("-p");
   });
+
+  test("passes a reasoning effort on, and only to dawg", () => {
+    expect(buildDawgLaunch(ctx(), undefined, "low").args.slice(-2)).toEqual(["--effort", "low"]);
+    expect(buildDawgLaunch(ctx()).args).not.toContain("--effort");
+    expect(createAdapter("dawg", { effort: "low" }).id).toBe("dawg");
+    expect(() => createAdapter("opencode", { effort: "low" })).toThrow(/--reasoning-effort/);
+  });
 });
 
 describe("registry and features", () => {

@@ -26,10 +26,18 @@ export interface AdapterOptions {
   agentBin?: string;
   /** Extra features to claim. */
   features?: readonly string[];
+  /** Reasoning effort; only the dawg adapter takes it. */
+  effort?: string;
 }
 
 export function createAdapter(id: string, opts: AdapterOptions = {}): AgentAdapter {
-  const ext = { bin: opts.agentBin, features: opts.features };
+  if (opts.effort !== undefined && id !== "dawg") {
+    throw new Error(
+      `--effort is only passed to --agent dawg. For ${id}, set the effort on the model server ` +
+        "instead (llama-server: --reasoning-effort <level>), so every agent runs with the same one.",
+    );
+  }
+  const ext = { bin: opts.agentBin, features: opts.features, effort: opts.effort };
   switch (id) {
     case "reference":
       return referenceAdapter();

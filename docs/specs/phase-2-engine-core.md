@@ -249,7 +249,7 @@ One append-only JSONL file per session. This is our own format; it is not meant 
 ### Context accounting and compaction
 
 - Context size comes from the endpoint's reported window, never an assumption. Usage is taken from server-reported counts; `POST /v1/chat/completions/input_tokens` gives exact counts on the bundled runtime, with a character-based estimate elsewhere.
-- **Compaction** runs automatically at a threshold (default 65% of the window) and on `/compact [focus]`:
+- **Compaction** runs automatically and on `/compact [focus]`. Before a turn starts it runs once the context passes the profile's threshold (default 65% of the window). Within a turn it waits until the next reply might not fit (less than a quarter of the window, at least 4,096 tokens, is left): compacting just before a turn's last step costs a summary and a re-read of the prompt and gains nothing. A context overflow reported by the model forces it at any time. Each request also asks for no longer a reply than the window has room for.
   1. Ask the model for a structured summary of the conversation so far: goal, decisions, files touched, current state, open tasks.
   2. Start a new history holding the summary, the task list, the last few turns verbatim, and fresh copies of the most recently read files.
   3. Write a `compact` record. The transcript keeps everything; only the model's view shrinks.
@@ -265,7 +265,7 @@ Built in this phase: `/help`, `/clear`, `/compact`, `/context`, `/model`, `/effo
 ```
 dawg -p "<prompt>" [--output-format text|json|stream-json] [--model <id>] [--endpoint <url>]
      [--permission-mode <mode>] [--allowedTools <rules>] [--disallowedTools <rules>]
-     [--max-turns <n>] [--continue | --resume <id>] [--cwd <dir>]
+     [--max-turns <n>] [--effort <level>] [--continue | --resume <id>] [--cwd <dir>]
 ```
 
 - `text` prints the final message. `json` prints one object with the result, usage and session id. `stream-json` prints protocol events as newline-delimited JSON.
@@ -293,6 +293,8 @@ Settled while building, on the pinned runtime (llama.cpp build `b12359`):
 - **A cut-off call is never repaired.** Only purely structural closers are added; a call that ends inside a string, or arrives with finish reason `length`, is refused.
 - **`GET /props` needs the API key**, like `/v1/models`. A context overflow is an HTTP 400 that reports the prompt size and the window.
 - **`TaskOutput` is gone from the public tools reference.** A background command's output is read from its file with `Read`; `TaskStop` stops it.
+- **Hybrid models limit prompt reuse.** Qwen3.8 (and Qwen3.6) mix linear-attention layers with full attention: 48 of Qwen3.8-27B's 64 layers are linear. llama-server can rewind such a model only to a saved context checkpoint (`--ctx-checkpoints`, default 32 per slot; `--checkpoint-min-step`, default 8,192 tokens apart). After compaction the new prompt shares only the static prefix and the session context with the cached one, so unless a checkpoint sits at that boundary the whole prompt is processed again. Seen on a 16 GB Mac mini with 4 checkpoints per slot. The fix is the planned warm-up plus slot save and restore at the end of the static prefix.
+- **Effort is the main speed lever on slow machines.** `dawg --effort <level>` sets it for headless runs and evals; llama-server's `--reasoning-effort` sets a default for every client, and `--reasoning-budget` caps thinking per reply.
 - **Session files are flushed in batches.** Every record is written before `append` returns, so a crash or kill loses nothing; a power cut can lose about the last second.
 
 ## Work breakdown

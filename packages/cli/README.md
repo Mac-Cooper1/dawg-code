@@ -35,7 +35,8 @@ family (`qwen3.8`, `qwen3.6`, `laguna-xs-2.1`, `gpt-oss`), else the default prof
 | --- | --- |
 | `-p`, `--print` | Run one turn unattended and exit. The prompt is the arguments, or standard input when there are none (up to 10 MB). A prompt that starts with a known slash command (`/init`, `/status`, ...) runs that command. |
 | `--output-format text\|json\|stream-json` | With `-p`. See below. |
-| `--endpoint <url>`, `--model <id>`, `--model-file <path>`, `--context-size <n>` | See above. |
+| `--endpoint <url>`, `--model <id>`, `--model-file <path>`, `--context-size <n>` | See above. When the model's context window is under 32,768 tokens, a warning on standard error says how little room is left once dawg's own instructions and tools are in it. |
+| `--effort <level>` | Reasoning effort for the session, from the levels the model's chat template offers (for example `low`, `medium`, `xhigh`). A level the model lacks exits 2 and names the ones it has. With `--continue` or `--resume` it replaces the session's stored effort. Lower effort is the biggest speed lever on slow hardware. |
 | `--permission-mode <mode>` | `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` (`manual` means `default`). Refused (exit 2) when settings turn bypass off. |
 | `--dangerously-skip-permissions` | The same as `--permission-mode bypassPermissions`. |
 | `--allowedTools <rules...>`, `--allowed-tools` | Allow rules in the documented form: `Read`, `Bash(npm test *)`, `"Bash,Edit"`. Several words may follow one flag; words that are not shaped like rules (a prompt) end the list. |

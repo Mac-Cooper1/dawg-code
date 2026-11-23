@@ -35,6 +35,8 @@ run options:
   --agent-cmd <template>   command template for --agent command
   --agent-bin <path>       executable for opencode / pi / claude-code / dawg
   --agent-features a,b     extra features the agent claims (matched against task 'requires')
+  --effort <level>         reasoning effort for --agent dawg (added to each row's label)
+  --timeout-scale <x>      multiply every task's time limit, e.g. 4 on slow hardware
   --proxy-cmd <command>    how to launch the recording proxy (default: node evals/proxy/src/cli.ts)
 
 common options:
@@ -55,6 +57,8 @@ const OPTIONS = {
   "agent-cmd": { type: "string" },
   "agent-bin": { type: "string" },
   "agent-features": { type: "string" },
+  effort: { type: "string" },
+  "timeout-scale": { type: "string" },
   "proxy-cmd": { type: "string" },
   "tasks-dir": { type: "string" },
   "results-dir": { type: "string" },
@@ -79,6 +83,13 @@ function positiveInt(name: string, s: string | undefined): number | undefined {
   return n;
 }
 
+function positiveNumber(name: string, s: string | undefined): number | undefined {
+  if (s === undefined) return undefined;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) throw new UsageError(`--${name} must be a positive number`);
+  return n;
+}
+
 function loadDotEnv(): void {
   const p = join(REPO_ROOT, ".env");
   if (existsSync(p)) process.loadEnvFile(p);
@@ -96,11 +107,25 @@ async function cmdRun(v: Record<string, string | boolean | undefined>): Promise<
   loadDotEnv();
   const agentId = v.agent as string | undefined;
   if (!agentId) throw new UsageError("run needs --agent");
-  const adapter = createAdapter(agentId, {
-    agentCmd: v["agent-cmd"] as string | undefined,
-    agentBin: v["agent-bin"] as string | undefined,
-    features: list(v["agent-features"] as string | undefined),
-  });
+  const effort = (v.effort as string | undefined)?.trim() || undefined;
+  let adapter: ReturnType<typeof createAdapter>;
+  try {
+    adapter = createAdapter(agentId, {
+      agentCmd: v["agent-cmd"] as string | undefined,
+      agentBin: v["agent-bin"] as string | undefined,
+      features: list(v["agent-features"] as string | undefined),
+      ...(effort === undefined ? {} : { effort }),
+    });
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error));
+  }
+  const timeoutScale = positiveNumber("timeout-scale", v["timeout-scale"] as string | undefined);
+  // The effort changes results as much as the model does, so rows record it.
+  const userLabel = v.label as string | undefined;
+  const label =
+    effort === undefined
+      ? userLabel
+      : [userLabel, `effort ${effort}`].filter((x) => x !== undefined && x !== "").join(", ");
 
   const tasksDir = resolve(
     (v["tasks-dir"] as string | undefined) ?? join(REPO_ROOT, "evals", "tasks"),
@@ -163,7 +188,8 @@ async function cmdRun(v: Record<string, string | boolean | undefined>): Promise<
     resultsDir,
     artifactsRoot: join(resultsDir, "tmp"),
     endpoint,
-    label: v.label as string | undefined,
+    label,
+    ...(timeoutScale === undefined ? {} : { timeoutScale }),
     signal: ac.signal,
     onRow: (r) => {
       console.log(formatRow(r));

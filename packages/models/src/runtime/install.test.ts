@@ -61,6 +61,8 @@ interface ArchiveOptions {
   cpuType?: number;
   dropLibrary?: boolean;
   dropLicense?: boolean;
+  /** Text for an extra file, so two archives are guaranteed to differ in their bytes. */
+  marker?: string;
 }
 
 /** A tarball shaped like llama.cpp's macOS release archives. */
@@ -99,6 +101,7 @@ async function makeArchive(
   await writeFile(join(top, "libunrelated.dylib"), buildMachO({ cpuType }));
   await writeFile(join(top, "llama-cli"), buildMachO({ cpuType }), { mode: 0o755 });
   if (!options.dropLicense) await writeFile(join(top, "LICENSE"), "MIT License\n");
+  if (options.marker !== undefined) await writeFile(join(top, "BUILD-INFO"), options.marker);
   const archive = join(dir, name);
   await execFileAsync("tar", ["-czf", archive, "-C", root, "llama-bTEST"]);
   const bytes = await readFile(archive);
@@ -194,7 +197,10 @@ describe("installRuntime", () => {
       runtimeDir,
       tmpDir: dir,
     });
-    const second = await makeArchive("b.tar.gz");
+    // The second archive must differ in content. Two archives built from the same tree within
+    // the same second are byte-identical, and an identical archive is rightly left in place.
+    const second = await makeArchive("b.tar.gz", { marker: "a later build" });
+    expect(second.sha256).not.toBe(first.sha256);
     const result = await installRuntime({
       arch: "x64",
       lock: lockFor("b.tar.gz", second),

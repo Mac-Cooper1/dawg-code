@@ -408,3 +408,42 @@ describe("dawg serve", () => {
     expect(problems).toEqual([]);
   });
 });
+
+describe("reasoning effort and context size", () => {
+  const levels = { reasoning_effort_levels: ["low", "medium", "xhigh"] };
+
+  it("sends the level --effort names with every request", async () => {
+    h = await startHarness({
+      script: [toolCall("Glob", { pattern: "*.md" }), text("Done.")],
+      mock: { templateCaps: levels, contextWindow: 32_768 },
+    });
+    const result = await h.run(["-p", "look", "--effort", "low", ...endpointArgs()]);
+    expect(result.code).toBe(EXIT.ok);
+    expect(h.mock.chatRequests).toHaveLength(2);
+    for (const request of h.mock.chatRequests) {
+      expect((request.body as { reasoning_effort?: string }).reasoning_effort).toBe("low");
+    }
+  });
+
+  it("refuses a level the model does not offer, naming the ones it does", async () => {
+    h = await startHarness({ mock: { templateCaps: levels, contextWindow: 32_768 } });
+    const result = await h.run(["-p", "look", "--effort", "extreme", ...endpointArgs()]);
+    expect(result.code).toBe(EXIT.usage);
+    expect(result.stderr).toContain("low, medium, xhigh");
+    expect(h.mock.chatRequests).toHaveLength(0);
+  });
+
+  it("warns when the context window leaves little room, and only then", async () => {
+    h = await startHarness({ script: [text("Small.")], mock: { contextWindow: 8_192 } });
+    const small = await h.run(["-p", "hi", ...endpointArgs()]);
+    expect(small.code).toBe(EXIT.ok);
+    expect(small.stderr).toContain("context window is 8,192 tokens");
+    expect(small.stdout.trim()).toBe("Small.");
+    await h.close();
+
+    h = await startHarness({ script: [text("Big.")], mock: { contextWindow: 32_768 } });
+    const big = await h.run(["-p", "hi", ...endpointArgs()]);
+    expect(big.code).toBe(EXIT.ok);
+    expect(big.stderr).not.toContain("context window");
+  });
+});

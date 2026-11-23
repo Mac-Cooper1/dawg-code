@@ -7,6 +7,8 @@ import type { AgentAdapter, LaunchSpec, RunContext } from "./types.ts";
 export interface ExternalAdapterOptions {
   /** Override the executable (default: the tool's usual command name on PATH). */
   bin?: string;
+  /** Reasoning effort level to run with. Only the dawg adapter passes it on. */
+  effort?: string;
   /** Extra features to claim, for example when testing a newer build of the tool. */
   features?: readonly string[];
 }
@@ -287,7 +289,7 @@ export const DAWG_CLI_ENTRY = fileURLToPath(
 /** Model requests one eval turn may make: the engine's default limit, stated explicitly. */
 export const DAWG_EVAL_MAX_TURNS = 200;
 
-export function buildDawgLaunch(ctx: RunContext, bin?: string): LaunchSpec {
+export function buildDawgLaunch(ctx: RunContext, bin?: string, effort?: string): LaunchSpec {
   const ep = requireEndpoint(ctx, "dawg");
   const [command, prefix] =
     bin === undefined ? [process.execPath, [DAWG_CLI_ENTRY]] : [bin, [] as string[]];
@@ -309,6 +311,7 @@ export function buildDawgLaunch(ctx: RunContext, bin?: string): LaunchSpec {
       String(DAWG_EVAL_MAX_TURNS),
       "--cwd",
       ctx.workspace,
+      ...(effort === undefined ? [] : ["--effort", effort]),
     ],
     env: {
       DAWG_API_KEY: ep.apiKey,
@@ -320,5 +323,7 @@ export function buildDawgLaunch(ctx: RunContext, bin?: string): LaunchSpec {
 }
 
 export function dawgAdapter(opts: ExternalAdapterOptions = {}): AgentAdapter {
-  return adapter("dawg", [...(opts.features ?? [])], (ctx) => buildDawgLaunch(ctx, opts.bin));
+  return adapter("dawg", [...(opts.features ?? [])], (ctx) =>
+    buildDawgLaunch(ctx, opts.bin, opts.effort),
+  );
 }

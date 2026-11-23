@@ -17,6 +17,8 @@ export interface CliOptions {
   prompt: string | null;
   outputFormat: OutputFormat;
   model: string | null;
+  /** Reasoning effort for the session; null keeps the model's default. */
+  effort: string | null;
   endpoint: string | null;
   modelFile: string | null;
   /** Context window per conversation for `--model-file`, in tokens. */
@@ -52,6 +54,7 @@ const FLAGS: Record<string, Spec> = {
   "--print": { type: "boolean", key: "print" },
   "--output-format": { type: "value", key: "outputFormat", metavar: "format" },
   "--model": { type: "value", key: "model", metavar: "id" },
+  "--effort": { type: "value", key: "effort", metavar: "level" },
   "--endpoint": { type: "value", key: "endpoint", metavar: "url" },
   "--model-file": { type: "value", key: "modelFile", metavar: "path" },
   "--context-size": { type: "value", key: "contextSize", metavar: "tokens" },
@@ -209,6 +212,7 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     prompt: positionals.length === 0 ? null : positionals.join(" "),
     outputFormat,
     model: values.model ?? null,
+    effort: values.effort === undefined ? null : effortLevel(values.effort),
     endpoint: values.endpoint ?? null,
     modelFile: values.modelFile ?? null,
     contextSize:
@@ -242,6 +246,7 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
       values.outputFormat !== undefined && "--output-format",
       options.continue && "--continue",
       options.resume !== null && "--resume",
+      options.effort !== null && "--effort",
       options.prompt !== null && "a prompt",
     ].filter((x): x is string => typeof x === "string");
     if (refused.length > 0) {
@@ -249,6 +254,15 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     }
   }
   return { kind: "options", options };
+}
+
+/** Effort levels come from the model's chat template, so only their shape is checked here. */
+function effortLevel(value: string): string {
+  const level = value.trim();
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(level)) {
+    throw new UsageError(`--effort takes a level name such as low or high, not "${value}".`);
+  }
+  return level;
 }
 
 export const HELP = `dawg: a coding agent for local models.
@@ -267,6 +281,8 @@ Model (one of):
   --context-size <tokens>          Context window for --model-file (default 32768)
   (neither)                        Use the endpoint in DAWG_ENDPOINT
   --model <id>                     The model to use on the endpoint
+  --effort <level>                 Reasoning effort, from the levels the model offers
+                                   (for example low, medium or xhigh)
 
 Output (with -p):
   --output-format <format>         text (default): the final message

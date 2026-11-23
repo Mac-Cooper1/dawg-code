@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import {
   contextOverflow,
   dropped,
@@ -9,7 +11,7 @@ import {
 } from "@dawg/mock-model";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Message } from "../contracts/index.ts";
-import { fakeCompactor } from "./__fixtures__/fakes.ts";
+import { fakeCompactor, fakeEstimator, fakeProfile } from "./__fixtures__/fakes.ts";
 import { type Harness, historyProblems, startHarness, textOf } from "./__fixtures__/harness.ts";
 
 let h: Harness | null = null;
@@ -173,6 +175,86 @@ describe("context", () => {
       trigger: "auto",
       turnId: outcome.turnId,
     });
+  });
+
+  it("waits for the next turn to compact while the next reply still fits", async () => {
+    const compactor = fakeCompactor();
+    h = await startHarness({
+      engine: { compactor },
+      mock: { contextWindow: 40_000 },
+      script: [
+        toolCall("Read", { file_path: "a.txt" }),
+        toolCall("Read", { file_path: "b.txt" }),
+        text("read both"),
+        text("second turn"),
+      ],
+    });
+    const session = await h.engine.createSession({ cwd: h.project });
+    // Two files sized so the first turn ends at about 32,000 tokens: past the threshold
+    // (65% of 40,000) but well short of where the next reply would not fit (40,000 less the
+    // profile's 1,024-token reply ceiling).
+    const base = fakeEstimator.estimate({
+      messages: [session.prefix.system, ...session.view],
+      tools: session.prefix.tools,
+    });
+    const lines = Math.ceil(((32_000 - base) * 4) / 2 / 86);
+    for (const name of ["a.txt", "b.txt"]) {
+      await writeFile(path.join(h.project, name), `${"x".repeat(78)}\n`.repeat(lines));
+    }
+    const first = await session.run(ask("read a.txt and b.txt"));
+    expect(first).toMatchObject({ stopReason: "completed", finalText: "read both" });
+    expect(compactor.calls).toHaveLength(0);
+    const used = session.snapshot().usage?.contextUsed ?? 0;
+    expect(used).toBeGreaterThan(26_000);
+    expect(used).toBeLessThan(40_000 - 1_024);
+
+    // The next turn starts above the threshold, so it compacts before its first request.
+    const second = await session.run(ask("anything else?"));
+    expect(second).toMatchObject({ stopReason: "completed", finalText: "second turn" });
+    expect(compactor.calls).toHaveLength(1);
+    expect(h.ofType(session.id, "compaction.started")[0]?.payload).toMatchObject({
+      trigger: "auto",
+      turnId: second.turnId,
+    });
+    expect(JSON.stringify(h.mock.messages(-1))).toContain("<summary>");
+  });
+
+  it("asks for no longer a reply than the window has room for", async () => {
+    const promptTokens = (body: unknown) => {
+      const b = body as { tools?: unknown; messages: unknown };
+      return Math.ceil(JSON.stringify({ tools: b.tools ?? [], messages: b.messages }).length / 4);
+    };
+    const replyLimits = (harness: Harness) =>
+      harness.mock.chatRequests.map((r) => (r.body as { max_tokens?: number }).max_tokens ?? 0);
+
+    h = await startHarness({
+      engine: { profile: { ...fakeProfile, maxOutputTokens: 32_768 } },
+      mock: { contextWindow: 16_000 },
+      files: { "mid.txt": `${"y".repeat(78)}\n`.repeat(300) },
+      script: [toolCall("Read", { file_path: "mid.txt" }), text("done")],
+    });
+    const session = await h.engine.createSession({ cwd: h.project });
+    await session.run(ask("read mid.txt"));
+    const limits = replyLimits(h);
+    expect(limits).toHaveLength(2);
+    h.mock.chatRequests.forEach((request, i) => {
+      const limit = limits[i] ?? 0;
+      expect(limit).toBeGreaterThanOrEqual(1_024);
+      expect(limit + promptTokens(request.body)).toBeLessThanOrEqual(16_000);
+    });
+    // The file read takes room, so the second request asks for less.
+    expect(limits[1]).toBeLessThan(limits[0] ?? 0);
+    await h.close();
+
+    // With room to spare, the profile's ceiling is asked for as it is.
+    h = await startHarness({
+      engine: { profile: { ...fakeProfile, maxOutputTokens: 32_768 } },
+      mock: { contextWindow: 1_000_000 },
+      script: [text("roomy")],
+    });
+    const roomy = await h.engine.createSession({ cwd: h.project });
+    await roomy.run(ask("hi"));
+    expect(replyLimits(h)).toEqual([32_768]);
   });
 
   it("tells the model to send less when a reply is cut off by the output limit", async () => {

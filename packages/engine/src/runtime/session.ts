@@ -49,7 +49,7 @@ import type {
 } from "../contracts/tools.ts";
 import { errorInfo, errorInfoFrom } from "../loop/errors.ts";
 import type { ExecutedCall } from "../loop/executor.ts";
-import { type RoomResult, runTurn, type TurnHost } from "../loop/turn.ts";
+import { type RoomCheck, type RoomResult, runTurn, type TurnHost } from "../loop/turn.ts";
 import type { Emit, LoopResult } from "../loop/types.ts";
 import { readDeniedBy } from "../permissions/index.ts";
 import type { SessionRecord, SessionWriter, StateChanges } from "../session/index.ts";
@@ -74,6 +74,18 @@ import {
 import type { CompactionOutcome, ModelConnection, TurnOutcome } from "./types.ts";
 import { UsageTracker } from "./usage.ts";
 
+/**
+ * Within a turn, history is compacted only when the next reply might not fit: when less than
+ * this share of the window (at least MIN_REPLY_RESERVE tokens, at most the profile's reply
+ * ceiling) is left. At the start of a turn the profile's lower threshold applies instead.
+ */
+const REPLY_RESERVE_SHARE = 0.25;
+const MIN_REPLY_RESERVE = 4096;
+/** Kept between the predicted prompt and the reply limit, for estimation error. */
+const OUTPUT_MARGIN_SHARE = 0.02;
+const OUTPUT_MARGIN_TOKENS = 256;
+/** The smallest reply limit asked for, even when the window is nearly full. */
+const MIN_OUTPUT_TOKENS = 1024;
 /** History must grow by this share of the window after a compaction before another one. */
 const MIN_GROWTH_BEFORE_RECOMPACTION = 0.1;
 /** History smaller than this share of the window is not worth compacting automatically. */
@@ -197,6 +209,8 @@ export class SessionRuntime {
   #usageMark: { generation: number; viewLength: number; promptTokens: number } | null = null;
   #viewGeneration = 0;
   #autoCompactionFailedIn: string | null = null;
+  /** Predicted prompt size of the next request, from the latest room check; null when unknown. */
+  #nextPromptTokens: number | null = null;
   /** Context size right after the latest compaction or trim. */
   #compactedTo: number | null = null;
   #callIds: Set<string>;
@@ -934,6 +948,7 @@ export class SessionRuntime {
 
   #afterViewReplaced(tokens: number): void {
     this.#compactedTo = tokens;
+    this.#nextPromptTokens = tokens;
     this.#viewGeneration += 1;
     this.#usageMark = null;
     this.#usage.setContextUsed(tokens);
@@ -947,13 +962,17 @@ export class SessionRuntime {
     );
   }
 
-  async #makeRoom(turnId: string, signal: AbortSignal, overflow: boolean): Promise<RoomResult> {
+  async #makeRoom(turnId: string, signal: AbortSignal, check: RoomCheck): Promise<RoomResult> {
     const window = this.#contextWindow();
-    if (window <= 0 && !overflow) return "ok";
-    const threshold = Math.floor(window * this.#profile.compactionThreshold);
-    if (!overflow) {
-      if (this.#autoCompactionFailedIn === turnId) return "ok";
+    if (check !== "overflow") {
+      if (window <= 0) {
+        this.#nextPromptTokens = null;
+        return "ok";
+      }
       const used = await this.#predictContext();
+      this.#nextPromptTokens = used;
+      if (this.#autoCompactionFailedIn === turnId) return "ok";
+      const threshold = this.#compactionLimit(window, check);
       if (used <= threshold) return "ok";
       // Compaction only shrinks history. When history is a small part of the context (the
       // prefix alone nears the threshold), or has barely grown since the last compaction,
@@ -980,6 +999,35 @@ export class SessionRuntime {
     if (result.outcome === "interrupted") return "interrupted";
     this.#autoCompactionFailedIn = turnId;
     return "failed";
+  }
+
+  /**
+   * Context size above which history is compacted. Before a turn starts, that is the profile's
+   * threshold, which keeps the model's view short. Within a turn it is only what the next reply
+   * needs: compacting just before a turn's last step costs a summary and a re-read of the prompt
+   * and gains nothing.
+   */
+  #compactionLimit(window: number, check: "turn_start" | "mid_turn"): number {
+    const threshold = Math.floor(window * this.#profile.compactionThreshold);
+    if (check === "turn_start") return threshold;
+    const reserve = Math.min(
+      this.#profile.maxOutputTokens,
+      Math.max(MIN_REPLY_RESERVE, Math.floor(window * REPLY_RESERVE_SHARE)),
+    );
+    return Math.max(threshold, window - reserve);
+  }
+
+  /**
+   * The reply size to ask for: the profile's ceiling, cut to what is left of the window after
+   * the prompt. Servers such as vLLM refuse a request whose prompt and reply limit together
+   * exceed the window; llama-server would stop at the window's end anyway.
+   */
+  #outputLimit(ceiling: number): number {
+    const window = this.#contextWindow();
+    const prompt = this.#nextPromptTokens;
+    if (window <= 0 || prompt === null) return ceiling;
+    const margin = Math.max(OUTPUT_MARGIN_TOKENS, Math.ceil(window * OUTPUT_MARGIN_SHARE));
+    return Math.max(MIN_OUTPUT_TOKENS, Math.min(ceiling, Math.floor(window - prompt - margin)));
   }
 
   /** Tokens the next request would hold: the last reported size plus what was added since. */
@@ -1420,7 +1468,7 @@ export class SessionRuntime {
     const profile = this.#profile;
     const endpoint = this.#connection.client.endpoint;
     const options: Omit<ModelRequest, "messages" | "tools" | "signal"> = {
-      maxOutputTokens: profile.maxOutputTokens,
+      maxOutputTokens: this.#outputLimit(profile.maxOutputTokens),
       sampling: profile.sampling,
     };
     const effort = this.#effort ?? profile.defaultEffort;
@@ -1491,7 +1539,7 @@ export class SessionRuntime {
       flushNotes: () => this.#flushNotes(),
       afterToolBatch: (executed) => this.#afterToolBatch(executed),
       recordUsage: (reply, malformed, length) => this.#recordUsage(reply, malformed, length),
-      makeRoom: (turnId, signal, overflow) => this.#makeRoom(turnId, signal, overflow),
+      makeRoom: (turnId, signal, check) => this.#makeRoom(turnId, signal, check),
       sleep,
     };
   }

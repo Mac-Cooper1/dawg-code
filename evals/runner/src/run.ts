@@ -59,6 +59,8 @@ export interface RunOptions {
   checkTimeoutMs?: number;
   /** Overrides each task's timeout (tests). */
   agentTimeoutMs?: number;
+  /** Multiplies each task's own time limit, for slower hardware or larger models. Default 1. */
+  timeoutScale?: number;
   /** Treat every task as runnable, whatever it requires (used by `validate`). */
   ignoreRequires?: boolean;
   signal?: AbortSignal;
@@ -223,7 +225,8 @@ async function runOne(
         artifactsDir,
         taskDir: task.dir,
         endpoint,
-        timeoutMs: opts.agentTimeoutMs ?? task.timeoutSeconds * 1000,
+        timeoutMs:
+          opts.agentTimeoutMs ?? Math.round(task.timeoutSeconds * 1000 * (opts.timeoutScale ?? 1)),
         signal,
       });
     } finally {

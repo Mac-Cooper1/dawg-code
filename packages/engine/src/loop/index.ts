@@ -10,7 +10,7 @@ export {
   executeToolCalls,
 } from "./executor.ts";
 export { RepeatDetector } from "./repeat.ts";
-export { type RoomResult, runTurn, type TurnHost } from "./turn.ts";
+export { type RoomCheck, type RoomResult, runTurn, type TurnHost } from "./turn.ts";
 export {
   DEFAULT_LOOP_LIMITS,
   type Emit,

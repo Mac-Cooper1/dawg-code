@@ -106,6 +106,23 @@ describe("parseArgs", () => {
   });
 });
 
+describe("--effort", () => {
+  it("reads a level and leaves the default alone without one", () => {
+    expect(options(["-p", "x", "--effort", "low"]).effort).toBe("low");
+    expect(options(["-p", "x", "--effort=xhigh"]).effort).toBe("xhigh");
+    expect(options(["-p", "x"]).effort).toBeNull();
+  });
+
+  it("refuses something that is not a level name", () => {
+    expect(error(["-p", "x", "--effort", "very high"])).toContain("--effort");
+    expect(error(["-p", "x", "--effort", "--model"])).toContain("--effort");
+  });
+
+  it("is refused by dawg serve, whose clients choose the effort", () => {
+    expect(error(["serve", "--effort", "low"])).toContain("--effort");
+  });
+});
+
 describe("helpers", () => {
   it("picks a profile by model family", () => {
     expect(profileIdForModel("Qwen/Qwen3.8-27B")).toBe("qwen3.8");

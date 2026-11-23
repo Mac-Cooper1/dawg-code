@@ -224,6 +224,22 @@ describe("runSuite with the command adapter and a (fake) recording proxy", () =>
     expect(row?.wall_ms).toBeLessThan(5000);
   });
 
+  test("--timeout-scale stretches each task's own time limit", async () => {
+    const task = loadTask(join(TASKS, "edit-greeting"));
+    const reference = createAdapter("reference");
+    const seen: number[] = [];
+    const adapter = {
+      ...reference,
+      run: (ctx: Parameters<typeof reference.run>[0]) => {
+        seen.push(ctx.timeoutMs);
+        return reference.run(ctx);
+      },
+    };
+    await runSuite(opts({ adapter, tasks: [task] }));
+    await runSuite(opts({ adapter, tasks: [task], timeoutScale: 2.5 }));
+    expect(seen).toEqual([task.timeoutSeconds * 1000, task.timeoutSeconds * 2500]);
+  });
+
   test("a proxy that fails to start makes the run an error, not a fail", async () => {
     const tasks = [loadTask(join(TASKS, "edit-greeting"))];
     const res = await runSuite(

@@ -73,6 +73,8 @@ node evals/runner/src/cli.ts report evals/results/2026-11-20-*.jsonl --out evals
 | `--agent-cmd <template>`   | Command template for `--agent command`                                           |
 | `--agent-bin <path>`       | Executable for `opencode`, `pi`, `claude-code` or `dawg` (for `dawg` it replaces `node` and the entry point) |
 | `--agent-features a,b`     | Extra features the agent claims (matched against `requires`)                     |
+| `--effort <level>`         | Reasoning effort for `--agent dawg`, added to each row's label. Other agents refuse it: set the effort on the model server instead (llama-server `--reasoning-effort <level>`), so every agent runs with the same one |
+| `--timeout-scale <x>`      | Multiply every task's time limit, for slow hardware or large models. Timed-out runs still count as failures, so note the scale in `--label` when comparing |
 | `--proxy-cmd <command>`    | How to launch the proxy. Default `node evals/proxy/src/cli.ts`                   |
 | `--tasks-dir`, `--results-dir` | Defaults `evals/tasks`, `evals/results`                                      |
 

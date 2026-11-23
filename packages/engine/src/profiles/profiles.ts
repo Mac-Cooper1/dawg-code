@@ -8,10 +8,10 @@
  *
  * Choices made the same way for every model:
  * - `compactionThreshold` 0.65: the spec's default (PLAN.md section 7 asks for 60–70%). None of
- *   the cards says anything about it. It leaves about a third of the window for the reply and the
- *   next tool results.
- * - `maxOutputTokens` is a ceiling, not a reservation: llama-server stops at the window's end
- *   anyway, so the turn loop should still cap it at what is left of the window.
+ *   the cards says anything about it. It applies before a turn starts; within a turn the runtime
+ *   compacts only when the next reply might not fit.
+ * - `maxOutputTokens` is a ceiling, not a reservation: the runtime cuts each request's limit to
+ *   what is left of the window.
  */
 import type { ModelProfile } from "../contracts/prompt.ts";
 

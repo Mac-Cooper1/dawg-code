@@ -150,9 +150,12 @@ export interface ModelProfile {
   sampling: SamplingParams;
   /** The effort level to ask for when the person has not chosen one. Null means the model's own. */
   defaultEffort: string | null;
-  /** Largest reply to ask for, in tokens. */
+  /** Largest reply to ask for, in tokens. Each request asks for less when the window has less left. */
   maxOutputTokens: number;
-  /** Fraction of the context window at which compaction starts. */
+  /**
+   * Fraction of the context window above which history is compacted before a new turn starts.
+   * Within a turn, compaction waits until the next reply might no longer fit.
+   */
   compactionThreshold: number;
   /** Whether to ask for parallel tool calls when the template supports them. */
   parallelToolCalls: boolean;

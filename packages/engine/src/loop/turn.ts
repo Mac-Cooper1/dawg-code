@@ -32,6 +32,12 @@ import type { LoopLimits, LoopResult } from "./types.ts";
 /** What room-making did. "failed" leaves history as it was. */
 export type RoomResult = "ok" | "compacted" | "failed" | "interrupted";
 
+/**
+ * When room is checked: before a turn's first request, before a later request of the same turn,
+ * or because the model said a request does not fit.
+ */
+export type RoomCheck = "turn_start" | "mid_turn" | "overflow";
+
 export interface TurnHost extends ExecutorHost {
   readonly loopLimits: LoopLimits;
   /** The client and the per-request fields (sampling, effort, slot...) for the next request. */
@@ -54,8 +60,11 @@ export interface TurnHost extends ExecutorHost {
    * messages of the view the request held, so later growth can be estimated on top of it.
    */
   recordUsage(reply: ModelReply, malformedCalls: number, requestViewLength: number): void;
-  /** Trims or compacts when needed; with `overflow`, because the model said it does not fit. */
-  makeRoom(turnId: string, signal: AbortSignal, overflow: boolean): Promise<RoomResult>;
+  /**
+   * Trims or compacts when needed, and records the prompt size the next request's reply limit is
+   * cut to. Called before every request; `"overflow"` when the model said it does not fit.
+   */
+  makeRoom(turnId: string, signal: AbortSignal, check: RoomCheck): Promise<RoomResult>;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
 }
 
@@ -97,7 +106,7 @@ export async function runTurn(
       return { stopReason: "turn_limit", finalText: lastText, error: null };
     }
 
-    const room = await host.makeRoom(turnId, signal, false);
+    const room = await host.makeRoom(turnId, signal, requests === 0 ? "turn_start" : "mid_turn");
     if (room === "interrupted" || signal.aborted) return interrupted();
 
     const messageId = host.newId("message");
@@ -304,7 +313,7 @@ async function requestWithRetries(
       if (error instanceof ModelError && error.kind === "context_overflow") {
         if (retriedOverflow) return { kind: "error", error, partial };
         retriedOverflow = true;
-        const room = await host.makeRoom(turnId, signal, true);
+        const room = await host.makeRoom(turnId, signal, "overflow");
         if (room === "interrupted" || signal.aborted) return { kind: "interrupted", partial };
         if (room === "failed" || room === "ok") return { kind: "error", error, partial };
         continue;
