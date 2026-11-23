@@ -324,10 +324,12 @@ describe("Read", () => {
 
   it("finds the file when a relative path was written as absolute", async () => {
     const { dir, ctx } = await setup();
-    await mkdir(path.join(dir, "lib"));
-    await writeFile(path.join(dir, "lib/util.ts"), "x");
-    const out = await readTool.execute({ file_path: "/lib/util.ts" }, ctx);
-    expect(text(out, dir)).toContain("Did you mean <dir>/lib/util.ts?");
+    // A folder name no machine has at its root. With "lib", Linux hosts have a real /lib, and
+    // similarly named files in it are offered as well.
+    await mkdir(path.join(dir, "project-lib"));
+    await writeFile(path.join(dir, "project-lib/util.ts"), "x");
+    const out = await readTool.execute({ file_path: "/project-lib/util.ts" }, ctx);
+    expect(text(out, dir)).toContain("Did you mean <dir>/project-lib/util.ts?");
   });
 
   it("says when nothing similar exists", async () => {

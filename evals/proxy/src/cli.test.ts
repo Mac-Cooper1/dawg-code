@@ -46,7 +46,9 @@ function collect(stream: NodeJS.ReadableStream | null): () => string {
   return () => text;
 }
 
-describe("cli", () => {
+// Each test starts the proxy as a separate Node process. On a slow, busy machine (the Intel
+// CI runner, with other packages' tests running alongside) that alone can take over 5 seconds.
+describe("cli", { timeout: 30_000 }, () => {
   test("prints the listening line, records requests, and flushes on SIGTERM", async () => {
     const upstream = await startFakeUpstream((req, res) => {
       if ((req.json as { stream?: boolean }).stream) {
