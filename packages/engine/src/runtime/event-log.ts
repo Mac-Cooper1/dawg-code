@@ -11,6 +11,10 @@
  * Lines are written synchronously as each event is emitted, so the file is in `seq` order and
  * survives the process being killed (it is in the operating system's cache once written).
  *
+ * `session.deleted` is never written either: it is the session's last event, sent just before its
+ * files are removed. Once it is emitted the log hands nothing more to listeners and writes nothing
+ * more, not even the closed marker.
+ *
  * Because streaming events are not written, a crash could lose the highest numbers handed out.
  * To keep them from being handed out again, the log reserves numbers in blocks: before emitting
  * an event above the reserved ceiling it writes `{"reserve": n}`. On a clean close it writes
@@ -135,6 +139,8 @@ export class EventLog {
   #reserved: number;
   #listeners = new Set<EventListener>();
   #failed = false;
+  /** Set once `session.deleted` has been emitted. */
+  #ended = false;
 
   private constructor(
     file: string,
@@ -194,7 +200,11 @@ export class EventLog {
       ...(fields as Record<string, unknown>),
     } as LoggedEvent["payload"];
     const logged: LoggedEvent = { event, payload };
-    if (STREAMING.has(event)) {
+    if (this.#ended) return logged;
+    if (event === "session.deleted") {
+      // Sent, never stored: the files it would go into are about to be removed.
+      this.#ended = true;
+    } else if (STREAMING.has(event)) {
       if (seq > this.#reserved) this.#reserve(seq);
       this.#streaming.push(logged);
     } else {
@@ -232,7 +242,7 @@ export class EventLog {
   /** Marks a clean close, so the next open continues without a gap. */
   close(): void {
     if (this.#fd === null) return;
-    this.#append({ closed: this.#lastSeq });
+    if (!this.#ended) this.#append({ closed: this.#lastSeq });
     try {
       closeSync(this.#fd);
     } catch {

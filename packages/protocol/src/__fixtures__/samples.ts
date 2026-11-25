@@ -24,6 +24,7 @@ export const summary: SessionSummary = {
   createdAt: 1_700_000_000_000,
   lastActivityAt: 1_700_000_100_000,
   status: "idle",
+  queuePosition: null,
   mode: "default",
   model: "qwen-coder",
   effort: null,
@@ -57,6 +58,8 @@ export const usage: Usage = {
     cachedTokens: 1800,
     malformedToolCalls: 0,
   },
+  compactAt: 85196,
+  breakdown: { systemPrompt: 900, instructions: 148, tools: 700, messages: 300 },
 };
 
 const tasks: TaskItem[] = [{ content: "Run the tests", status: "in_progress", activeForm: "Running the tests" }];
@@ -144,6 +147,12 @@ export const methodSamples: MethodSamples = {
     result: { session: { ...summary, archived: true } },
     badParams: { sessionId: "s1", archived: "yes" },
     badResult: {},
+  },
+  "session.delete": {
+    params: { sessionId: "s1" },
+    result: {},
+    badParams: { sessionId: "" },
+    badResult: null,
   },
   "session.prompt": {
     params: {
@@ -257,6 +266,10 @@ export const eventSamples: EventSamples = {
   "session.status": {
     payload: { ...base, status: "waiting", waitingOn: "permission", message: null },
     bad: { ...base, status: "waiting" },
+  },
+  "session.deleted": {
+    payload: { ...base },
+    bad: { ...base, time: -1 },
   },
   "session.updated": {
     payload: {

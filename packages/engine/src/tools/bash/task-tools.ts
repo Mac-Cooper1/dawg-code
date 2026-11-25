@@ -57,16 +57,12 @@ export const taskStopTool: ToolDefinition<TaskStopInput> = {
     if (!before)
       return errorOutput(`There is no background task ${id}.${runningList(tasks.running())}`);
     if (before.status !== "running") {
-      return {
-        content: [{ type: "text", text: `Task ${id} had already ended: ${describeEnd(before)}.` }],
-        display: displayOf(before),
-      };
+      const text = `Task ${id} had already ended: ${describeEnd(before)}.`;
+      return { content: [{ type: "text", text }], display: displayOf(before, null, [text]) };
     }
     const after = (await tasks.stop(id, "requested")) ?? before;
-    return {
-      content: [{ type: "text", text: `Stopped task ${id} (${after.command}).` }],
-      display: displayOf(after),
-    };
+    const text = `Stopped task ${id} (${after.command}).`;
+    return { content: [{ type: "text", text }], display: displayOf(after, null, [text]) };
   },
 };
 
@@ -122,7 +118,10 @@ export const taskOutputTool: ToolDefinition<TaskOutputInput> = {
     const text = output
       ? `${status}\nNew output:\n${output}`
       : `${status}\nNo new output since the last check.`;
-    return { content: [{ type: "text", text }], display: displayOf(info) };
+    return {
+      content: [{ type: "text", text }],
+      display: displayOf(info, output === "" ? null : output, [status]),
+    };
   },
 };
 
@@ -149,7 +148,15 @@ function runningList(running: BackgroundTaskInfo[]): string {
   return ` Running background tasks:${lines.join("")}`;
 }
 
-function displayOf(info: BackgroundTaskInfo): CommandDisplay {
+/**
+ * `output` is the new output this call returns, if any: a background task's whole output is in
+ * its file, never in one call.
+ */
+function displayOf(
+  info: BackgroundTaskInfo,
+  output: string | null,
+  notes: string[],
+): CommandDisplay {
   return {
     kind: "command",
     command: info.command,
@@ -160,6 +167,8 @@ function displayOf(info: BackgroundTaskInfo): CommandDisplay {
     interrupted: info.stopReason === "requested" || info.stopReason === "session_end",
     backgroundTaskId: info.id,
     outputPath: info.outputPath,
+    output,
+    notes,
   };
 }
 

@@ -1,6 +1,6 @@
 /**
  * Checks one session's event stream against the protocol's ordering guarantees (packages/protocol
- * README, "Ordering guarantees", rules 1 to 7). Written for the mock engine's recordings and
+ * README, "Ordering guarantees", rules 1 to 8). Written for the mock engine's recordings and
  * output, and reusable for the real engine's: it only reads `{ event, payload }` objects.
  *
  * It returns violations instead of throwing, so a test can print all of them at once.
@@ -90,6 +90,8 @@ class Checker {
   #expectEndStatus = false;
   /** The previous event raised a request: the status must be "waiting" by the next event. */
   #expectWaiting = false;
+  /** `session.deleted` arrived: nothing may follow it. */
+  #deleted = false;
 
   constructor(options: ConformanceOptions) {
     this.#options = options;
@@ -107,6 +109,10 @@ class Checker {
     if (this.#sessionId === null) this.#sessionId = p.sessionId;
     else if (p.sessionId !== this.#sessionId) {
       this.#fail(`sessionId ${p.sessionId} differs from ${this.#sessionId}`);
+    }
+    if (this.#deleted) {
+      this.#fail("an event follows session.deleted, which must be the session's last");
+      return;
     }
 
     if (this.#expectEndStatus) {
@@ -136,6 +142,9 @@ class Checker {
     switch (event.event) {
       case "session.status":
         this.#onStatus(event.payload);
+        return;
+      case "session.deleted":
+        this.#onDeleted();
         return;
       case "turn.started":
         this.#onTurnStarted(event.payload.turnId);
@@ -235,9 +244,16 @@ class Checker {
   // Rule 2: turns and status
   // -------------------------------------------------------------------------------------------
 
-  #onStatus(p: { status: SessionStatus; waitingOn: string | null }): void {
+  #onStatus(p: {
+    status: SessionStatus;
+    waitingOn: string | null;
+    queuePosition: number | null;
+  }): void {
     if ((p.status === "waiting") !== (p.waitingOn !== null)) {
       this.#fail(`status ${p.status} with waitingOn ${p.waitingOn}`);
+    }
+    if (p.queuePosition !== null && p.status !== "working") {
+      this.#fail(`status ${p.status} with queuePosition ${p.queuePosition}; only working waits`);
     }
     if (this.#pending.size > 0 && p.status !== "waiting") {
       this.#fail(`status ${p.status} while ${this.#pending.size} request(s) are pending`);
@@ -496,6 +512,26 @@ class Checker {
   }
 
   // -------------------------------------------------------------------------------------------
+  // Rule 8: deletion
+  // -------------------------------------------------------------------------------------------
+
+  /** The session's last event; a running turn must have been interrupted and closed before it. */
+  #onDeleted(): void {
+    if (this.#turn !== null) {
+      this.#fail(`session.deleted while turn ${this.#turn.turnId} runs; interrupt it first`);
+    }
+    if (this.#message !== null) {
+      this.#fail(`session.deleted while message ${this.#message.messageId} streams`);
+    }
+    for (const id of this.#tools.keys()) this.#fail(`session.deleted while tool call ${id} runs`);
+    for (const id of this.#pending.keys()) this.#fail(`session.deleted while request ${id} waits`);
+    if (this.#compaction !== null) {
+      this.#fail(`session.deleted while compaction ${this.#compaction} runs`);
+    }
+    this.#deleted = true;
+  }
+
+  // -------------------------------------------------------------------------------------------
   // Rule 6: compaction
   // -------------------------------------------------------------------------------------------
 
@@ -532,6 +568,7 @@ function turnIdOf(event: EngineEvent): string | null {
   switch (event.event) {
     case "session.status":
     case "session.updated":
+    case "session.deleted":
     case "tasks.updated":
     case "usage.updated":
     case "compaction.finished":

@@ -25,6 +25,7 @@ import {
   putSession,
   readItems,
   readSession,
+  removeSession,
   setItems,
   setPending,
   writeItems,
@@ -72,6 +73,9 @@ function applyInput(draft: Draft, input: ReducerInput): void {
       }
       return;
     }
+    case "deleted":
+      removeSession(draft, input.sessionId);
+      return;
     case "command-output":
       applyCommandOutput(draft, input.sessionId, input.command, input.output);
       return;
@@ -99,6 +103,7 @@ function newSession(summary: SessionSummary, open: boolean): MutableSession {
     status: summary.status,
     waitingOn: null,
     statusMessage: null,
+    queuePosition: summary.queuePosition,
     modelInfo: null,
     additionalDirectories: [],
     tasks: [],
@@ -122,6 +127,7 @@ function sameSummary(a: SessionSummary, b: SessionSummary): boolean {
     a.createdAt === b.createdAt &&
     a.lastActivityAt === b.lastActivityAt &&
     a.status === b.status &&
+    a.queuePosition === b.queuePosition &&
     a.mode === b.mode &&
     a.model === b.model &&
     a.effort === b.effort &&
@@ -150,6 +156,7 @@ function applySummary(draft: Draft, summary: SessionSummary): void {
   session.status = summary.status;
   session.waitingOn = null;
   session.statusMessage = null;
+  session.queuePosition = summary.queuePosition;
 }
 
 function pendingRef(request: PendingRequest): PendingRef {
@@ -193,6 +200,7 @@ function applySnapshot(draft: Draft, snapshot: SessionSnapshot): void {
   }
   const refs = snapshot.pending.map(pendingRef);
   session.status = summary.status;
+  session.queuePosition = summary.queuePosition;
   session.waitingOn = summary.status === "waiting" ? (refs[0]?.kind ?? null) : null;
   session.modelInfo = snapshot.modelInfo;
   session.additionalDirectories = snapshot.additionalDirectories;
@@ -238,6 +246,11 @@ function touch(session: MutableSession, time: number): void {
 
 function applyEvent(draft: Draft, event: EngineEvent, live: boolean): void {
   const { sessionId, seq } = event.payload;
+  // The session's last event, whether or not it is open here: it is gone.
+  if (event.event === "session.deleted") {
+    removeSession(draft, sessionId);
+    return;
+  }
   const current = readSession(draft, sessionId);
   if (!current) return;
   if (live && !current.open) return;
@@ -252,22 +265,17 @@ function applyEvent(draft: Draft, event: EngineEvent, live: boolean): void {
       session.status = p.status;
       session.waitingOn = p.waitingOn;
       session.statusMessage = p.message;
+      session.queuePosition = p.queuePosition;
       session.summary = {
         ...session.summary,
         status: p.status,
+        queuePosition: p.queuePosition,
         lastActivityAt: Math.max(session.summary.lastActivityAt, p.time),
       };
       return;
     }
     case "session.updated": {
       const p = event.payload;
-      const { internals } = session;
-      // Before the replay is done, the summary holds the current mode, not the historical one.
-      const previous = internals.eventMode ?? (session.loaded ? session.summary.mode : null);
-      if (p.mode === "plan" && previous !== null && previous !== "plan") {
-        internals.modeBeforePlan = previous;
-      }
-      internals.eventMode = p.mode;
       session.summary = {
         ...session.summary,
         title: p.title,

@@ -64,6 +64,7 @@ or forked on this connection; a connection receives events for the sessions it h
 | `session.list` | List stored sessions, newest activity first | `projectDir?`, `query?`, `includeArchived?`, `limit?`, `cursor?` | `sessions: SessionSummary[]`, `nextCursor` |
 | `session.rename` | Set a session's title | `sessionId`, `title` | `session: SessionSummary` |
 | `session.archive` | Archive or unarchive | `sessionId`, `archived?` (default true) | `session: SessionSummary` |
+| `session.delete` | Delete a stored session for good, open or not | `sessionId` | `{}` |
 | `session.prompt` | Send a message and start a turn | `sessionId`, `prompt {content: ContentPart[], mentions?: {path, startLine?, endLine?}[]}` | `turnId` |
 | `session.interrupt` | Stop the running turn or compaction | `sessionId` | `interrupted` (false if nothing ran) |
 | `session.setMode` | Change the permission mode | `sessionId`, `mode` | `mode` |
@@ -81,9 +82,14 @@ oldest first), `activeTurnId`, and `commands` (`{name, description, argumentHint
 menu).
 
 `SessionSummary` is `id`, `title` (null until generated), `cwd`, `projectDir`, `createdAt`,
-`lastActivityAt`, `status`, `mode`, `model`, `effort`, `archived`, `forkedFrom {sessionId, point}`
-or null, and `lastSeq`. A session not open anywhere reports `idle`, or `error` if its last turn
-failed.
+`lastActivityAt`, `status`, `queuePosition` (see `session.status`), `mode`, `model`, `effort`,
+`archived`, `forkedFrom {sessionId, point}` or null, and `lastSeq`. A session not open anywhere
+reports `idle`, or `error` if its last turn failed.
+
+`Usage` is `contextWindow`, `contextUsed`, `last` (the latest request's token counts and speeds),
+`totals`, `compactAt` (the context size above which the engine compacts on its own before a turn,
+or null when it never does) and `breakdown` (`systemPrompt`, `instructions`, `tools`, `messages`:
+an estimated split that adds up to `contextUsed`).
 
 ### Semantics
 
@@ -95,9 +101,13 @@ failed.
 - **Do not rely on the order of a response and the events it causes.** Match them by `turnId`.
 - `permission.respond`, `question.respond` and `plan.respond` fail with `RequestNotFound` when the
   request is unknown or already resolved (another window answered, or the turn ended).
-- Session methods other than create, resume, fork, list, rename, archive and replay need the
-  session open on this connection, otherwise `InvalidState`. An unknown id is `SessionNotFound`.
-- Rename and archive work on stored sessions whether or not they are open.
+- Session methods other than create, resume, fork, list, rename, archive, delete and replay need
+  the session open on this connection, otherwise `InvalidState`. An unknown id is
+  `SessionNotFound`.
+- Rename, archive and delete work on stored sessions whether or not they are open.
+- `session.delete` interrupts a running turn or compaction first, then closes the session on every
+  connection (each gets `session.deleted`) and removes its files. Forks of it keep working. A
+  session another process has open (a `dawg` run in a terminal) is `InvalidState`.
 - A client that set a capability to false never receives that kind of request: the engine
   resolves it itself (a permission request is denied unless a rule allows it).
 
@@ -108,7 +118,8 @@ table; each exists because a client cannot otherwise rebuild the view from event
 
 | Event | Purpose | Fields |
 | --- | --- | --- |
-| `session.status` | Idle, working, waiting on the person, or error | `status`, `waitingOn` (permission/question/plan or null), `message` (short sidebar line or null) |
+| `session.status` | Idle, working, waiting on the person, or error | `status`, `waitingOn` (permission/question/plan or null), `message` (short sidebar line or null), `queuePosition` (while the turn waits for a model busy with other sessions: 1 = next; else null) |
+| `session.deleted` *added* | The session was deleted. Without it, another window showing the session would not learn it is gone. | none beyond the common fields |
 | `session.updated` *added* | The session's settings, sent whole when one changes (title generated, mode switched by a tool or `/mode`, model, effort, archive, `/add-dir`). Without it a client never learns of changes the engine makes itself. | `title`, `mode`, `model`, `modelInfo`, `effort`, `archived`, `additionalDirectories`, `changed: string[]` |
 | `turn.started` *added* | A turn began. Carries the person's message, which no other event does. | `turnId`, `prompt`, `command {name, args}` or null |
 | `turn.finished` *added* | A turn ended, and why. The last event of the turn. | `turnId`, `stopReason` (completed, turn_limit, interrupted, error), `finalText`, `error`, `durationMs` |
@@ -118,10 +129,10 @@ table; each exists because a client cannot otherwise rebuild the view from event
 | `reasoning.delta` | Reasoning text to append | `turnId`, `messageId`, `text` |
 | `tool.started` | A tool call, with its parsed arguments | `turnId`, `messageId`, `toolCallId`, `toolName`, `input` |
 | `tool.progress` | Live output or a status line | `turnId`, `toolCallId`, `progress` (`output {stream, text}` or `status {message}`) |
-| `tool.finished` | The call's result | `turnId`, `toolCallId`, `toolName`, `outcome` (success, error, denied, invalid, interrupted), `content`, `display` (`ToolDisplay`: diff, file, command, search) or null, `durationMs` |
+| `tool.finished` | The call's result | `turnId`, `toolCallId`, `toolName`, `outcome` (success, error, denied, invalid, interrupted), `content` (what the model was given), `display` (`ToolDisplay`: diff, file, command, search) or null, `durationMs`. A command's display carries `output` (what it printed, plain text) and `notes` (the sentences added for the model after it, without the exit code), so a client never has to take the model's text apart. |
 | `permission.requested` | A tool call needs permission | `turnId`, `request: PermissionRequest` (requestId, toolCallId, toolName, input, title, reason, suggestions, display?) |
 | `question.asked` | The model asks the person questions | `turnId`, `requestId`, `toolCallId`, `questions: Question[]` |
-| `plan.proposed` | A plan awaits approval | `turnId`, `requestId`, `toolCallId`, `plan` (Markdown), `planPath` |
+| `plan.proposed` | A plan awaits approval | `turnId`, `requestId`, `toolCallId`, `plan` (Markdown), `planPath`, `modeBeforePlan` (the mode approving returns to unless the answer names one) |
 | `request.resolved` *added* | A pending request is no longer pending. Needed so every client (and a replay) can close the card, including when the turn ended without an answer. | `kind` (permission/question/plan), `turnId`, `requestId`, `outcome` (answered/cancelled), `response` (the answer, or null) |
 | `tasks.updated` | The whole task list | `tasks: TaskItem[]` |
 | `usage.updated` | Context and token counts | `usage: Usage` |
@@ -153,6 +164,8 @@ Within one session:
 7. The `finished` events carry whole facts: `message.finished.text` replaces the deltas, and
    `turn.started`, `tool.finished`, `tasks.updated`, `usage.updated` and `session.updated` are
    complete on their own.
+8. `session.deleted` is the session's last event. A running turn is interrupted before it, so its
+   `turn.finished` (stop reason "interrupted") comes first.
 
 ### Replay and reconnecting
 

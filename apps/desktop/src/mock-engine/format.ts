@@ -61,8 +61,8 @@ export const ScenarioSchema = z.strictObject({
   live: RecordingNameSchema.nullable(),
   /**
    * Another scenario id. Until that session's running turn ends, this session reports
-   * `session.status` "working" with the message "Queued: waits for the model", and `live`
-   * waits.
+   * `session.status` "working" with its `queuePosition` (1 = next) and the message "Waiting for
+   * the model", and `live` waits.
    */
   queuedBehind: z.string().nullable(),
   /**

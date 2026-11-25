@@ -29,16 +29,19 @@ import { realClock } from "./clock.ts";
 import { contextText, helpText } from "./commands.ts";
 import { type LoadedScenario, pickBranch } from "./format.ts";
 import {
+  breakdownAfter,
   compactionSummary,
   contextAfterCompaction,
   type Decision,
   decisionResult,
   genericContinuation,
   genericTurn,
+  IDLE,
   interruptTurn,
   modeAfterPlan,
   type Pace,
   titleFrom,
+  WORKING,
 } from "./generate.ts";
 import { idsIn, newSessionId } from "./ids.ts";
 import { expandHome } from "./paths.ts";
@@ -50,8 +53,13 @@ import {
   type Subscriber,
 } from "./session.ts";
 import { requestIdOf, toolCallOf } from "./state.ts";
+import { compactAtFor } from "./usage.ts";
 
-export const QUEUED_MESSAGE = "Queued: waits for the model";
+/**
+ * The status line while a turn waits for the model, as the real engine words it. Clients go by
+ * `queuePosition`, not by this text.
+ */
+export const QUEUED_MESSAGE = "Waiting for the model";
 const DEFAULT_ENGINE_INFO = { name: "dawg mock engine", version: "0.0.0" };
 /** A queued session starts this long after the model is free (at speed 1). */
 const QUEUE_HANDOFF_MS = 500;
@@ -174,17 +182,37 @@ class Engine implements MockEngine {
         (blocker.state.turn !== null || (blocker.player?.active ?? false))
       ) {
         session.queue = { behind };
-        if (session.state.status !== "working" || session.state.statusMessage !== QUEUED_MESSAGE) {
-          session.emit("session.status", {
-            status: "working",
-            waitingOn: null,
-            message: QUEUED_MESSAGE,
-          });
-        }
       } else {
         this.#startLive(session);
       }
     }
+    this.#reportQueue();
+  }
+
+  /**
+   * Tells each session waiting for the model its place in line (1 = next), in scenario order,
+   * when it changed. A session leaves the line when its live part starts playing.
+   */
+  #reportQueue(): void {
+    const waiting = this.#scenarioSessions.filter(
+      (session) => session.queue !== null && this.#sessions.has(session.id),
+    );
+    waiting.forEach((session, index) => {
+      const position = index + 1;
+      const { state } = session;
+      if (
+        state.status === "working" &&
+        state.statusMessage === QUEUED_MESSAGE &&
+        state.queuePosition === position
+      ) {
+        return;
+      }
+      session.emit("session.status", {
+        ...WORKING,
+        message: QUEUED_MESSAGE,
+        queuePosition: position,
+      });
+    });
   }
 
   #addScenario(loaded: LoadedScenario, start: number): MockSession {
@@ -253,11 +281,17 @@ class Engine implements MockEngine {
     if (title !== null && session.settings.title === null) {
       session.updateSettings({ title }, ["title"]);
     }
+    this.#startQueuedBehind(session.id);
+  }
+
+  /** The model is free: sessions waiting behind this one start, the rest move up in line. */
+  #startQueuedBehind(sessionId: string): void {
     for (const queued of this.#sessions.values()) {
-      if (queued.queue?.behind !== session.id) continue;
+      if (queued.queue?.behind !== sessionId) continue;
       queued.queue = null;
       this.#startLive(queued, scaledDelay(QUEUE_HANDOFF_MS, this.#speed));
     }
+    this.#reportQueue();
   }
 
   #startLive(session: MockSession, firstDelay?: number): void {
@@ -357,6 +391,10 @@ class Engine implements MockEngine {
         const session = this.#get(params.sessionId);
         session.updateSettings({ archived: params.archived ?? true }, ["archived"]);
         return { session: session.summary() };
+      },
+      "session.delete": (params) => {
+        this.#delete(this.#get(params.sessionId));
+        return {};
       },
       "session.prompt": (params) =>
         this.#prompt(this.#openHere(connection, params.sessionId), params.prompt),
@@ -533,15 +571,34 @@ class Engine implements MockEngine {
         contextAfter: null,
         error: null,
       });
-      session.emit("session.status", { status: "idle", waitingOn: null, message: null });
+      session.emit("session.status", IDLE);
       return true;
     }
     if (session.state.turn === null) return false;
     session.player?.stop();
     session.player = null;
+    const wasQueued = session.queue !== null;
     session.queue = null;
     interruptTurn(session, this.#clock.now());
+    if (wasQueued) this.#reportQueue();
     return true;
+  }
+
+  /**
+   * Deletes a session for good. A running turn or compaction is interrupted first; then every
+   * connection that has the session open gets `session.deleted`, its last event, and the session
+   * is gone: later calls on it fail with SessionNotFound. Forks keep their own copy of the events.
+   */
+  #delete(session: MockSession): void {
+    this.#interrupt(session);
+    session.player?.stop();
+    session.player = null;
+    session.queue = null;
+    session.emit("session.deleted", {});
+    session.subscribers.clear();
+    for (const connection of this.#connections) connection.open.delete(session.id);
+    this.#sessions.delete(session.id);
+    this.#startQueuedBehind(session.id);
   }
 
   #setModel(session: MockSession, model: string) {
@@ -617,11 +674,7 @@ class Engine implements MockEngine {
     const before = usage?.contextUsed ?? 0;
     const window = session.modelInfo?.contextWindow ?? usage?.contextWindow ?? 0;
     const compactionId = session.ids.fresh("compaction");
-    session.emit("session.status", {
-      status: "working",
-      waitingOn: null,
-      message: "Compacting the conversation",
-    });
+    session.emit("session.status", { ...WORKING, message: "Compacting the conversation" });
     session.emit("compaction.started", {
       compactionId,
       trigger: "manual",
@@ -663,9 +716,11 @@ class Engine implements MockEngine {
                 cachedTokens: (totals?.cachedTokens ?? 0) + before,
                 malformedToolCalls: totals?.malformedToolCalls ?? 0,
               },
+              compactAt: compactAtFor(window),
+              breakdown: breakdownAfter(session, after),
             },
           });
-          session.emit("session.status", { status: "idle", waitingOn: null, message: null });
+          session.emit("session.status", IDLE);
         },
       },
     ]);
@@ -706,7 +761,8 @@ class Engine implements MockEngine {
       this.#play(session, genericContinuation(session, this.#pace, request, decision));
       return;
     }
-    const mode = decision.kind === "plan" ? modeAfterPlan(session, decision.response) : null;
+    const mode =
+      decision.kind === "plan" ? modeAfterPlan(session, request, decision.response) : null;
     const allowed = decision.kind === "permission" && decision.response.behavior === "allow";
     const result = decisionResult(request, decision, mode ?? session.settings.mode);
     this.#playRecording(session, events, {

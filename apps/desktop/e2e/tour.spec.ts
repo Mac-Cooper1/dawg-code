@@ -1,7 +1,8 @@
 /**
  * A tour of the built app against the mock engine, end to end: the split-test session streams,
  * a message typed meanwhile is queued, the three decision cards show and answer, the composer's
- * menus open, Stop holds the queued message, and Settings → General switches the appearance.
+ * menus open, Stop holds the queued message, a session is deleted after its dialog asks, and
+ * Settings → General switches the appearance.
  * Saves a screenshot of each stop in dark and light to e2e/screenshots/tour/ for design review.
  */
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -79,6 +80,8 @@ const transcript = () => page.getByRole("log", { name: "Transcript" });
 const composer = () => page.getByRole("textbox", { name: "Message to dawg" });
 
 test("the split-test session streams, and a message sent meanwhile is queued", async () => {
+  // The docs session waits for the model the split-test session is using.
+  await expect(row("Docs search page")).toHaveAccessibleName(/Queued: waits for the model/);
   await row("Fix the failing split test").click();
   await expect(transcript().getByText("Fixed.", { exact: false })).toBeVisible();
   await expect(transcript().getByText("The sum is right", { exact: false })).toBeVisible({
@@ -94,7 +97,10 @@ test("the split-test session streams, and a message sent meanwhile is queued", a
 
 test("the context meter and the mode menu open", async () => {
   await page.getByRole("button", { name: /^Context used/ }).click();
-  await expect(page.getByText(/Compacts on its own at 65%/)).toBeVisible();
+  const meter = page.getByRole("dialog", { name: /^Context ·/ });
+  await expect(meter.getByText("System prompt")).toBeVisible();
+  await expect(meter.getByText("Messages")).toBeVisible();
+  await expect(meter.getByText(/Compacts on its own at 65%/)).toBeVisible();
   await shoot("02-context-meter");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: /^Permission mode/ }).click();
@@ -141,6 +147,9 @@ test("the question card shows and takes an answer", async () => {
 test("the plan card shows and approves with accept edits", async () => {
   await row("Multi-currency totals").click();
   await expect(page.getByText("Plan ready for review").first()).toBeVisible();
+  await expect(
+    page.getByText("Approve returns to Ask first, the mode you were in before planning."),
+  ).toBeVisible();
   await shoot("07-plan");
   await page.getByRole("button", { name: /^Approve and accept edits/ }).click();
   await expect(page.getByText(/You approved the plan/)).toBeVisible();
@@ -152,11 +161,23 @@ test("the sidebar after the decisions", async () => {
   await shoot("08-after-decisions");
 });
 
+test("Delete asks first, then the session leaves the sidebar", async () => {
+  await row("Bump to Python 3.13").click();
+  await page.getByRole("button", { name: "Actions for Bump to Python 3.13" }).click();
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Delete “Bump to Python 3.13”?" });
+  await expect(dialog.getByText(/This cannot be undone/)).toBeVisible();
+  await shoot("09-delete-dialog");
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(row("Bump to Python 3.13")).toHaveCount(0);
+});
+
 test("Settings → General switches the appearance", async () => {
   await page.keyboard.press("Meta+Comma");
   await page.getByRole("navigation", { name: "Settings pages" }).getByText("General").click();
   await expect(page.getByRole("radiogroup", { name: "Appearance" })).toBeVisible();
-  await shoot("09-settings-general");
+  await shoot("10-settings-general");
   await page.getByRole("radio", { name: /^Light/ }).click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
   await page.getByRole("radio", { name: /^Dark/ }).click();

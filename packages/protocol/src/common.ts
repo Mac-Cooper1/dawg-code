@@ -26,6 +26,12 @@ export const SessionStatusSchema = z.enum(["idle", "working", "waiting", "error"
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 
 /**
+ * Set while the session's turn waits for its model because the model is busy with other
+ * sessions' requests; `status` is then "working". 1 means it is next in line. Null otherwise.
+ */
+export const QueuePositionSchema = z.number().int().positive().nullable().default(null);
+
+/**
  * A reasoning effort level. Open-ended on purpose: the levels a model accepts come from its chat
  * template, as reported by the endpoint.
  */
@@ -122,6 +128,21 @@ export const CommandDisplaySchema = z.object({
   backgroundTaskId: z.string().nullable(),
   /** File holding the full output, when it was cut or the command runs in the background. */
   outputPath: z.string().nullable(),
+  /**
+   * What the command printed, as a person should see it: stdout and stderr together in the order
+   * they arrived, as plain text (terminal control sequences removed), without the notes the engine
+   * adds for the model (the exit code, a timeout, where the full output is saved). When the output
+   * was cut, its beginning and end as the model saw them; `outputPath` then holds the whole.
+   * Empty when the command printed nothing. Null when there is no output to show yet (a command
+   * just started in the background) and in sessions stored before engines reported it.
+   */
+  output: z.string().nullable().default(null),
+  /**
+   * The sentences the engine added for the model after the output, one per entry: a timeout,
+   * where the full output is saved, processes left running and the like. The exit code is not
+   * among them (`exitCode` carries it). Empty in sessions stored before engines reported it.
+   */
+  notes: z.array(z.string()).default([]),
 });
 export type CommandDisplay = z.infer<typeof CommandDisplaySchema>;
 
@@ -211,6 +232,19 @@ export type QuestionAnswer = z.infer<typeof QuestionAnswerSchema>;
 // Usage
 // ---------------------------------------------------------------------------------------------
 
+/** Tokens of the model's view, by part. */
+export const ContextBreakdownSchema = z.object({
+  /** The engine's own system prompt, without instruction files. */
+  systemPrompt: z.number().int().nonnegative(),
+  /** Instruction files (memory files) loaded into the prompt. */
+  instructions: z.number().int().nonnegative(),
+  /** Tool definitions. */
+  tools: z.number().int().nonnegative(),
+  /** The conversation: messages, tool calls and their results, compaction summaries. */
+  messages: z.number().int().nonnegative(),
+});
+export type ContextBreakdown = z.infer<typeof ContextBreakdownSchema>;
+
 export const UsageSchema = z.object({
   /** The endpoint's real context window, in tokens. */
   contextWindow: z.number().int().nonnegative(),
@@ -234,6 +268,17 @@ export const UsageSchema = z.object({
     /** Tool calls that failed to parse or validate, including ones that were repaired. */
     malformedToolCalls: z.number().int().nonnegative(),
   }),
+  /**
+   * The context size, in tokens, above which the engine compacts the conversation on its own
+   * before the next turn starts. Null when it never compacts on its own, and in sessions stored
+   * before engines reported it.
+   */
+  compactAt: z.number().int().nonnegative().nullable().default(null),
+  /**
+   * What fills `contextUsed`. The endpoint counts only the whole, so the split is estimated and
+   * scaled to add up to `contextUsed`. Null in sessions stored before engines reported it.
+   */
+  breakdown: ContextBreakdownSchema.nullable().default(null),
 });
 export type Usage = z.infer<typeof UsageSchema>;
 
@@ -308,7 +353,8 @@ export const PlanResponseSchema = z.discriminatedUnion("decision", [
     decision: z.literal("approve"),
     /**
      * The mode to leave plan mode into, for example "acceptEdits" for "approve and accept edits".
-     * Omitted means the mode the session was in before it entered plan mode.
+     * Omitted means the mode the session was in before it entered plan mode (the plan request's
+     * `modeBeforePlan`).
      */
     mode: PermissionModeSchema.optional(),
   }),
@@ -404,6 +450,8 @@ export const SessionSummarySchema = z.object({
   lastActivityAt: TimestampSchema,
   /** A session not open on any connection is "idle", or "error" if its last turn failed. */
   status: SessionStatusSchema,
+  /** As in the `session.status` event: set while the turn waits for its model. */
+  queuePosition: QueuePositionSchema,
   mode: PermissionModeSchema,
   /** Null when no model has been chosen yet. */
   model: z.string().nullable(),

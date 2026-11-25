@@ -1,6 +1,7 @@
 /** The text `/help` and `/context` answer with, in Markdown. */
 import { ErrorCodes, RpcError } from "@dawg/protocol";
 import { COMMANDS, type MockSession } from "./session.ts";
+import { contextBreakdown } from "./usage.ts";
 
 const n = (value: number) => Math.round(value).toLocaleString("en-US");
 const percent = (part: number, whole: number) =>
@@ -34,9 +35,6 @@ export function helpText(args: string): string {
   ].join("\n");
 }
 
-/** Prompt tokens of the system prompt and tool definitions, as the recordings count them. */
-const PREFIX_TOKENS = 15_104;
-
 /** `/context`: where the context window is going, from the session's latest usage. */
 export function contextText(session: MockSession): string {
   const usage = session.state.usage;
@@ -45,18 +43,28 @@ export function contextText(session: MockSession): string {
     return `No model request yet in this session, so nothing is counted. The context window is ${n(window)} tokens.`;
   }
   const used = usage.contextUsed;
-  const prefix = Math.min(used, PREFIX_TOKENS);
   const free = Math.max(0, window - used);
+  const parts = usage.breakdown ?? contextBreakdown(used);
+  const row = (label: string, tokens: number) =>
+    `| ${label} | ${n(tokens)} | ${percent(tokens, window)} |`;
   const lines = [
     `Context: **${n(used)} of ${n(window)} tokens** (${percent(used, window)}), as counted at the last request.`,
     "",
     "| Part | Tokens | Share |",
     "| --- | ---: | ---: |",
-    `| Instructions and tools | ${n(prefix)} | ${percent(prefix, window)} |`,
-    `| Conversation and tool results | ${n(used - prefix)} | ${percent(used - prefix, window)} |`,
-    `| Free | ${n(free)} | ${percent(free, window)} |`,
+    row("System prompt", parts.systemPrompt),
+    row("Instructions", parts.instructions),
+    row("Tools", parts.tools),
+    row("Messages", parts.messages),
+    row("Free", free),
     "",
   ];
+  if (usage.compactAt !== null) {
+    lines.push(
+      `Compacts on its own above ${n(usage.compactAt)} tokens (${percent(usage.compactAt, window)}).`,
+      "",
+    );
+  }
   const last = usage.last;
   if (last.promptTokens !== null) {
     const cached = last.cachedTokens ?? 0;

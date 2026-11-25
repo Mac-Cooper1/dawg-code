@@ -8,6 +8,7 @@ import type { SessionId } from "@dawg/protocol";
 import { basename, formatRelativeTime, shortenPath } from "../lib/format.ts";
 import { createKeyedMemo, shallowEqual, stable } from "./memo.ts";
 import { isQueuedForModel, MARK_LABELS, sessionMark } from "./session-marks.ts";
+import { sidebarOrder } from "./sidebar-order.ts";
 import { INTERRUPTED_BY_YOU_NOTE, INTERRUPTED_NOTE } from "./transcript-events.ts";
 import type {
   AppChromeView,
@@ -18,6 +19,7 @@ import type {
   NoteItem,
   PendingRef,
   QueuedMessage,
+  SessionView,
   SidebarGroup,
   SidebarRow,
   TitleBarView,
@@ -29,9 +31,6 @@ const EMPTY_ITEMS: readonly TranscriptItem[] = Object.freeze([]);
 const EMPTY_PENDING: readonly PendingRef[] = Object.freeze([]);
 const EMPTY_QUEUE: readonly QueuedMessage[] = Object.freeze([]);
 const EMPTY_FLAGS: Readonly<Record<string, boolean>> = Object.freeze({});
-
-/** The engine's documented default: compaction starts on its own at 65% of the window. */
-export const COMPACT_AT = 0.65;
 
 export const PLACEHOLDERS = {
   idle: "Reply to dawg. / for commands, @ to mention a file",
@@ -70,16 +69,9 @@ export function selectSidebar(state: AppStore, now: number): SidebarGroup[] {
       now,
     ],
     (previous) => {
-      const query = layout.search.trim().toLowerCase();
-      const ordered = Object.values(sessions)
-        .filter((session) => !session.summary.archived)
-        .sort(
-          (a, b) => b.summary.lastActivityAt - a.summary.lastActivityAt || a.id.localeCompare(b.id),
-        );
-      const byProject = new Map<string, SidebarRow[]>();
-      for (const session of ordered) {
-        const title = session.summary.title ?? "New session";
-        if (query !== "" && !title.toLowerCase().includes(query)) continue;
+      // One model serves every project, so the line is counted across all of them.
+      const queuedCount = Object.values(sessions).filter(isQueuedForModel).length;
+      const sidebarRow = (session: SessionView): SidebarRow => {
         const selected = session.id === layout.selectedSessionId;
         const { mark, subtitle } = sessionMark({
           session,
@@ -89,10 +81,11 @@ export function selectSidebar(state: AppStore, now: number): SidebarGroup[] {
           markedUnread: ui.markedUnread[session.id] ?? false,
           stoppedByUser: ui.stoppedByUser[session.id] ?? false,
           selected,
+          queuedCount,
         });
         const row = stable<SidebarRow>(rowCache.get(session.id), {
           sessionId: session.id,
-          title,
+          title: session.summary.title ?? "New session",
           mark,
           markLabel: MARK_LABELS[mark],
           subtitle,
@@ -102,19 +95,16 @@ export function selectSidebar(state: AppStore, now: number): SidebarGroup[] {
           worktree: session.summary.cwd !== session.summary.projectDir,
         });
         rowCache.set(session.id, row);
-        const dir = session.summary.projectDir;
-        const rows = byProject.get(dir);
-        if (rows) rows.push(row);
-        else byProject.set(dir, [row]);
-      }
+        return row;
+      };
       const groups: SidebarGroup[] = [];
-      for (const [dir, rows] of byProject) {
+      for (const { projectDir: dir, sessions: listed } of sidebarOrder(sessions, layout.search)) {
         const cached = groupCache.get(dir);
         const group = stable<SidebarGroup>(cached, {
           projectDir: dir,
           name: state.projects[dir]?.name ?? basename(dir),
           displayPath: shortenPath(dir, state.homeDir),
-          rows: sameElements(cached?.rows, rows) as SidebarRow[],
+          rows: sameElements(cached?.rows, listed.map(sidebarRow)) as SidebarRow[],
         });
         groupCache.set(dir, group);
         groups.push(group);
@@ -275,7 +265,6 @@ export function selectTranscript(state: AppStore, sessionId: SessionId): Transcr
       openItems,
       shownAgain,
       state.ui.fromQueueTurns,
-      session.summary.mode,
       session.summary.cwd,
     ],
     () => ({
@@ -292,7 +281,6 @@ export function selectTranscript(state: AppStore, sessionId: SessionId): Transcr
       openItems,
       shownAgain,
       queuedTurnIds: state.ui.fromQueueTurns,
-      mode: session.summary.mode,
       cwd: session.summary.cwd,
     }),
   );
@@ -320,12 +308,14 @@ function contextMeter(
         completionTokensPerSecond: usage.last.completionTokensPerSecond,
       })
     : null;
+  const breakdown = usage?.breakdown ?? null;
   return stable(previous ?? undefined, {
     used,
     window,
     fraction: window > 0 ? Math.min(1, used / window) : 0,
     last,
-    compactAt: COMPACT_AT,
+    compactAt: usage?.compactAt ?? null,
+    breakdown: breakdown && stable(previous?.breakdown ?? undefined, { ...breakdown }),
     compacting: session.compactionId !== null,
   });
 }

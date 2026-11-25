@@ -1,7 +1,8 @@
 /**
- * UI state that follows from a reducer batch: seen marks, "Stopped by you", and the turns that
- * ended (the store sends or holds queued messages for those). Pure: compares the sessions before
- * and after the batch, so a replayed or duplicate event that changes nothing triggers nothing.
+ * UI state that follows from a reducer batch: seen marks, "Stopped by you", the turns that ended
+ * (the store sends or holds queued messages for those), and sessions that were deleted (their UI
+ * state is dropped; the store picks another selection). Pure: compares the sessions before and
+ * after the batch, so a replayed or duplicate event that changes nothing triggers nothing.
  */
 import type { SessionId, StopReason } from "@dawg/protocol";
 import type { AppState, EngineSlice, UiState } from "./types.ts";
@@ -17,6 +18,32 @@ export interface FollowUps {
   ui: UiState;
   /** Turns that ended in this batch, leaving their session idle. */
   ended: TurnEnded[];
+  /** Sessions that left the state in this batch (deleted). */
+  removed: SessionId[];
+}
+
+function without<T>(record: Record<string, T>, ids: readonly string[]): Record<string, T> {
+  if (!ids.some((id) => id in record)) return record;
+  const next = { ...record };
+  for (const id of ids) delete next[id];
+  return next;
+}
+
+/** Drops everything the UI keeps for these sessions: drafts, queued messages, marks. */
+export function forgetSessions(ui: UiState, ids: readonly SessionId[]): UiState {
+  if (ids.length === 0) return ui;
+  const next: UiState = {
+    ...ui,
+    drafts: without(ui.drafts, ids),
+    queues: without(ui.queues, ids),
+    openItems: without(ui.openItems, ids),
+    shownAgain: without(ui.shownAgain, ids),
+    seenSeq: without(ui.seenSeq, ids),
+    markedUnread: without(ui.markedUnread, ids),
+    stoppedByUser: without(ui.stoppedByUser, ids),
+  };
+  const keys = Object.keys(next) as (keyof UiState)[];
+  return keys.every((key) => next[key] === ui[key]) ? ui : next;
 }
 
 export function followUps(
@@ -24,7 +51,11 @@ export function followUps(
   next: EngineSlice,
 ): FollowUps {
   const ended: TurnEnded[] = [];
-  if (next.sessions === prev.sessions) return { ui: prev.ui, ended };
+  const removed: SessionId[] = [];
+  if (next.sessions === prev.sessions) return { ui: prev.ui, ended, removed };
+  for (const id of Object.keys(prev.sessions)) {
+    if (!(id in next.sessions)) removed.push(id);
+  }
   let seenSeq = prev.ui.seenSeq;
   let stoppedByUser = prev.ui.stoppedByUser;
   const selected = prev.layout.selectedSessionId;
@@ -65,8 +96,9 @@ export function followUps(
     }
   }
 
-  if (seenSeq === prev.ui.seenSeq && stoppedByUser === prev.ui.stoppedByUser) {
-    return { ui: prev.ui, ended };
-  }
-  return { ui: { ...prev.ui, seenSeq, stoppedByUser }, ended };
+  const ui =
+    seenSeq === prev.ui.seenSeq && stoppedByUser === prev.ui.stoppedByUser
+      ? prev.ui
+      : { ...prev.ui, seenSeq, stoppedByUser };
+  return { ui: forgetSessions(ui, removed), ended, removed };
 }

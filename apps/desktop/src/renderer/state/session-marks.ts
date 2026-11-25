@@ -2,8 +2,8 @@
  * What the sidebar says about a session: its status mark and the line under its title.
  *
  * Precedence, highest first: needs you (a pending card) → queued for the model → working →
- * error → done, unread → idle. "Queued" has no protocol status yet; by convention the engine
- * reports "working" with a status message starting with "Queued" (the mock engine does this).
+ * error → done, unread → idle. A queued session is "working" with a `queuePosition`; the engine's
+ * status message is its own wording and is not read.
  */
 import { permissionNeed, toolActivity } from "../lib/tools.ts";
 import { indexOfId, itemIds } from "./transcript-events.ts";
@@ -27,6 +27,8 @@ export interface MarkInput {
   markedUnread: boolean;
   stoppedByUser: boolean;
   selected: boolean;
+  /** Sessions waiting for the model, this one included. Above 1, a queued row shows its place. */
+  queuedCount?: number;
 }
 
 export interface MarkInfo {
@@ -35,7 +37,26 @@ export interface MarkInfo {
 }
 
 export function isQueuedForModel(session: SessionView): boolean {
-  return session.status === "working" && (session.statusMessage?.startsWith("Queued") ?? false);
+  return session.status === "working" && session.queuePosition !== null;
+}
+
+/** 1 → "1st", 2 → "2nd", 11 → "11th", 23 → "23rd". */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n}${suffix}`;
+}
+
+/**
+ * "Queued: waits for the model", or its place in line when several sessions wait:
+ * "Queued: next in line for the model", "Queued: 2nd in line for the model".
+ */
+export function queuedSubtitle(position: number | null, queuedCount = 1): string {
+  if (position === null || (position === 1 && queuedCount <= 1)) {
+    return "Queued: waits for the model";
+  }
+  if (position === 1) return "Queued: next in line for the model";
+  return `Queued: ${ordinal(position)} in line for the model`;
 }
 
 export function isWorking(session: SessionView): boolean {
@@ -117,7 +138,7 @@ export function sessionMark(input: MarkInput): MarkInfo {
     return { mark: "needs-you", subtitle: needSubtitle(pending[0], items, session.waitingOn) };
   }
   if (isQueuedForModel(session)) {
-    return { mark: "queued", subtitle: session.statusMessage };
+    return { mark: "queued", subtitle: queuedSubtitle(session.queuePosition, input.queuedCount) };
   }
   if (isWorking(session)) {
     const tool = runningTool(session, items);

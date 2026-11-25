@@ -41,6 +41,19 @@
   color: var(--red);
 }
 
+.destructive {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--on-red);
+  font-weight: 600;
+}
+
+.destructive:hover:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
+  filter: brightness(0.94);
+}
+
 .ghost {
   border-color: transparent;
   background: none;
@@ -172,4 +185,52 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Alert dialogs (ConfirmDialog). */
+
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--scrim);
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 61;
+  transform: translate(-50%, -50%);
+  width: min(400px, calc(100vw - 32px));
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+  color: var(--ink);
+  outline: none;
+}
+
+.dialogTitle {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.dialogText {
+  color: var(--ink-2);
+  line-height: var(--leading);
+}
+
+.dialogText p {
+  margin: 0 0 6px;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }

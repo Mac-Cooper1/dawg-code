@@ -277,6 +277,88 @@ describe("rename and archive", () => {
   });
 });
 
+describe("session.delete", () => {
+  it("deletes a stored session: every connection with it open hears, later calls fail", async () => {
+    h = harness();
+    const a = await h.connect();
+    const b = await h.connect();
+    const c = await h.connect();
+    await a.request("session.resume", { sessionId: "broken-links" });
+    await b.request("session.resume", { sessionId: "broken-links" });
+    expect(await c.request("session.delete", { sessionId: "broken-links" })).toEqual({});
+    await flush();
+    for (const peer of [a, b]) {
+      expect(names(peer.of("broken-links"))).toEqual(["session.deleted"]);
+      expect(peer.problems).toEqual([]);
+    }
+    expect(c.of("broken-links")).toEqual([]);
+    const { sessions } = await c.request("session.list", { includeArchived: true });
+    expect(sessions.map((s) => s.id)).not.toContain("broken-links");
+    for (const failure of [
+      await a.failure("session.resume", { sessionId: "broken-links" }),
+      await a.failure("session.replay", { sessionId: "broken-links", afterSeq: 0 }),
+      await a.failure("session.rename", { sessionId: "broken-links", title: "x" }),
+      await b.failure("session.prompt", { sessionId: "broken-links", prompt: prompt("hi") }),
+      await c.failure("session.delete", { sessionId: "broken-links" }),
+    ]) {
+      expect(failure.code).toBe(ErrorCodes.SessionNotFound);
+    }
+  });
+
+  it("interrupts a running turn first, so the turn ends before the session goes", async () => {
+    h = harness();
+    const peer = await h.connect();
+    await peer.request("session.resume", { sessionId: "fix-split" });
+    await h.advance(5_000);
+    const before = peer.of("fix-split").length;
+    await peer.request("session.delete", { sessionId: "fix-split" });
+    await flush();
+    const after = peer.of("fix-split").slice(before);
+    const order = names(after);
+    expect(order.at(-1)).toBe("session.deleted");
+    expect(order.indexOf("turn.finished")).toBeLessThan(order.indexOf("session.status"));
+    expect(first(after, "turn.finished").payload.stopReason).toBe("interrupted");
+    expect(checkConformance(peer.of("fix-split"), { midSession: true })).toEqual([]);
+    // Nothing more plays for it.
+    await h.advance(200_000);
+    expect(peer.of("fix-split").at(-1)?.event).toBe("session.deleted");
+  });
+
+  it("frees the model for a session queued behind it", async () => {
+    h = harness();
+    const peer = await h.connect();
+    await peer.request("session.resume", { sessionId: "docs-search" });
+    await peer.request("session.delete", { sessionId: "fix-split" });
+    await h.advance(1_000);
+    expect(first(peer.of("docs-search"), "session.status").payload).toMatchObject({
+      status: "working",
+      message: "Working",
+      queuePosition: null,
+    });
+  });
+
+  it("stops a compaction, and leaves forks of the session working", async () => {
+    h = harness();
+    const peer = await h.connect();
+    const fork = await peer.request("session.fork", { sessionId: "broken-links" });
+    await peer.request("session.resume", { sessionId: "broken-links" });
+    await peer.request("session.command", { sessionId: "broken-links", name: "compact" });
+    await peer.request("session.delete", { sessionId: "broken-links" });
+    await flush();
+    expect(names(peer.of("broken-links"))).toEqual([
+      "session.status",
+      "compaction.started",
+      "compaction.finished",
+      "session.status",
+      "session.deleted",
+    ]);
+    expect(checkConformance(peer.of("broken-links"), { midSession: true })).toEqual([]);
+    await peer.request("session.prompt", { sessionId: fork.session.id, prompt: prompt("hi") });
+    await h.advance(60_000);
+    expect(names(peer.of(fork.session.id))).toContain("turn.finished");
+  });
+});
+
 describe("settings", () => {
   it("emits session.updated for mode, model and effort, and resets effort the model lacks", async () => {
     h = harness();
@@ -355,7 +437,10 @@ describe("commands", () => {
       name: "context",
     });
     expect(context.output).toContain("35,090 of 204,800 tokens");
+    expect(context.output).toContain("| System prompt | 4,112 |");
+    expect(context.output).toContain("| Messages |");
     expect(context.output).toContain("| Free |");
+    expect(context.output).toContain("Compacts on its own above 133,120 tokens (65%).");
     const unknown = await peer.failure("session.command", {
       sessionId: "fix-split",
       name: "deploy",
@@ -399,7 +484,19 @@ describe("commands", () => {
     const finished = first(events, "compaction.finished").payload;
     expect(finished).toMatchObject({ outcome: "completed", contextBefore: 18_649 });
     expect(finished.contextAfter).toBeLessThan(18_649);
-    expect(first(events, "usage.updated").payload.usage.contextUsed).toBe(finished.contextAfter);
+    const { usage } = first(events, "usage.updated").payload;
+    expect(usage.contextUsed).toBe(finished.contextAfter);
+    expect(usage.compactAt).toBe(133_120);
+    // The fixed parts stay; the conversation shrinks to what is left.
+    expect(usage.breakdown).toMatchObject({
+      systemPrompt: 4_112,
+      instructions: 1_186,
+      tools: 10_992,
+    });
+    const parts = usage.breakdown;
+    expect(parts && parts.systemPrompt + parts.instructions + parts.tools + parts.messages).toBe(
+      usage.contextUsed,
+    );
   });
 
   it("clears into a new open session in the same directory", async () => {

@@ -31,6 +31,7 @@ export function SidebarContainer() {
       onFork={(id) => run(actions.forkSession(id))}
       onMarkUnread={(id) => actions.markUnread(id)}
       onArchive={(id) => run(actions.archiveSession(id))}
+      onDelete={(id) => run(actions.deleteSession(id))}
       onOpenModelSettings={() => {
         actions.setSettingsPage("models");
         actions.setView("settings");

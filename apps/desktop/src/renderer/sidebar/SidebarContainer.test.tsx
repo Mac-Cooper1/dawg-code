@@ -66,6 +66,14 @@ describe.each(THEMES)("SidebarContainer (%s)", (theme) => {
     await waitFor(() => expect(field).toHaveFocus());
     await user.type(field, " v2{Enter}");
     expect(actions.renameSession).toHaveBeenCalledWith("docs", "Docs search page v2");
+
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByRole("button", { name: /^Docs search page/ }),
+    });
+    await user.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(actions.deleteSession).toHaveBeenCalledWith("docs");
   });
 
   it("opens Settings on the Models page from the footer", async () => {

@@ -1,3 +1,4 @@
+import type { CommandDisplay } from "@dawg/protocol";
 import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -163,7 +164,7 @@ describe.each(THEMES)("ToolCard (%s)", (theme) => {
     expect(bold?.className).toMatch(/bold/);
   });
 
-  it("prefers the live output of a finished command", () => {
+  it("prefers the live output of a finished command stored before output was reported", () => {
     const item = bashFailure({
       output: [
         { stream: "stdout", text: "F" },
@@ -195,6 +196,11 @@ describe.each(THEMES)("ToolCard (%s)", (theme) => {
         interrupted: false,
         backgroundTaskId: null,
         outputPath: "/tmp/out.txt",
+        output: "collected 50 items",
+        notes: [
+          "The command did not finish within 2 min and was stopped.",
+          "The output was 41,200 characters, so only its beginning and end are shown. The full output is saved in /tmp/out.txt.",
+        ],
       },
     });
     const { container } = renderInTheme(<ToolCard item={item} open env={makeEnv()} />, theme);
@@ -203,6 +209,40 @@ describe.each(THEMES)("ToolCard (%s)", (theme) => {
     const note = screen.getByText("The command did not finish within 2 min and was stopped.");
     expect(note.parentElement?.className).toMatch(/notes/);
     expect(screen.getByText(/^The output was 41,200 characters/)).toBeInTheDocument();
+  });
+
+  it("shows the output the engine reports, not the model's text taken apart", () => {
+    const item = toolItem({
+      state: "error",
+      content: [{ type: "text", text: "Error: Error: no such table\n\nExit code 2" }],
+      display: {
+        kind: "command",
+        command: "sqlite3 app.db .dump",
+        cwd: CWD,
+        exitCode: 2,
+        durationMs: 40,
+        timedOut: false,
+        interrupted: false,
+        backgroundTaskId: null,
+        outputPath: null,
+        output: "Error: no such table",
+        notes: [],
+      },
+    });
+    const { container } = renderInTheme(<ToolCard item={item} open env={makeEnv()} />, theme);
+    // The command's own "Error:" stays; the exit code is in the header, not in the notes.
+    expect(container.querySelector("pre")?.textContent).toBe("Error: no such table");
+    expect(screen.getByText("exit 2")).toBeInTheDocument();
+    expect(container.querySelector("[class*=notes]")).toBeNull();
+  });
+
+  it("says a command printed nothing when its output is empty", () => {
+    const item = toolItem({
+      content: [{ type: "text", text: "(no output)" }],
+      display: { ...(toolItem().display as CommandDisplay), output: "" },
+    });
+    renderInTheme(<ToolCard item={item} open env={makeEnv()} />, theme);
+    expect(screen.getByText("No output.")).toBeInTheDocument();
   });
 
   it("streams live output, a status line and the elapsed time while running", () => {
@@ -245,6 +285,8 @@ describe.each(THEMES)("ToolCard (%s)", (theme) => {
         interrupted: false,
         backgroundTaskId: null,
         outputPath: null,
+        output: "README.md",
+        notes: [],
       },
     });
     renderInTheme(<ToolCard item={item} open env={makeEnv()} />, theme);

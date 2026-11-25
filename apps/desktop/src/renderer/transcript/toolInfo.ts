@@ -190,14 +190,28 @@ const COMMAND_FOOTER_START = [
 ];
 
 export interface CommandOutput {
-  /** What the command printed, as a terminal would have shown it (escape codes included). */
+  /** What the command printed. */
   output: string;
   /** The engine's notes after it (timed out, cut short, …), shown muted under the output. */
   notes: string[];
 }
 
 /**
- * The output of a finished command, as the person would have seen it in a terminal.
+ * The output of a finished command: the display's `output` and `notes`, which the engine reports
+ * apart from what the model was given. Sessions stored before engines reported them (`output`
+ * null) fall back to taking the model's text apart (`finishedCommandOutput`).
+ */
+export function commandOutput(item: ToolCallItem): CommandOutput {
+  const display = item.display?.kind === "command" ? item.display : null;
+  if (display !== null && display.output !== null) {
+    return { output: display.output, notes: display.notes };
+  }
+  return finishedCommandOutput(item);
+}
+
+/**
+ * The fallback for sessions stored before engines reported `output` and `notes` on a command's
+ * display: the output of a finished command, as the person would have seen it in a terminal.
  *
  * The result `content` is what the model was given, not what the command printed: the engine
  * prefixes a failed call's text with "Error: " (loop/executor.ts `markAsError`) and the Bash tool
@@ -209,7 +223,7 @@ export interface CommandOutput {
  * - the last block after a blank line counts as the footer only when it starts with one of the
  *   engine's footer sentences; its "Exit code N" line (N being the exit code shown in the header)
  *   is dropped and the other notes are kept.
- * The real fix is a protocol field carrying the display output separately.
+ * Engines now send the display output separately, so only stored sessions take this path.
  */
 export function finishedCommandOutput(item: ToolCallItem): CommandOutput {
   const display = item.display?.kind === "command" ? item.display : null;

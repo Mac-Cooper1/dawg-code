@@ -7,6 +7,7 @@ import { Button } from "../ui/index.ts";
 import styles from "./Composer.module.css";
 import {
   compactLine,
+  compactMarker,
   contextHeading,
   contextLabel,
   contextSegments,
@@ -15,6 +16,10 @@ import {
 } from "./contextMeter.ts";
 
 const SWATCH_CLASS = {
+  systemPrompt: styles.swatchSystem,
+  instructions: styles.swatchInstructions,
+  tools: styles.swatchTools,
+  messages: styles.swatchMessages,
   cached: styles.swatchCached,
   rest: styles.swatchUsed,
   used: styles.swatchUsed,
@@ -40,8 +45,9 @@ function Ring(props: { fraction: number }) {
 }
 
 /**
- * The context meter pill ("74.2K / 204.8K") and its popover: how full the context is, what the
- * last request read from the cache, its speeds, when compaction starts, and Compact now.
+ * The context meter pill ("74.2K / 204.8K") and its popover: how full the context is and what
+ * fills it (system prompt, instructions, tools, messages), with a mark where compaction starts
+ * on its own; the last request's speeds and cache share; and Compact now.
  */
 export function ContextMeter(props: {
   context: ContextMeterView;
@@ -53,6 +59,8 @@ export function ContextMeter(props: {
   const headingId = useId();
   const segments = contextSegments(context);
   const lastLine = lastRequestLine(context);
+  const compact = compactLine(context);
+  const marker = compactMarker(context);
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -77,16 +85,25 @@ export function ContextMeter(props: {
           <div id={headingId} className={menu.label}>
             {contextHeading(context)}
           </div>
-          <div className={styles.stack} aria-hidden="true">
-            {segments
-              .filter((segment) => segment.key !== "free")
-              .map((segment) => (
-                <span
-                  key={segment.key}
-                  className={`${styles.stackPart} ${SWATCH_CLASS[segment.key]}`}
-                  style={{ width: `${segment.share * 100}%` }}
-                />
-              ))}
+          <div className={styles.stackFrame} aria-hidden="true">
+            <div className={styles.stack}>
+              {segments
+                .filter((segment) => segment.key !== "free" && segment.tokens > 0)
+                .map((segment) => (
+                  <span
+                    key={segment.key}
+                    className={`${styles.stackPart} ${SWATCH_CLASS[segment.key]}`}
+                    style={{ width: `${segment.share * 100}%` }}
+                  />
+                ))}
+            </div>
+            {marker !== null && (
+              <span
+                className={styles.compactMark}
+                data-testid="compact-mark"
+                style={{ left: `${marker * 100}%` }}
+              />
+            )}
           </div>
           <dl className={styles.breakdown}>
             {segments.map((segment) => (
@@ -101,7 +118,7 @@ export function ContextMeter(props: {
           </dl>
           <div className={`${menu.footer} ${styles.contextFooter}`}>
             {lastLine && <p className={styles.contextLine}>{lastLine}</p>}
-            <p className={styles.contextLine}>{compactLine(context)}</p>
+            {compact && <p className={styles.contextLine}>{compact}</p>}
             <Button
               kbd="/compact"
               disabled={context.compacting}

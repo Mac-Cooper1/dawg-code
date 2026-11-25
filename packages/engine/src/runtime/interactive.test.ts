@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text, toolCall } from "@dawg/mock-model";
 import { afterEach, describe, expect, it } from "vitest";
@@ -85,6 +85,8 @@ describe("plan mode end to end", () => {
     const session = await h.engine.createSession({ cwd: h.project, mode: "plan" });
     await session.prompt(ask("plan"));
     const proposed = await h.waitFor((e) => e.event === "plan.proposed");
+    // Started in plan mode: approving would lead to the default mode.
+    expect(proposed.payload.modeBeforePlan).toBe("default");
     session.respondPlan(String(proposed.payload.requestId), {
       decision: "reject",
       message: "add tests first",
@@ -101,9 +103,60 @@ describe("plan mode end to end", () => {
     const session = await h.engine.createSession({ cwd: h.project, mode: "acceptEdits" });
     await session.prompt(ask("plan"));
     const proposed = await h.waitFor((e) => e.event === "plan.proposed");
+    // The request says where an approval without a mode leads.
+    expect(proposed.payload.modeBeforePlan).toBe("acceptEdits");
+    expect(session.snapshot().pending).toEqual([
+      expect.objectContaining({ kind: "plan", modeBeforePlan: "acceptEdits" }),
+    ]);
     session.respondPlan(String(proposed.payload.requestId), { decision: "approve" });
     await session.waitForIdle();
     expect(session.mode).toBe("acceptEdits");
+  });
+
+  it("names the mode before plan mode after a resume, and default when it is turned off", async () => {
+    h = await startHarness({
+      script: [
+        toolCall("ExitPlanMode", { plan: "p" }),
+        text("ok"),
+        toolCall("ExitPlanMode", { plan: "q" }),
+        text("ok"),
+      ],
+    });
+    const harness = h;
+    const first = await h.engine.createSession({ cwd: h.project, mode: "acceptEdits" });
+    first.setMode("plan");
+    await first.close();
+    const resumed = await h.engine.resumeSession(first.id);
+    expect(resumed.mode).toBe("plan");
+    await resumed.prompt(ask("plan"));
+    const proposed = await h.waitFor((e) => e.event === "plan.proposed");
+    expect(proposed.payload.modeBeforePlan).toBe("acceptEdits");
+    resumed.respondPlan(String(proposed.payload.requestId), { decision: "approve" });
+    await resumed.waitForIdle();
+    expect(resumed.mode).toBe("acceptEdits");
+
+    // Bypass mode, turned off by settings by the time the session is resumed.
+    const second = await h.engine.createSession({ cwd: h.project, mode: "bypassPermissions" });
+    second.setMode("plan");
+    await second.close();
+    await mkdir(path.join(h.project, ".dawg"), { recursive: true });
+    await writeFile(
+      path.join(h.project, ".dawg", "settings.json"),
+      JSON.stringify({ permissions: { disableBypassPermissionsMode: "disable" } }),
+    );
+    const again = await h.engine.resumeSession(second.id);
+    await again.prompt(ask("plan"));
+    const next = await h.waitFor(
+      (e) => e.event === "plan.proposed" && e.payload.sessionId === again.id,
+    );
+    expect(next.payload.modeBeforePlan).toBe("default");
+    expect(again.snapshot().pending).toEqual([
+      expect.objectContaining({ kind: "plan", modeBeforePlan: "default" }),
+    ]);
+    again.respondPlan(String(next.payload.requestId), { decision: "approve" });
+    await again.waitForIdle();
+    expect(again.mode).toBe("default");
+    expect(harness.problems).toEqual([]);
   });
 
   it("keeps plan mode when nobody can approve plans", async () => {

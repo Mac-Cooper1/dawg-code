@@ -3,7 +3,18 @@
  * Sessions are addressed by their project path (the directory they were started in) and id.
  */
 import { randomBytes } from "node:crypto";
-import { link, mkdir, open, rm, stat, truncate, unlink } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  truncate,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type { SessionStatus } from "@dawg/protocol";
 import type { Message } from "../contracts/index.ts";
@@ -88,10 +99,12 @@ export interface ListOptions {
 
 export interface DeleteResult {
   /**
-   * Sessions forked (directly or through other forks) from the deleted one. Their copied records
-   * may name files in its `tool-results/` folder, so that folder is kept while any exist.
+   * Sessions forked (directly or through other forks, deleted ones included) from the deleted
+   * one. Their copied records may name files in its `tool-results/` folder, so that folder is kept
+   * while any exist, and removed by the delete that leaves none.
    */
   dependents: string[];
+  /** Whether the folder was kept: for dependents, or for a session that could not be read. */
   keptToolResults: boolean;
 }
 
@@ -278,8 +291,13 @@ export class SessionStore {
   }
 
   /**
-   * Deletes a session's transcript and side files. Refused while any writer has it open. The
-   * `tool-results/` folder is kept while forks of it exist (see `DeleteResult`).
+   * Deletes a session's transcript and side files (its events, its runtime cache, anything else in
+   * its folder). Refused while any writer has it open.
+   *
+   * Forks copy their parent's records, which may name files in the parent's `tool-results/`. So
+   * while forks of it exist (directly or through other forks, deleted ones included), the folder
+   * is kept with only `tool-results/` and a marker naming the session's own parent (see
+   * `DeleteResult`). Every delete then removes the kept folders that no remaining session needs.
    */
   async delete(cwd: string, sessionId: string): Promise<DeleteResult> {
     const projectDir = await this.projectDir(cwd);
@@ -294,26 +312,41 @@ export class SessionStore {
     const lock = await acquireLock(paths.lock, `Session ${sessionId}`);
     try {
       const summaries = await refreshIndex(projectDir);
-      const parentOf = new Map(summaries.map((s) => [s.id, s.forkedFrom?.sessionId ?? null]));
+      const kept = await readKeptFolders(projectDir);
+      const self = summaries.find((s) => s.id === sessionId);
+      const parentOf = new Map<string, string | null>([
+        ...kept,
+        ...summaries.map((s) => [s.id, s.forkedFrom?.sessionId ?? null] as const),
+      ]);
+      const reaches = (id: string, target: string) => ancestors(id, parentOf).has(target);
       const dependents = summaries
-        .filter((s) => {
-          let ancestor = parentOf.get(s.id) ?? null;
-          const seen = new Set<string>();
-          while (ancestor !== null && !seen.has(ancestor)) {
-            if (ancestor === sessionId) return true;
-            seen.add(ancestor);
-            ancestor = parentOf.get(ancestor) ?? null;
-          }
-          return false;
-        })
+        .filter((s) => s.id !== sessionId && reaches(s.id, sessionId))
         .map((s) => s.id);
+      // A session whose transcript cannot be read may be a fork of this one.
+      const unsure = summaries.some((s) => s.id !== sessionId && s.damaged !== null);
 
       await unlink(paths.file);
-      const keptToolResults = dependents.length > 0;
-      if (!keptToolResults) {
+      const keptToolResults = dependents.length > 0 || unsure;
+      if (keptToolResults) {
+        const entries = await readdir(paths.dir).catch(() => [] as string[]);
+        for (const entry of entries) {
+          if (entry === path.basename(paths.toolResults)) continue;
+          await rm(path.join(paths.dir, entry), { recursive: true, force: true });
+        }
+        // Written even with no tool results: the marker keeps the chain to older ones whole.
+        const forkedFrom = self?.forkedFrom?.sessionId ?? null;
+        await mkdir(paths.dir, { recursive: true });
+        await writeFile(
+          path.join(paths.dir, DELETED_MARKER),
+          `${JSON.stringify({ v: 1, forkedFrom })}\n`,
+        );
+        kept.set(sessionId, forkedFrom);
+      } else {
         await rm(paths.dir, { recursive: true, force: true });
       }
       await removeIndexEntry(projectDir, sessionId);
+      const remaining = summaries.filter((s) => s.id !== sessionId);
+      await removeUnneeded(projectDir, kept, remaining);
       return { dependents, keptToolResults };
     } finally {
       await lock.release();
@@ -413,5 +446,94 @@ export class SessionStore {
     } finally {
       await unlink(tmp).catch(() => {});
     }
+  }
+}
+
+/** In the folder of a deleted session kept for its forks: `{ v: 1, forkedFrom }`. */
+const DELETED_MARKER = "deleted.json";
+
+/**
+ * Folders of deleted sessions kept for their forks, with each one's parent: those with a readable
+ * marker and no transcript. A folder with a missing or bad marker is not listed, so it is kept.
+ */
+async function readKeptFolders(projectDir: string): Promise<Map<string, string | null>> {
+  const kept = new Map<string, string | null>();
+  const dir = sessionsDir(projectDir);
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    let paths: SessionPaths;
+    try {
+      paths = sessionPaths(projectDir, entry.name);
+    } catch {
+      continue;
+    }
+    const forkedFrom = await readMarker(paths.dir);
+    if (forkedFrom === undefined) continue;
+    if (await exists(paths.file)) continue;
+    kept.set(entry.name, forkedFrom);
+  }
+  return kept;
+}
+
+/** The parent a marker names (null for none), or undefined when there is no readable marker. */
+async function readMarker(sessionDir: string): Promise<string | null | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path.join(sessionDir, DELETED_MARKER), "utf8")) as {
+      v?: unknown;
+      forkedFrom?: unknown;
+    };
+    if (parsed.v !== 1) return undefined;
+    if (parsed.forkedFrom === null) return null;
+    return typeof parsed.forkedFrom === "string" ? parsed.forkedFrom : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every session a session was forked from, directly or through others. */
+function ancestors(id: string, parentOf: ReadonlyMap<string, string | null>): Set<string> {
+  const found = new Set<string>();
+  let current = parentOf.get(id) ?? null;
+  while (current !== null && !found.has(current)) {
+    found.add(current);
+    current = parentOf.get(current) ?? null;
+  }
+  return found;
+}
+
+/**
+ * Removes the kept folders no remaining session reaches through its chain of parents. Nothing
+ * is removed while a remaining session's transcript cannot be read, since it may need any of them.
+ */
+async function removeUnneeded(
+  projectDir: string,
+  kept: ReadonlyMap<string, string | null>,
+  remaining: readonly SessionSummary[],
+): Promise<void> {
+  if (kept.size === 0 || remaining.some((s) => s.damaged !== null)) return;
+  const parentOf = new Map<string, string | null>([
+    ...kept,
+    ...remaining.map((s) => [s.id, s.forkedFrom?.sessionId ?? null] as const),
+  ]);
+  const needed = new Set<string>();
+  for (const s of remaining) for (const id of ancestors(s.id, parentOf)) needed.add(id);
+  for (const id of kept.keys()) {
+    if (needed.has(id)) continue;
+    const paths = sessionPaths(projectDir, id);
+    // Never a folder whose session exists (one created again under the same id).
+    if (await exists(paths.file)) continue;
+    await rm(paths.dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function exists(file: string): Promise<boolean> {
+  try {
+    await stat(file);
+    return true;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return false;
+    // Unsure: count it as there, which keeps folders rather than removing them.
+    return true;
   }
 }

@@ -4,11 +4,10 @@
  * The reducer must remember a few facts that no view model shows: when the message in flight
  * started (a replay drops the deltas that would time the reasoning), the first read-progress
  * sample of a request (for the read rate), the usage totals when a turn started (for the turn
- * summary), the mode before plan mode, and hidden tool calls (TodoWrite, AskUserQuestion,
- * ExitPlanMode) in case one finishes without its own item. Keeping them on the session keeps the
- * reducer `(EngineSlice, input) => EngineSlice`, and a replay rebuilds them like everything else.
+ * summary), and hidden tool calls (TodoWrite, AskUserQuestion, ExitPlanMode) in case one finishes
+ * without its own item. Keeping them on the session keeps the reducer
+ * `(EngineSlice, input) => EngineSlice`, and a replay rebuilds them like everything else.
  */
-import type { PermissionMode } from "@dawg/protocol";
 
 /** Session usage totals when a turn started, so its summary can count over the turn. */
 export interface UsageTotals {
@@ -39,10 +38,6 @@ export interface SessionInternals {
    * snapshot sets to the current value while a replay is still walking through history.
    */
   eventTotals: UsageTotals | null;
-  /** The mode as of the latest `session.updated` applied, or null before any. */
-  eventMode: PermissionMode | null;
-  /** The mode before the session last switched to plan mode. */
-  modeBeforePlan: PermissionMode | null;
   hiddenCalls: Readonly<Record<string, HiddenCall>>;
 }
 
@@ -53,8 +48,6 @@ export function emptyInternals(): SessionInternals {
     progressStart: null,
     turnStart: null,
     eventTotals: null,
-    eventMode: null,
-    modeBeforePlan: null,
     hiddenCalls: {},
   };
 }

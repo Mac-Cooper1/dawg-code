@@ -19,7 +19,7 @@ One of:
 | Source | How |
 | --- | --- |
 | `--endpoint <url>` | Any OpenAI-compatible root, e.g. `http://127.0.0.1:8080/v1` (a `/v1` left off is tried once). The models are listed, and the real context window is taken from what the server reports: llama-server's `/props`, the model listing, or, when the listing says nothing, Ollama's or LM Studio's own API on the same host. `--model` picks the model; it is required when the server lists several and none is loaded. |
-| `--model-file <path.gguf>` | Runs the file with the bundled llama-server under the runtime supervisor, on 127.0.0.1 with a per-launch key, and stops it on every way out (normal exit, error, Ctrl+C, SIGTERM; the supervisor's watchdog covers a killed process). `--context-size <tokens>` sets the window per conversation (default 32768; the server is given two slots, one for the conversation and one for titles, so `-c` is twice that). If the runtime has not been fetched: `pnpm fetch-runtime`, or set `DAWG_RUNTIME_BIN`. |
+| `--model-file <path.gguf>` | Runs the file with the bundled llama-server under the runtime supervisor, on 127.0.0.1 with a per-launch key, and stops it on every way out (normal exit, error, Ctrl+C, SIGTERM; the supervisor's watchdog covers a killed process). `--context-size <tokens>` sets the window per conversation (default 32768; the server is given two slots, one for conversations and one for titles, so `-c` is twice that). Sessions running at once (several clients of `dawg serve`) take turns on the conversation slot: the engine schedules it, and a session that waits shows as queued (`session.status` with `queuePosition`). If the runtime has not been fetched: `pnpm fetch-runtime`, or set `DAWG_RUNTIME_BIN`. |
 | neither | `DAWG_ENDPOINT` is used as `--endpoint`; without it the command explains what to pass and exits 2. |
 
 **The API key** comes from `DAWG_API_KEY` only, never from a flag. It is given to the HTTP client
@@ -63,12 +63,13 @@ Standard output holds the result and nothing else; everything else goes to stand
   ```json
   { "type": "result", "result": "Fixed the rounding.", "stopReason": "completed", "isError": false,
     "error": null, "sessionId": "...", "turnId": "turn-4", "numRequests": 5, "durationMs": 8123,
-    "usage": { "contextWindow": 32768, "contextUsed": 9120, "last": { ... }, "totals": { ... } } }
+    "usage": { "contextWindow": 32768, "contextUsed": 9120, "last": { ... }, "totals": { ... },
+               "compactAt": 21299, "breakdown": { "systemPrompt": ..., "instructions": ..., ... } } }
   ```
 
   `stopReason` is `completed`, `turn_limit`, `interrupted` or `error`; `error` is the protocol's
   `ErrorInfo` when it is `error`. `numRequests` counts this run's model requests; `usage` is the
-  session's (totals include earlier runs of a resumed session).
+  session's (totals include earlier runs of a resumed session), in the protocol's `Usage` shape.
 - `stream-json`: every protocol event of the session, one JSON object per line, exactly as the
   protocol sends it: `{"event": "message.delta", "payload": {"sessionId": ..., "seq": ..., ...}}`
   (see `packages/protocol/README.md`). The last turn event is `turn.finished`.
@@ -97,8 +98,8 @@ result) and the command exits 130; a second one exits at once. SIGTERM does the 
 (`/help` lists them; `/exit` quits). The reply streams as it is written, each tool call gets one
 line with its outcome, and edits show a compact diff. Permission requests ask
 `y` (allow once), `a` (allow always: a rule is saved to `.dawg/settings.local.json`) or
-`n [reason]`; questions take an option number or free text; plans take `y`, `e` (approve and
-accept edits) or `n [feedback]`. Ctrl+C interrupts a running turn; a second Ctrl+C, or one at the
+`n [reason]`; questions take an option number or free text; plans take `y` (approve; the prompt
+names the mode that follows), `e` (approve and accept edits) or `n [feedback]`. Ctrl+C interrupts a running turn; a second Ctrl+C, or one at the
 prompt, quits. Plain text only: no colours or cursor movement, so it works through pipes, where the
 answers to prompts are simply the next lines of input. The end of input quits after the running
 turn, answering anything still asked with "no".

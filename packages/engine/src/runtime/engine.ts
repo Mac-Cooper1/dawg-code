@@ -3,7 +3,7 @@
  * the command-line tool both sit on this API. See README.md in this folder.
  */
 import { randomUUID } from "node:crypto";
-import { open as openFile, readdir, readFile, stat } from "node:fs/promises";
+import { open as openFile, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadInstructions, loadSettings } from "@dawg/compat";
 import type {
@@ -13,6 +13,7 @@ import type {
 } from "@dawg/protocol";
 import { DEFAULT_TOOL_LIMITS } from "../contracts/tools.ts";
 import { DEFAULT_LOOP_LIMITS, type IdKind } from "../loop/types.ts";
+import { type SlotPool, SlotScheduler } from "../model/slots.ts";
 import { createPermissionEngine } from "../permissions/index.ts";
 import {
   type SessionRecord,
@@ -50,6 +51,10 @@ export class Engine {
   readonly #ctx: EngineContext;
   readonly #open = new Map<string, SessionRuntime>();
   readonly #listeners = new Set<(event: LoggedEvent) => void>();
+  /** Sessions `deleteSession` is deleting right now; nothing may open them meanwhile. */
+  readonly #deleting = new Set<string>();
+  /** One scheduler per pool of model slots, so sessions on one server share its slots. */
+  readonly #schedulers = new WeakMap<SlotPool, SlotScheduler>();
 
   constructor(options: EngineOptions) {
     const clock = options.clock ?? Date.now;
@@ -89,6 +94,14 @@ export class Engine {
       clock,
       newId: options.newId ?? defaultNewId,
       environment: options.environment ?? gatherEnvironment,
+      slots: (pool) => {
+        let scheduler = this.#schedulers.get(pool);
+        if (scheduler === undefined) {
+          scheduler = new SlotScheduler(pool.slots);
+          this.#schedulers.set(pool, scheduler);
+        }
+        return scheduler;
+      },
       publish: (event) => {
         for (const listener of this.#listeners) {
           try {
@@ -195,6 +208,7 @@ export class Engine {
     sessionId: string,
     options: OpenSessionOptions = {},
   ): Promise<SessionRuntime> {
+    this.#assertNotDeleting(sessionId);
     const live = this.#open.get(sessionId);
     if (live !== undefined) {
       if (options.capabilities !== undefined) live.setCapabilities(options.capabilities);
@@ -209,6 +223,7 @@ export class Engine {
    * even mid-turn: "end" then stops before the running turn.
    */
   async forkSession(sessionId: string, options: ForkSessionOptions = {}): Promise<SessionRuntime> {
+    this.#assertNotDeleting(sessionId);
     const cwd = await this.#locate(sessionId);
     if (options.cwd !== undefined && path.resolve(options.cwd) !== cwd) {
       throw new RuntimeError(
@@ -260,6 +275,7 @@ export class Engine {
   }
 
   async renameSession(sessionId: string, title: string): Promise<ProtocolSummary> {
+    this.#assertNotDeleting(sessionId);
     const live = this.#open.get(sessionId);
     if (live !== undefined) return live.rename(title);
     const cwd = await this.#locate(sessionId);
@@ -268,11 +284,57 @@ export class Engine {
   }
 
   async archiveSession(sessionId: string, archived = true): Promise<ProtocolSummary> {
+    this.#assertNotDeleting(sessionId);
     const live = this.#open.get(sessionId);
     if (live !== undefined) return live.setArchived(archived);
     const cwd = await this.#locate(sessionId);
     await this.#withStoreErrors(() => this.store.archive(cwd, sessionId, archived));
     return this.#storedSummary(cwd, sessionId);
+  }
+
+  /**
+   * Deletes a stored session for good, open or not. An open one is closed first: a running turn
+   * or compaction is interrupted (its `turn.finished` comes first), then `session.deleted` goes
+   * out as its last event. Forks of it keep working. Refused while another process has it open.
+   * Meanwhile nothing may open, fork, rename or archive it, so no other window can reopen it
+   * half-way; a delete that fails leaves it as it was.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    this.#assertNotDeleting(sessionId);
+    this.#deleting.add(sessionId);
+    try {
+      await this.#delete(sessionId);
+    } finally {
+      this.#deleting.delete(sessionId);
+    }
+  }
+
+  async #delete(sessionId: string): Promise<void> {
+    const cwd = await this.#locate(sessionId);
+    await this.#open.get(sessionId)?.closeDeleted();
+    try {
+      await this.store.delete(cwd, sessionId);
+    } catch (error) {
+      if (error instanceof SessionStoreError && error.code === "not-found") {
+        throw new RuntimeError("SessionNotFound", `No session ${sessionId}.`, { cause: error });
+      }
+      if (error instanceof SessionStoreError && error.code === "locked") {
+        throw new RuntimeError(
+          "InvalidState",
+          "The session is open in another process, such as dawg in a terminal; close it there before deleting it.",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    // Plans are saved as <storeRoot>/plans/<session id>-<request id>.md. Forks never name them.
+    const plans = path.join(this.#ctx.storeRoot, "plans");
+    const names = await readdir(plans).catch(() => [] as string[]);
+    await Promise.all(
+      names
+        .filter((name) => name.startsWith(`${sessionId}-`) && name.endsWith(".md"))
+        .map((name) => rm(path.join(plans, name), { force: true }).catch(() => {})),
+    );
   }
 
   /** Stored events after a sequence number, whether or not the session is open. */
@@ -334,6 +396,7 @@ export class Engine {
     options: OpenSessionOptions,
     forkPoint: ForkPoint | null,
   ): Promise<SessionRuntime> {
+    this.#assertNotDeleting(sessionId);
     const ctx = this.#ctx;
     const writer = await this.#withStoreErrors(() => this.store.open(cwd, sessionId));
     try {
@@ -419,6 +482,12 @@ export class Engine {
     }
   }
 
+  #assertNotDeleting(sessionId: string): void {
+    if (this.#deleting.has(sessionId)) {
+      throw new RuntimeError("InvalidState", "This session is being deleted.");
+    }
+  }
+
   /** The working directory a stored session is filed under. */
   async #locate(sessionId: string): Promise<string> {
     const live = this.#open.get(sessionId);
@@ -466,6 +535,7 @@ export class Engine {
       createdAt: Date.parse(s.createdAt),
       lastActivityAt: Date.parse(s.lastActivity),
       status: sidecar?.lastTurnFailed || s.status === "error" ? "error" : "idle",
+      queuePosition: null,
       mode: sidecar?.mode ?? "default",
       model: sidecar?.model ?? null,
       effort: sidecar?.effort ?? null,
@@ -490,6 +560,7 @@ export class Engine {
       createdAt: Date.parse(snapshot.meta.time),
       lastActivityAt: Date.parse(snapshot.lastTime),
       status: sidecar?.lastTurnFailed ? "error" : "idle",
+      queuePosition: null,
       mode: snapshot.state.mode ?? "default",
       model: snapshot.state.model,
       effort: snapshot.state.effort,

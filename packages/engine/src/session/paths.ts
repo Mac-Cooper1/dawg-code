@@ -5,6 +5,8 @@
  *   <root>/projects/<project-key>/sessions/<id>.jsonl     the transcript
  *   <root>/projects/<project-key>/sessions/<id>.lock      present while a writer has it open
  *   <root>/projects/<project-key>/sessions/<id>/tool-results/
+ *   <root>/projects/<project-key>/sessions/<id>/events.jsonl, runtime.json   the runtime's files
+ *   <root>/projects/<project-key>/sessions/<id>/deleted.json   a deleted session kept for its forks
  *   <root>/projects/<project-key>/sessions/index.json     the listing cache
  *
  * The project key is the project path with every character other than ASCII letters and digits

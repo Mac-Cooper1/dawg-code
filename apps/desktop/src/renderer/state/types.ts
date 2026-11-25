@@ -18,6 +18,7 @@
 import type {
   CommandInfo,
   ContentPart,
+  ContextBreakdown,
   EngineEvent,
   ErrorInfo,
   FileMention,
@@ -177,7 +178,10 @@ export interface PlanItem extends ItemBase {
   planPath: string | null;
   state: DecisionState;
   response: PlanResponse | null;
-  /** The mode before the session entered plan mode, for "Approve returns to Ask first". */
+  /**
+   * From the request: the mode approving returns to unless the answer names one, for "Approve
+   * returns to Ask first". Null in plans stored before engines reported it.
+   */
   modeBeforePlan: PermissionMode | null;
 }
 
@@ -279,8 +283,13 @@ export interface SessionView {
   loaded: boolean;
   status: SessionStatus;
   waitingOn: "permission" | "question" | "plan" | null;
-  /** The engine's short sidebar line from `session.status`. */
+  /** The engine's short sidebar line from `session.status`. Shown as is, never parsed. */
   statusMessage: string | null;
+  /**
+   * Set while the session's turn waits for a model busy with other sessions (1 = next), from
+   * `session.status`, snapshots and list summaries. `status` is then "working".
+   */
+  queuePosition: number | null;
   modelInfo: ModelInfo | null;
   additionalDirectories: string[];
   tasks: TaskItem[];
@@ -295,7 +304,7 @@ export interface SessionView {
   highWaterSeq: number;
   /**
    * The reducer's bookkeeping between events (message start, read-rate sample, usage totals at
-   * turn start, the mode before plan mode, hidden tool calls). Not for display.
+   * turn start, hidden tool calls). Not for display.
    */
   internals: SessionInternals;
 }
@@ -411,7 +420,8 @@ export interface SidebarRow {
   markLabel: string;
   /**
    * "Working: editing money.py", "Needs you: run a command", "Done, not opened yet",
-   * "Queued: waits for the model", "Error: the model stopped responding", "Stopped by you", or null.
+   * "Queued: waits for the model" (or "Queued: 2nd in line for the model" when several wait),
+   * "Error: the model stopped responding", "Stopped by you", or null.
    */
   subtitle: string | null;
   /** "now" while working; else "3m", "1h", "Yesterday", "Mon", "Nov 3". */
@@ -473,8 +483,6 @@ export interface TranscriptView {
    * this lives beside the items, not in them.)
    */
   queuedTurnIds: Readonly<Record<string, true>>;
-  /** The session's mode now, for the plan card's "Approve returns to …". */
-  mode: PermissionMode;
   /** The session's working directory, to show paths relative to it. */
   cwd: string;
 }
@@ -493,10 +501,15 @@ export interface ContextMeterView {
     completionTokensPerSecond: number | null;
   } | null;
   /**
-   * Fraction of the window at which compaction starts on its own. The protocol does not report
-   * it yet; this is the engine's documented default, 0.65.
+   * The context size, in tokens, above which the engine compacts on its own before a turn. Null
+   * when it never does, and in sessions stored before engines reported it.
    */
-  compactAt: number;
+  compactAt: number | null;
+  /**
+   * What fills `used`: system prompt, instructions, tools and messages, adding up to `used`.
+   * Null in sessions stored before engines reported it.
+   */
+  breakdown: ContextBreakdown | null;
   compacting: boolean;
 }
 
@@ -587,6 +600,13 @@ export interface AppActions {
   renameSession(id: SessionId, title: string): Promise<void>;
   forkSession(id: SessionId): Promise<SessionId | null>;
   archiveSession(id: SessionId, archived?: boolean): Promise<void>;
+  /**
+   * Deletes the session for good (`session.delete`; the engine stops a running turn first). The
+   * session leaves the store, its queued messages are dropped, and when it was selected a
+   * neighbour in the sidebar is selected instead (or nothing). The same happens when
+   * `session.deleted` arrives because another window deleted it.
+   */
+  deleteSession(id: SessionId): Promise<void>;
   markUnread(id: SessionId): void;
 
   // --- Composer --------------------------------------------------------------------------------
@@ -652,6 +672,8 @@ export type ReducerInput =
   | { type: "summaries"; sessions: SessionSummary[] }
   /** A `session.replay` page, applied in order through the same event path. */
   | { type: "replay"; sessionId: SessionId; events: EngineEvent[]; done: boolean }
+  /** The session was deleted (`session.delete` succeeded): it leaves the state. */
+  | { type: "deleted"; sessionId: SessionId }
   /** The answer of a command that answered at once. */
   | {
       type: "command-output";

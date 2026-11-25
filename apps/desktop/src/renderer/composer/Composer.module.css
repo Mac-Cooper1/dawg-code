@@ -253,10 +253,16 @@
   width: 350px;
 }
 
+/* The bar, with room above and below for the compaction mark. */
+.stackFrame {
+  position: relative;
+  margin: 4px 9px 8px;
+  padding: 2px 0;
+}
+
 .stack {
   display: flex;
   height: 8px;
-  margin: 4px 9px 8px;
   border-radius: 4px;
   overflow: hidden;
   background: var(--line);
@@ -265,6 +271,24 @@
 .stackPart {
   display: block;
   height: 100%;
+  flex: none;
+}
+
+/* A gap the colour of the popover between parts, so neighbours never run together. */
+.stackPart + .stackPart {
+  box-sizing: content-box;
+  border-left: 2px solid var(--panel);
+}
+
+/* Where the engine compacts on its own. */
+.compactMark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--ink);
 }
 
 .breakdown {
@@ -297,6 +321,26 @@
   height: 8px;
   border-radius: 2px;
   flex: none;
+}
+
+/*
+ * What fills the context. Checked for colour-blind and normal-vision separation between
+ * neighbours in both themes; the rows under the bar name every part.
+ */
+.swatchSystem {
+  background: var(--ink-2);
+}
+
+.swatchInstructions {
+  background: color-mix(in srgb, var(--acc-text) 75%, var(--panel));
+}
+
+.swatchTools {
+  background: var(--blue);
+}
+
+.swatchMessages {
+  background: var(--acc-text);
 }
 
 .swatchCached {

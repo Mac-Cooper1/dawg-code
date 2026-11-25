@@ -12,6 +12,7 @@ import type {
 } from "../contracts/prompt.ts";
 import type { AnyTool, ToolLimits } from "../contracts/tools.ts";
 import type { IdKind } from "../loop/types.ts";
+import type { SlotPool, SlotScheduler } from "../model/slots.ts";
 import type { SessionStore } from "../session/index.ts";
 import type { EnvironmentInput } from "./environment.ts";
 import type { LoggedEvent } from "./event-log.ts";
@@ -40,6 +41,8 @@ export interface EngineContext {
   clock(): number;
   newId(kind: IdKind): string;
   environment(input: EnvironmentInput): Promise<SessionEnvironment>;
+  /** The scheduler of a pool of model slots: one per pool object, shared by every session. */
+  slots(pool: SlotPool): SlotScheduler;
   /** Hands an event to the engine's own listeners. */
   publish(event: LoggedEvent): void;
   /** Called once when a session has closed. */

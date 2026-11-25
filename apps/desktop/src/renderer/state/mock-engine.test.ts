@@ -105,6 +105,47 @@ describe("with the mock engine", () => {
     });
   });
 
+  it.skipIf(!built)(
+    name("deletes a session in one window, and the other window drops it too"),
+    async () => {
+      const engine = newEngine() as MockEngine;
+      engines.push(engine);
+      const windows = [0, 1].map(() => {
+        const bridge = createFakeBridge({
+          engine: {
+            serve: (port) => {
+              engine.connect(createMessagePortTransport(port as unknown as MessagePortLike));
+            },
+          },
+        });
+        return { bridge, store: createAppStore({ bridge }) };
+      });
+      teardown = () => {
+        for (const window of windows) {
+          window.store.getState().actions.stop();
+          window.bridge.close();
+        }
+      };
+      const [a, b] = windows.map((window) => () => window.store.getState());
+      if (!a || !b) return;
+      for (const state of [a, b]) {
+        await state().actions.start();
+        state().actions.selectSession("broken-links");
+        await vi.waitFor(() => expect(state().sessions["broken-links"]?.loaded).toBe(true));
+      }
+      await a().actions.deleteSession("broken-links");
+      expect(a().sessions["broken-links"]).toBeUndefined();
+      await vi.waitFor(() => expect(b().sessions["broken-links"]).toBeUndefined());
+      for (const state of [a, b]) {
+        const selected = state().layout.selectedSessionId;
+        expect(selected).not.toBeNull();
+        expect(selected).not.toBe("broken-links");
+        await vi.waitFor(() => expect(state().sessions[selected ?? ""]?.loaded).toBe(true));
+        expect(state().notices).toEqual([]);
+      }
+    },
+  );
+
   it.skipIf(!built)(name("survives an engine restart from scratch"), async () => {
     const { store, bridge, swap } = setup();
     await store.getState().actions.start();

@@ -138,6 +138,62 @@ describe("Bash results", () => {
   });
 });
 
+describe("Bash display for the app", () => {
+  it("gives the output alone, with no notes, when the command succeeds", async () => {
+    const { out } = await session().call({ command: "printf 'a\\nb\\n\\n'" });
+    expect(out.display).toMatchObject({ exitCode: 0, output: "a\nb", notes: [] });
+  });
+
+  it("keeps the exit code out of the output and the notes", async () => {
+    const { out, text } = await session().call({ command: "echo partial; exit 1" });
+    expect(text).toBe("partial\n\nExit code 1");
+    expect(out.display).toMatchObject({ exitCode: 1, output: "partial", notes: [] });
+  });
+
+  it("gives an empty output, never the stand-in, when nothing was printed", async () => {
+    const quiet = await session().call({ command: "true" });
+    expect(quiet.text).toBe("(no output)");
+    expect(quiet.out.display).toMatchObject({ output: "", notes: [] });
+    const failed = await session().call({ command: "false" });
+    expect(failed.out.display).toMatchObject({ exitCode: 1, output: "", notes: [] });
+  });
+
+  it("puts a timeout in the notes", async () => {
+    const { out } = await session().call({ command: "echo started; sleep 5", timeout: 300 });
+    expect(out.display).toMatchObject({
+      timedOut: true,
+      output: "started",
+      notes: ["The command did not finish within 300 ms and was stopped."],
+    });
+  });
+
+  it("says where the full output is when it was cut", async () => {
+    const { out, text, saved } = await session().call(
+      { command: "seq 1 50000" },
+      { limits: { bashMaxOutputChars: 1000 } },
+    );
+    const savedPath = saved[0]?.path ?? "";
+    if (out.display?.kind !== "command") throw new Error("no command display");
+    const { output, notes } = out.display;
+    expect(out.display.outputPath).toBe(savedPath);
+    expect(output?.startsWith("1\n2\n3\n")).toBe(true);
+    expect(output?.endsWith("49999\n50000")).toBe(true);
+    expect(output).toContain("characters omitted");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/^The output was [\d,]+ characters, so only its beginning and end/);
+    expect(notes[0]).toContain(savedPath);
+    expect(text).toBe(`${output}\n\n${notes[0]}`);
+  });
+
+  it("notes a working directory that was reset", async () => {
+    const { out } = await session().call({ command: "cd / && echo moved" });
+    if (out.display?.kind !== "command") throw new Error("no command display");
+    expect(out.display.output).toBe("moved");
+    expect(out.display.notes).toHaveLength(1);
+    expect(out.display.notes[0]).toContain("outside the working directories");
+  });
+});
+
 describe("Bash environment", () => {
   it("never waits for input", async () => {
     const started = Date.now();

@@ -21,20 +21,30 @@ import type {
 } from "../contracts/prompt.ts";
 import type { AnyTool, ToolLimits } from "../contracts/tools.ts";
 import type { IdKind, LoopLimits } from "../loop/types.ts";
+import type { SlotPool } from "../model/slots.ts";
 import type { Durability } from "../session/index.ts";
 import type { EnvironmentInput } from "./environment.ts";
 
 /** A connection to one model, as the model provider hands it out. */
 export interface ModelConnection {
   client: ModelClient;
-  /** The conversation's cache slot on the bundled runtime. */
+  /**
+   * The slots conversation requests (turns and compaction) share with every other connection to
+   * the same server. Hand out the same object for all of them: the engine keeps one scheduler
+   * per pool, and a request waits for a free slot there before it is sent (the session shows as
+   * queued meanwhile). Leave it out for servers that report no slots (Ollama, LM Studio, a remote
+   * API); their requests are sent at once.
+   */
+  pool?: SlotPool;
+  /** A fixed cache slot for every conversation request. Ignored when `pool` is set. */
   slot?: number;
   /**
    * Where side requests (session titles) go, so they never touch the conversation's history or
-   * its cache slot. Defaults to `client` without a slot; on the bundled runtime give a slot of
-   * its own, or the server may pick the conversation's.
+   * its cache slots. Defaults to `client` without a slot; on the bundled runtime give it a pool
+   * (or a slot) of its own, or the server may pick a conversation slot. Its pool works like
+   * `pool`, but a session never shows as queued for a side request.
    */
-  utility?: { client: ModelClient; slot?: number };
+  utility?: { client: ModelClient; pool?: SlotPool; slot?: number };
 }
 
 export interface ModelProvider {

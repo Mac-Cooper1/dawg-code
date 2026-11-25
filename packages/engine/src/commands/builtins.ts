@@ -14,7 +14,6 @@ import {
   type SessionSummary,
   type Usage,
 } from "@dawg/protocol";
-import { createTokenEstimator } from "../context/index.ts";
 import { RuntimeError } from "../runtime/errors.ts";
 import type { SessionRuntime } from "../runtime/session.ts";
 import { chooseInstructionFile, initPrompt } from "./init.ts";
@@ -25,8 +24,6 @@ import {
   type CommandResult,
   type SlashCommand,
 } from "./types.ts";
-
-const estimator = createTokenEstimator();
 
 function output(text: string): CommandResult {
   return { kind: "output", text };
@@ -173,7 +170,12 @@ const status: SlashCommand = {
     if (s.additionalDirectories.length > 0) {
       lines.push(`Also: ${s.additionalDirectories.join(", ")}`);
     }
-    lines.push(`Status: ${s.status}`);
+    const position = summary.queuePosition;
+    lines.push(
+      position === null
+        ? `Status: ${s.status}`
+        : `Status: ${s.status}, waiting for the model (${position === 1 ? "next" : `number ${position}`} in line)`,
+    );
     if (usage !== null) {
       lines.push(
         `Context used: ${n(usage.contextUsed)} (${percent(usage.contextUsed, usage.contextWindow)})`,
@@ -190,30 +192,30 @@ const context: SlashCommand = {
   run(ctx) {
     noArguments(ctx);
     const s = ctx.session;
-    const window = s.modelInfo().contextWindow;
-    const prefix = s.prefix;
-    const system = estimator.estimate({ messages: [prefix.system], tools: [] });
-    const tools = estimator.estimate({ messages: [], tools: prefix.tools });
-    const historyEstimate = estimator.estimate({ messages: s.view, tools: [] });
+    // The same numbers as the session's `usage.breakdown`: the endpoint's count at the last
+    // request is the truth for the whole; only the split between the parts is estimated.
+    const {
+      contextWindow: window,
+      contextUsed: total,
+      measured,
+      compactAt,
+      breakdown,
+    } = s.contextUsage();
     const usage = s.snapshot().usage;
-    const estimated = system + tools + historyEstimate;
-    // The endpoint's count at the last request is the truth for the whole; only the split between
-    // the parts is estimated, since the endpoint reports one number.
-    const measured = usage !== null && usage.contextUsed > 0;
-    const total = measured ? usage.contextUsed : estimated;
-    const scale = estimated > 0 ? total / estimated : 0;
     const free = Math.max(0, window - total);
+    const parts: [string, string, number][] = [
+      ["S", "System prompt", breakdown.systemPrompt],
+      ["I", "Instruction files", breakdown.instructions],
+      ["T", "Tool definitions", breakdown.tools],
+      ["C", "Conversation", breakdown.messages],
+    ];
     const rows: [string, number][] = [
-      ["System prompt and instructions", system * scale],
-      ["Tool definitions", tools * scale],
-      ["Conversation", historyEstimate * scale],
+      ...parts.map(([, label, value]): [string, number] => [label, value]),
       ["Free", free],
     ];
     const cells = 40;
-    const bar = (["S", "T", "C"] as const)
-      .map((ch, i) =>
-        ch.repeat(window > 0 ? Math.round(((rows[i]?.[1] ?? 0) / window) * cells) : 0),
-      )
+    const bar = parts
+      .map(([ch, , value]) => ch.repeat(window > 0 ? Math.round((value / window) * cells) : 0))
       .join("")
       .slice(0, cells)
       .padEnd(cells, ".");
@@ -227,10 +229,14 @@ const context: SlashCommand = {
         ([label, value]) =>
           `  ${label.padEnd(width)}  ${n(value).padStart(9)}  ${percent(value, window).padStart(4)}`,
       ),
-      "S system prompt, T tools, C conversation, . free",
+      "S system prompt, I instruction files, T tools, C conversation, . free",
     ];
     if (total > window && window > 0) {
       lines.push("The conversation no longer fits: run /compact or /clear.");
+    } else if (compactAt !== null) {
+      lines.push(
+        `Compaction runs before a turn once the context passes ${n(compactAt)} tokens (${percent(compactAt, window)}).`,
+      );
     }
     const described = describeUsage(usage);
     if (described !== null) lines.push(described);

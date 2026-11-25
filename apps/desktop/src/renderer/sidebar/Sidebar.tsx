@@ -22,6 +22,8 @@ export interface SidebarProps {
   onFork(id: SessionId): void;
   onMarkUnread(id: SessionId): void;
   onArchive(id: SessionId): void;
+  /** After the person confirmed in the row's dialog. */
+  onDelete(id: SessionId): void;
   onOpenModelSettings(): void;
 }
 
@@ -115,6 +117,7 @@ function ProjectGroup(props: SidebarProps & { group: SidebarGroup }) {
               onFork={() => props.onFork(row.sessionId)}
               onMarkUnread={() => props.onMarkUnread(row.sessionId)}
               onArchive={() => props.onArchive(row.sessionId)}
+              onDelete={() => props.onDelete(row.sessionId)}
             />
           </li>
         ))}

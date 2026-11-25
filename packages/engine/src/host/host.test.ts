@@ -180,6 +180,81 @@ describe("sessions", () => {
   });
 });
 
+describe("session.delete", () => {
+  it("closes the session on every connection that holds it and removes it", async () => {
+    s = await setup({ script: [text("hello")] });
+    const first = await s.connect();
+    const second = await s.connect();
+    const snap = await first.client.request("session.create", { cwd: s.project });
+    const id = snap.session.id;
+    const { turnId } = await first.client.request("session.prompt", {
+      sessionId: id,
+      prompt: ask("hi"),
+    });
+    await first.waitFor(finished(id, turnId));
+    await second.client.request("session.resume", { sessionId: id });
+
+    expect(await second.client.request("session.delete", { sessionId: id })).toEqual({});
+    for (const c of [first, second]) {
+      const deleted = await c.waitFor(
+        (e) => e.event === "session.deleted" && e.payload.sessionId === id,
+      );
+      expect(c.names(id).at(-1)).toBe("session.deleted");
+      expect(deleted.payload.seq).toBe(Math.max(...c.events.map((e) => e.payload.seq)));
+      expect(c.host.openSessions()).toEqual([]);
+      expect(c.problems).toEqual([]);
+    }
+    expect(s.engine.get(id)).toBeUndefined();
+
+    const listed = await first.client.request("session.list", { projectDir: s.project });
+    expect(listed.sessions).toEqual([]);
+    // One at a time, so no failure goes unawaited.
+    const later = [
+      () => first.client.request("session.prompt", { sessionId: id, prompt: ask("again") }),
+      () => second.client.request("session.replay", { sessionId: id, afterSeq: 0 }),
+      () => second.client.request("session.resume", { sessionId: id }),
+      () => first.client.request("session.delete", { sessionId: id }),
+    ];
+    for (const request of later) {
+      expect((await rpcError(request())).code).toBe(ErrorCodes.SessionNotFound);
+    }
+  });
+
+  it("interrupts a running turn before the session goes", async () => {
+    s = await setup({ script: [stalled(text("never ends"))] });
+    const c = await s.connect();
+    const snap = await c.client.request("session.create", { cwd: s.project });
+    const id = snap.session.id;
+    const { turnId } = await c.client.request("session.prompt", {
+      sessionId: id,
+      prompt: ask("go"),
+    });
+    await c.waitFor((e) => e.event === "turn.started");
+    await c.client.request("session.delete", { sessionId: id });
+    await c.waitFor((e) => e.event === "session.deleted" && e.payload.sessionId === id);
+    const names = c.names(id);
+    expect(names.slice(-3)).toEqual(["turn.finished", "session.status", "session.deleted"]);
+    expect((await c.waitFor(finished(id, turnId))).payload).toMatchObject({
+      stopReason: "interrupted",
+    });
+    expect(c.problems).toEqual([]);
+  });
+
+  it("deletes a stored session this connection never opened", async () => {
+    s = await setup();
+    const owner = await s.connect();
+    const snap = await owner.client.request("session.create", { cwd: s.project });
+    owner.client.close();
+    await owner.host.done;
+
+    const other = await s.connect();
+    await other.client.request("session.delete", { sessionId: snap.session.id });
+    const listed = await other.client.request("session.list", { projectDir: s.project });
+    expect(listed.sessions).toEqual([]);
+    expect(other.events).toEqual([]);
+  });
+});
+
 describe("a whole turn with requests answered through the protocol", () => {
   it("asks permission, applies the answer and finishes", async () => {
     s = await setup({

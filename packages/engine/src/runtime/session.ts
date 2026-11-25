@@ -22,6 +22,7 @@ import {
 import {
   type ClientCapabilities,
   type ContentPart,
+  type ContextBreakdown,
   type Effort,
   type ModelInfo,
   type PendingRequest,
@@ -51,6 +52,7 @@ import { errorInfo, errorInfoFrom } from "../loop/errors.ts";
 import type { ExecutedCall } from "../loop/executor.ts";
 import { type RoomCheck, type RoomResult, runTurn, type TurnHost } from "../loop/turn.ts";
 import type { Emit, LoopResult } from "../loop/types.ts";
+import { scheduledClient } from "../model/slots.ts";
 import { readDeniedBy } from "../permissions/index.ts";
 import type { SessionRecord, SessionWriter, StateChanges } from "../session/index.ts";
 import { type BackgroundTaskInfo, getBackgroundTasks } from "../tools/bash/index.ts";
@@ -172,8 +174,14 @@ export class SessionRuntime {
   readonly #settings: Settings;
   #rules: PermissionState["rules"];
   #instructions: InstructionSet;
+  /** The instruction files as rendered into the prefix, for the context breakdown. */
+  #instructionsText: string;
   #prefix: PromptPrefix;
   #connection: ModelConnection;
+  /** Where conversation requests go: the connection's client, behind its pool's scheduler. */
+  #client!: ModelClient;
+  /** Where titles go, likewise. */
+  #utility!: { client: ModelClient; slot?: number };
   #profile: ModelProfile;
   #capabilities: ClientCapabilities;
 
@@ -189,6 +197,9 @@ export class SessionRuntime {
 
   #status: SessionStatus = "idle";
   #waitingOn: string | null = null;
+  /** The running request's place in line for the model (1 = next); null when not waiting. */
+  #queuePosition: number | null = null;
+  #statusQueuePosition: number | null = null;
   #busy: Busy | null = null;
   #pending = new Map<string, PendingEntry>();
   #lastOutcome: TurnOutcome | null = null;
@@ -213,6 +224,13 @@ export class SessionRuntime {
   #nextPromptTokens: number | null = null;
   /** Context size right after the latest compaction or trim. */
   #compactedTo: number | null = null;
+  /** Estimated tokens of each message, which never changes once it is in history. */
+  readonly #messageTokens = new WeakMap<Message, number>();
+  /** Estimated tokens of the prefix's parts, for the prefix they were measured on. */
+  #prefixTokens: {
+    prefix: PromptPrefix;
+    parts: Omit<ContextBreakdown, "messages">;
+  } | null = null;
   #callIds: Set<string>;
 
   #firstPrompt: string | null;
@@ -238,11 +256,10 @@ export class SessionRuntime {
       deny: [...init.settings.permissions.deny],
     };
     this.#instructions = init.instructions;
-    this.#prefix = ctx.assembler.prefix({
-      tools: ctx.tools,
-      instructions: renderInstructions(init.instructions.files),
-    });
+    this.#instructionsText = renderInstructions(init.instructions.files);
+    this.#prefix = ctx.assembler.prefix({ tools: ctx.tools, instructions: this.#instructionsText });
     this.#connection = init.connection;
+    this.#useConnection(init.connection);
     this.#profile = ctx.profileFor(init.connection.client.endpoint);
     this.#capabilities = init.capabilities;
 
@@ -268,6 +285,8 @@ export class SessionRuntime {
     );
     const window = init.connection.client.endpoint.contextWindow;
     this.#usage = new UsageTracker(window, usageFromRecords(records, window));
+    this.#usage.compactAt = this.#compactAt();
+    if (this.#usage.snapshot() !== null) this.#usage.split(this.#contextEstimate(snapshot.view));
     this.#callIds = callIds(records);
     this.#firstPrompt = firstPromptText(records);
     this.#titleStarted = this.#title !== null;
@@ -405,6 +424,7 @@ export class SessionRuntime {
       createdAt: Date.parse(snap.meta.time),
       lastActivityAt: Date.parse(snap.lastTime),
       status: this.#status,
+      queuePosition: this.#statusQueuePosition,
       mode: this.#mode,
       model: this.#model ?? this.#connection.client.endpoint.model,
       effort: this.#effort,
@@ -417,6 +437,42 @@ export class SessionRuntime {
               point: this.#forkPoint ?? { position: "end" },
             },
       lastSeq: this.#log.lastSeq,
+    };
+  }
+
+  /**
+   * What fills the context window, for `/context`. After a request: the endpoint's count, split
+   * as in `usage.breakdown`. Before the first one: an estimate of what the next request holds.
+   */
+  contextUsage(): {
+    contextWindow: number;
+    contextUsed: number;
+    /** True when `contextUsed` is the endpoint's count rather than an estimate. */
+    measured: boolean;
+    compactAt: number | null;
+    breakdown: ContextBreakdown;
+  } {
+    const usage = this.#usage.snapshot();
+    const contextWindow = this.#contextWindow();
+    const compactAt = this.#compactAt();
+    if (usage !== null && usage.contextUsed > 0 && usage.breakdown !== null) {
+      return {
+        contextWindow,
+        contextUsed: usage.contextUsed,
+        measured: true,
+        compactAt,
+        breakdown: usage.breakdown,
+      };
+    }
+    const estimate = this.#contextEstimate(this.#writer.snapshot.view);
+    const total =
+      estimate.systemPrompt + estimate.instructions + estimate.tools + estimate.messages;
+    return {
+      contextWindow,
+      contextUsed: total,
+      measured: false,
+      compactAt,
+      breakdown: estimate,
     };
   }
 
@@ -594,9 +650,11 @@ export class SessionRuntime {
     this.#assertOpen();
     if (this.#busy !== null) throw new RuntimeError("SessionBusy", "A turn is running.");
     const connection = await this.#ctx.models.connect(model);
+    this.#useConnection(connection);
     this.#connection = connection;
     this.#profile = this.#ctx.profileFor(connection.client.endpoint);
     this.#usage.contextWindow = connection.client.endpoint.contextWindow;
+    this.#usage.compactAt = this.#compactAt();
     this.#usageMark = null;
     this.#model = model;
     const changes: StateChanges = { model };
@@ -608,6 +666,8 @@ export class SessionRuntime {
     }
     await this.#writer.setState(changes);
     this.#emitUpdated(changed);
+    // The window, and with it the compaction limit, may differ.
+    this.#emitUsage();
     void this.#saveSidecar();
     return { model, modelInfo: this.modelInfo(), effort: this.#effort };
   }
@@ -787,6 +847,7 @@ export class SessionRuntime {
             toolCallId: ask.toolCallId,
             plan: ask.plan,
             planPath: ask.planPath,
+            modeBeforePlan: ask.modeBeforePlan,
           });
           break;
       }
@@ -849,11 +910,11 @@ export class SessionRuntime {
       }
       // The summarising request repeats the session's own request settings, so it renders the
       // prompt the same way and reuses the cache.
-      const { options } = this.#requestModel();
+      const { client, options } = this.#requestModel();
       const result = await ctx.compactor.compact({
         prefix: this.#prefix,
         history: this.#writer.snapshot.view,
-        client: this.#connection.client,
+        client,
         focus: input.focus,
         tasks: this.tasks,
         recentFiles: await this.#recentFiles(),
@@ -944,6 +1005,7 @@ export class SessionRuntime {
       contextAfter: after,
       error: null,
     });
+    this.#emitUsage();
   }
 
   #afterViewReplaced(tokens: number): void {
@@ -953,6 +1015,7 @@ export class SessionRuntime {
     this.#usageMark = null;
     this.#usage.setContextUsed(tokens);
     const view = this.#writer.snapshot.view;
+    this.#usage.split(this.#contextEstimate(view));
     this.#knownMode = knownMode(view, this.#ctx.assembler);
     this.#knownDate = knownDate(
       view,
@@ -1017,6 +1080,12 @@ export class SessionRuntime {
     return Math.max(threshold, window - reserve);
   }
 
+  /** `Usage.compactAt`: the turn-start limit, or null when the window is unknown. */
+  #compactAt(): number | null {
+    const window = this.#contextWindow();
+    return window > 0 ? Math.max(0, this.#compactionLimit(window, "turn_start")) : null;
+  }
+
   /**
    * The reply size to ask for: the profile's ceiling, cut to what is left of the window after
    * the prompt. Servers such as vLLM refuse a request whose prompt and reply limit together
@@ -1069,10 +1138,8 @@ export class SessionRuntime {
       projectDir: this.cwd,
       externalImports: ctx.externalImports,
     });
-    this.#prefix = ctx.assembler.prefix({
-      tools: ctx.tools,
-      instructions: renderInstructions(this.#instructions.files),
-    });
+    this.#instructionsText = renderInstructions(this.#instructions.files);
+    this.#prefix = ctx.assembler.prefix({ tools: ctx.tools, instructions: this.#instructionsText });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1106,6 +1173,23 @@ export class SessionRuntime {
     return this.#closing;
   }
 
+  /**
+   * Closes the session because it is being deleted. A running turn or compaction is interrupted
+   * and its events finish first; then `session.deleted` goes out as the last event (never
+   * stored), and the session closes. The caller removes the files.
+   */
+  async closeDeleted(): Promise<void> {
+    if (this.#closing !== null) return this.#closing;
+    // A loop: another window may start a turn while the interrupted one winds down.
+    while (this.#busy !== null && this.#closing === null) {
+      this.#busy.controller.abort();
+      await this.#busy.done;
+    }
+    if (this.#closing !== null) return this.#closing;
+    this.#emit("session.deleted", {});
+    return this.close();
+  }
+
   #assertOpen(): void {
     if (this.#closed || this.#closing !== null) {
       throw new RuntimeError("InvalidState", `Session ${this.id} is closed.`);
@@ -1118,6 +1202,19 @@ export class SessionRuntime {
 
   #modeAllowed(mode: PermissionMode): boolean {
     return mode !== "bypassPermissions" || !this.#settings.permissions.bypassDisabled;
+  }
+
+  /**
+   * The mode approving a plan leads to: the one the answer names, else the mode before plan
+   * mode. "default" stands in for plan mode itself and for a mode settings turn off. With no
+   * answer yet, this is the plan request's `modeBeforePlan`.
+   */
+  #modeAfterPlan(named: PermissionMode | undefined): PermissionMode {
+    let next = named ?? this.#modeBeforePlan;
+    if (next === "plan" || !this.#modeAllowed(next)) {
+      next = this.#modeBeforePlan === "plan" ? "default" : this.#modeBeforePlan;
+    }
+    return this.#modeAllowed(next) ? next : "default";
   }
 
   #applyMode(next: PermissionMode): void {
@@ -1143,6 +1240,83 @@ export class SessionRuntime {
     return Math.max(0, Math.round(this.#connection.client.endpoint.contextWindow));
   }
 
+  /**
+   * Points the session's requests at a connection. With a pool, every conversation request
+   * (turns and compaction) first takes a slot from the pool's scheduler, and the session shows
+   * as queued while it waits; titles do the same on the utility pool, without showing.
+   */
+  #useConnection(connection: ModelConnection): void {
+    const pool = connection.pool;
+    this.#client =
+      pool === undefined
+        ? connection.client
+        : scheduledClient(connection.client, this.#ctx.slots(pool), {
+            owner: this.id,
+            onQueue: (position) => this.#queued(position),
+          });
+    const utility = connection.utility ?? { client: connection.client };
+    this.#utility =
+      utility.pool === undefined
+        ? utility
+        : {
+            client: scheduledClient(utility.client, this.#ctx.slots(utility.pool), {
+              owner: this.id,
+            }),
+          };
+  }
+
+  #queued(position: number | null): void {
+    this.#queuePosition = position;
+    // An interrupted wait: the turn ends next, and its status says so.
+    if (position === null && this.#busy?.controller.signal.aborted === true) return;
+    this.#refreshStatus();
+  }
+
+  /**
+   * Estimated tokens of each part of a request holding `view`. Instruction files are rendered
+   * into the system message; they are counted apart from the rest of it.
+   */
+  #contextEstimate(view: readonly Message[]): ContextBreakdown {
+    const estimator = this.#ctx.estimator;
+    const empty = estimator.estimate({ messages: [], tools: [] });
+    const cost = (messages: readonly Message[]) =>
+      Math.max(0, Math.round(estimator.estimate({ messages, tools: [] }) - empty));
+    let prefix = this.#prefixTokens;
+    if (prefix === null || prefix.prefix !== this.#prefix) {
+      const system = cost([this.#prefix.system]);
+      const text = this.#instructionsText;
+      const instructions =
+        text === ""
+          ? 0
+          : Math.min(
+              system,
+              Math.max(
+                0,
+                cost([{ role: "system", content: text }]) - cost([{ role: "system", content: "" }]),
+              ),
+            );
+      const tools = Math.max(
+        0,
+        Math.round(estimator.estimate({ messages: [], tools: this.#prefix.tools }) - empty),
+      );
+      prefix = {
+        prefix: this.#prefix,
+        parts: { systemPrompt: system - instructions, instructions, tools },
+      };
+      this.#prefixTokens = prefix;
+    }
+    let messages = 0;
+    for (const message of view) {
+      let tokens = this.#messageTokens.get(message);
+      if (tokens === undefined) {
+        tokens = cost([message]);
+        this.#messageTokens.set(message, tokens);
+      }
+      messages += tokens;
+    }
+    return { ...prefix.parts, messages };
+  }
+
   #emitUpdated(changed: string[]): void {
     this.#emit("session.updated", {
       title: this.#title,
@@ -1165,6 +1339,7 @@ export class SessionRuntime {
     let status: SessionStatus;
     let waitingOn: "permission" | "question" | "plan" | null = null;
     let message: string | null = null;
+    let queuePosition: number | null = null;
     const first = this.#pending.values().next().value as PendingEntry | undefined;
     if (first !== undefined) {
       status = "waiting";
@@ -1177,16 +1352,24 @@ export class SessionRuntime {
             : "Waiting for plan approval";
     } else if (this.#busy !== null) {
       status = "working";
-      message = this.#busy.kind === "compaction" ? "Compacting the conversation" : "Working";
+      queuePosition = this.#queuePosition;
+      message =
+        queuePosition !== null
+          ? "Waiting for the model"
+          : this.#busy.kind === "compaction"
+            ? "Compacting the conversation"
+            : "Working";
     } else {
       status = this.#lastTurnFailed ? "error" : "idle";
       message = this.#lastTurnFailed ? (this.#lastOutcome?.error?.message ?? null) : null;
     }
-    const key = `${status}/${waitingOn ?? ""}`;
-    if (key === `${this.#status}/${this.#waitingOn ?? ""}`) return;
+    const key = `${status}/${waitingOn ?? ""}/${queuePosition ?? ""}`;
+    const last = `${this.#status}/${this.#waitingOn ?? ""}/${this.#statusQueuePosition ?? ""}`;
+    if (key === last) return;
     this.#status = status;
     this.#waitingOn = waitingOn;
-    this.#emit("session.status", { status, waitingOn, message });
+    this.#statusQueuePosition = queuePosition;
+    this.#emit("session.status", { status, waitingOn, message, queuePosition });
   }
 
   #saveSidecar(): Promise<void> {
@@ -1210,7 +1393,7 @@ export class SessionRuntime {
     if (text === null) return;
     this.#titleStarted = true;
     const controller = new AbortController();
-    const target = this.#connection.utility ?? { client: this.#connection.client };
+    const target = this.#utility;
     const weakest = target.client.endpoint.template?.reasoningEffortLevels?.[0];
     const kwargs = this.#ctx.profileFor(target.client.endpoint).chatTemplateKwargs;
     const done = (async () => {
@@ -1384,7 +1567,15 @@ export class SessionRuntime {
         const requestId = this.#ctx.newId("request");
         const planPath = await this.#savePlan(requestId, plan);
         const response = await this.#raise<PlanResponse>(
-          { kind: "plan", turnId, requestId, toolCallId, plan, planPath },
+          {
+            kind: "plan",
+            turnId,
+            requestId,
+            toolCallId,
+            plan,
+            planPath,
+            modeBeforePlan: this.#modeAfterPlan(undefined),
+          },
           signal,
         );
         if (response.decision === "reject") {
@@ -1394,11 +1585,7 @@ export class SessionRuntime {
         }
         // The answer may name the mode to continue in; the tool cannot receive it, so the
         // session switches here, before the tool reads the mode back.
-        let next = response.mode ?? this.#modeBeforePlan;
-        if (next === "plan" || !this.#modeAllowed(next)) {
-          next = this.#modeBeforePlan === "plan" ? "default" : this.#modeBeforePlan;
-        }
-        if (!this.#modeAllowed(next)) next = "default";
+        const next = this.#modeAfterPlan(response.mode);
         this.#applyMode(next);
         this.#planApprovedInto = next;
         return { approved: true };
@@ -1476,11 +1663,14 @@ export class SessionRuntime {
     if (profile.parallelToolCalls && endpoint.template?.parallelToolCalls === true) {
       options.parallelToolCalls = true;
     }
-    if (this.#connection.slot !== undefined) options.slot = this.#connection.slot;
+    // With a pool, the scheduler picks the slot for each request.
+    if (this.#connection.pool === undefined && this.#connection.slot !== undefined) {
+      options.slot = this.#connection.slot;
+    }
     if (profile.chatTemplateKwargs !== null) {
       options.extraBody = { chat_template_kwargs: profile.chatTemplateKwargs };
     }
-    return { client: this.#connection.client, options };
+    return { client: this.#client, options };
   }
 
   #recordUsage(reply: ModelReply, malformed: number, requestViewLength: number): void {
@@ -1495,6 +1685,8 @@ export class SessionRuntime {
         tools: [],
       }),
     }));
+    // The reply, when usable, is already in history: the view holds what `contextUsed` counts.
+    this.#usage.split(this.#contextEstimate(this.#writer.snapshot.view));
     this.#usageMark = {
       generation: this.#viewGeneration,
       viewLength: view.length,

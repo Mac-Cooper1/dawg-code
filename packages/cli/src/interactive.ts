@@ -491,11 +491,13 @@ async function answerPlan(
 ): Promise<PlanResponse> {
   view.line("Proposed plan:");
   for (const l of payload.plan.split("\n")) view.line(`  ${l}`);
+  const back = payload.modeBeforePlan;
+  const yes = back === null ? "y = yes" : `y = yes (then ${back} mode)`;
   for (;;) {
     const line = await ask(
       lines,
       view,
-      "Approve? y = yes, e = yes and accept edits, n = keep planning (n <feedback>): ",
+      `Approve? ${yes}, e = yes and accept edits, n = keep planning (n <feedback>): `,
       signal,
     );
     if (line === null) return { decision: "reject", message: "No answer: the input ended." };

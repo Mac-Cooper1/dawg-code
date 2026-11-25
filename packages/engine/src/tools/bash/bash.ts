@@ -270,45 +270,46 @@ async function runInForeground(
     if (cwdNote) run.notes.push(cwdNote);
 
     const durationMs = Date.now() - started;
-    const footer: string[] = [];
+    // The sentences added for the model after the output. The display carries them too, apart
+    // from the exit code line, which it has as a number.
+    const notes: string[] = [];
+    let exitLine: string | null = null;
     if (timedOut) {
-      footer.push(
-        `The command did not finish within ${formatDuration(timeoutMs)} and was stopped.`,
-      );
+      notes.push(`The command did not finish within ${formatDuration(timeoutMs)} and was stopped.`);
     } else if (interrupted) {
-      footer.push("The command was interrupted.");
+      notes.push("The command was interrupted.");
     } else if (outputLimited) {
-      footer.push("The command printed more than 1 GiB of output and was stopped.");
+      notes.push("The command printed more than 1 GiB of output and was stopped.");
     } else if (exit.signal) {
-      footer.push(`The command was ended by ${exit.signal}.`);
+      notes.push(`The command was ended by ${exit.signal}.`);
     } else if (exit.code !== 0) {
-      footer.push(`Exit code ${exit.code}`);
+      exitLine = `Exit code ${exit.code}`;
     }
     if (collected.truncated) {
       if (collected.outputPath) {
         const extent = collected.fileTruncated
           ? `The first ${OUTPUT_FILE_CAP_BYTES / (1024 * 1024)} MiB of it are saved in`
           : "The full output is saved in";
-        footer.push(
+        notes.push(
           `The output was ${collected.totalChars.toLocaleString("en-US")} characters, so only its beginning and end are shown. ${extent} ${collected.outputPath}.`,
         );
       } else {
-        footer.push(
+        notes.push(
           `The output was ${collected.totalChars.toLocaleString("en-US")} characters, so only its beginning and end are shown. It could not be saved (${collected.fileError ?? "unknown error"}).`,
         );
       }
     }
     if (leftoversStopped) {
-      footer.push(
+      notes.push(
         leftoversDetached
           ? "The command left processes running that kept its output open. Those that could be found were stopped; output from any others is no longer collected. Use run_in_background for servers and other long-running commands."
           : "The command left processes running that kept its output open, so they were stopped. Use run_in_background for servers and other long-running commands.",
       );
     }
-    footer.push(...run.notes);
+    notes.push(...run.notes);
 
     const body = collected.text.replace(/\n+$/, "");
-    const footerText = footer.join("\n");
+    const footerText = (exitLine === null ? notes : [exitLine, ...notes]).join("\n");
     const text = body
       ? footerText
         ? `${body}\n\n${footerText}`
@@ -325,6 +326,8 @@ async function runInForeground(
       interrupted,
       backgroundTaskId: null,
       outputPath: collected.truncated ? collected.outputPath : null,
+      output: body,
+      notes,
     };
     return {
       content: [{ type: "text", text }],
@@ -402,6 +405,9 @@ async function startInBackground(
     interrupted: false,
     backgroundTaskId: info.id,
     outputPath,
+    // Nothing printed yet; the client follows the task through its output file.
+    output: null,
+    notes: [],
   };
   return { content: [{ type: "text", text: lines.join("\n") }], display };
 }

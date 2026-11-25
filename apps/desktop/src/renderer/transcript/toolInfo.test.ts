@@ -1,6 +1,8 @@
+import type { CommandDisplay } from "@dawg/protocol";
 import { describe, expect, it } from "vitest";
 import { bashFailure, editItem, grepItem, MONEY_HUNKS, readItem, toolItem } from "./testing.ts";
 import {
+  commandOutput,
   defaultToolOpen,
   diffRows,
   finishedCommandOutput,
@@ -49,6 +51,8 @@ describe("defaultToolOpen", () => {
         interrupted: false,
         backgroundTaskId: null,
         outputPath: null,
+        output: "",
+        notes: ["The command did not finish within 2 min and was stopped."],
       },
     });
     expect(toolFailed(timedOut)).toBe(true);
@@ -176,6 +180,43 @@ describe("diffRows", () => {
   });
 });
 
+describe("commandOutput", () => {
+  const display: CommandDisplay = {
+    kind: "command",
+    command: "make",
+    cwd: "/p",
+    exitCode: 2,
+    durationMs: 700,
+    timedOut: true,
+    interrupted: false,
+    backgroundTaskId: null,
+    outputPath: null,
+    output: "Error: make stopped\n",
+    notes: ["The command did not finish within 2 min and was stopped."],
+  };
+
+  it("takes the output and notes the engine reports, as they are", () => {
+    const item = toolItem({
+      state: "error",
+      content: [{ type: "text", text: "Error: whatever the model was told" }],
+      output: [{ stream: "stdout", text: "live" }],
+      display,
+    });
+    expect(commandOutput(item)).toEqual({ output: display.output, notes: display.notes });
+    expect(commandOutput(toolItem({ display: { ...display, output: "" } })).output).toBe("");
+  });
+
+  it("falls back to the model's text for commands stored before engines reported output", () => {
+    const item = toolItem({
+      state: "error",
+      content: [{ type: "text", text: "Error: boom\n\nExit code 2" }],
+      display: { ...display, timedOut: false, output: null, notes: [] },
+    });
+    expect(commandOutput(item)).toEqual({ output: "boom", notes: [] });
+  });
+});
+
+/** Sessions stored before engines reported `output` and `notes`. */
 describe("finishedCommandOutput", () => {
   const command = {
     kind: "command" as const,
@@ -187,6 +228,8 @@ describe("finishedCommandOutput", () => {
     interrupted: false,
     backgroundTaskId: null,
     outputPath: null,
+    output: null,
+    notes: [],
   };
   const recorded =
     "Error: F                                                        [100%]\nFAILED tests/test_money.py::test_split_evenly_refund_keeps_every_cent\n1 failed, 8 deselected in 0.18s\n\nExit code 1";
@@ -206,7 +249,10 @@ describe("finishedCommandOutput", () => {
 
   it("keeps a passing command's own text, blank lines and Error: words included", () => {
     const text = "Error: is a word this tool prints\n\nall good";
-    const item = toolItem({ content: [{ type: "text", text }] });
+    const item = toolItem({
+      content: [{ type: "text", text }],
+      display: { ...command, exitCode: 0 },
+    });
     expect(finishedCommandOutput(item)).toEqual({ output: text, notes: [] });
   });
 
@@ -223,7 +269,10 @@ describe("finishedCommandOutput", () => {
       display: command,
     });
     expect(finishedCommandOutput(item)).toEqual({ output: "", notes: [] });
-    const quiet = toolItem({ content: [{ type: "text", text: "(no output)" }] });
+    const quiet = toolItem({
+      content: [{ type: "text", text: "(no output)" }],
+      display: { ...command, exitCode: 0 },
+    });
     expect(finishedCommandOutput(quiet).output).toBe("");
   });
 

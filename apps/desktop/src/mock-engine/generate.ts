@@ -26,10 +26,19 @@ import {
 } from "./results.ts";
 import type { MockSession } from "./session.ts";
 import { toolCallOf } from "./state.ts";
+import { compactAtFor, contextBreakdown, INSTRUCTION_TOKENS, PREFIX_TOKENS } from "./usage.ts";
 
-const PREFIX_TOKENS = 15_104;
-const INSTRUCTION_TOKENS = 1_186;
 const DEFAULT_WINDOW = 204_800;
+
+/** The status of a session whose turn runs (or that compacts), not waiting for the model. */
+export const WORKING = { status: "working", waitingOn: null, queuePosition: null } as const;
+/** The status of a session with nothing running. */
+export const IDLE = {
+  status: "idle",
+  waitingOn: null,
+  message: null,
+  queuePosition: null,
+} as const;
 
 export type Decision =
   | { kind: "permission"; response: PermissionResponse }
@@ -94,9 +103,10 @@ export function nextUsage(session: MockSession, added: number, completion: numbe
   const cached = before === null ? PREFIX_TOKENS : before.contextUsed;
   const prompt = before === null ? PREFIX_TOKENS + INSTRUCTION_TOKENS + added : cached + added;
   const totals = before?.totals;
+  const contextUsed = prompt + completion;
   return {
     contextWindow: window,
-    contextUsed: prompt + completion,
+    contextUsed,
     last: {
       promptTokens: prompt,
       completionTokens: completion,
@@ -111,7 +121,15 @@ export function nextUsage(session: MockSession, added: number, completion: numbe
       cachedTokens: (totals?.cachedTokens ?? 0) + cached,
       malformedToolCalls: totals?.malformedToolCalls ?? 0,
     },
+    compactAt: compactAtFor(window),
+    breakdown: breakdownAfter(session, contextUsed),
   };
+}
+
+/** The split of `contextUsed`, keeping the fixed parts the session's last usage reported. */
+export function breakdownAfter(session: MockSession, contextUsed: number) {
+  const previous = session.state.usage?.breakdown;
+  return previous ? contextBreakdown(contextUsed, previous) : contextBreakdown(contextUsed);
 }
 
 /** One streamed assistant message with its usage, as steps. */
@@ -158,7 +176,7 @@ function finishSteps(session: MockSession, pace: Pace, turnId: string, finalText
           error: null,
           durationMs: Math.max(0, now - (session.state.turn?.startedAt ?? now)),
         });
-        session.emit("session.status", { status: "idle", waitingOn: null, message: null });
+        session.emit("session.status", IDLE);
       },
     },
   ];
@@ -196,7 +214,7 @@ export function genericTurn(
   pace: Pace,
   prompt: Prompt,
 ): { turnId: string; steps: Step[] } {
-  session.emit("session.status", { status: "working", waitingOn: null, message: "Working" });
+  session.emit("session.status", { ...WORKING, message: "Working" });
   const turnId = session.ids.fresh("turn");
   session.emit("turn.started", { turnId, prompt, command: null });
   const reply = genericReply(session, prompt);
@@ -207,10 +225,18 @@ export function genericTurn(
   return { turnId, steps };
 }
 
-/** The mode an approved plan continues in, as the real engine picks it. */
-export function modeAfterPlan(session: MockSession, response: PlanResponse): PermissionMode | null {
+/**
+ * The mode an approved plan continues in, as the real engine picks it: the one the answer names,
+ * else the request's `modeBeforePlan`.
+ */
+export function modeAfterPlan(
+  session: MockSession,
+  request: PendingRequest,
+  response: PlanResponse,
+): PermissionMode | null {
   if (response.decision !== "approve") return null;
-  const next = response.mode ?? session.modeBeforePlan;
+  const before = request.kind === "plan" ? request.modeBeforePlan : null;
+  const next = response.mode ?? before ?? session.planReturnMode;
   return next === "plan" ? "default" : next;
 }
 
@@ -267,11 +293,11 @@ export function genericContinuation(
     delay: delay(pace, 120, 300),
     run: () => {
       if (!othersPending) {
-        session.emit("session.status", { status: "working", waitingOn: null, message: "Working" });
+        session.emit("session.status", { ...WORKING, message: "Working" });
       }
       let mode = session.settings.mode;
       if (decision.kind === "plan") {
-        const next = modeAfterPlan(session, decision.response);
+        const next = modeAfterPlan(session, request, decision.response);
         if (next !== null && next !== session.settings.mode) {
           session.updateSettings({ mode: next }, ["mode"]);
           mode = next;
@@ -376,8 +402,11 @@ export function interruptTurn(session: MockSession, now: number): void {
     error: null,
     durationMs: Math.max(0, now - turn.startedAt),
   });
-  session.emit("session.status", { status: "idle", waitingOn: null, message: null });
+  session.emit("session.status", IDLE);
 }
+
+/** The Bash tool's note after the output of a command it stopped. */
+export const INTERRUPTED_COMMAND = "The command was interrupted.";
 
 function interruptedResult(
   session: MockSession,
@@ -398,7 +427,7 @@ function interruptedResult(
   // As the Bash tool reports it: the output so far, a note, marked as an error for the model.
   const body = tool.output.replace(/\n+$/, "");
   return {
-    content: `Error: ${body ? `${body}\n\n` : ""}The command was interrupted.`,
+    content: `Error: ${body ? `${body}\n\n` : ""}${INTERRUPTED_COMMAND}`,
     display: {
       kind: "command",
       command: tool.input.command,
@@ -409,6 +438,8 @@ function interruptedResult(
       interrupted: true,
       backgroundTaskId: null,
       outputPath: null,
+      output: body,
+      notes: [INTERRUPTED_COMMAND],
     },
     durationMs,
   };

@@ -41,6 +41,10 @@ interface Connection {
   open: Set<string>;
 }
 
+function requestIdOf(request: PendingRequest): string {
+  return request.kind === "permission" ? request.request.requestId : request.requestId;
+}
+
 export interface FakeEngineOptions {
   /** Versions `initialize` accepts. Default: the protocol's. */
   supportedVersions?: number[];
@@ -152,10 +156,7 @@ export class FakeEngine {
         break;
       case "request.resolved": {
         const id = event.payload.requestId;
-        session.pending = session.pending.filter(
-          (request) =>
-            (request.kind === "permission" ? request.request.requestId : request.requestId) !== id,
-        );
+        session.pending = session.pending.filter((request) => requestIdOf(request) !== id);
         break;
       }
       default:
@@ -171,6 +172,38 @@ export class FakeEngine {
       activeTurnId: session.activeTurnId,
       pending: session.pending,
     };
+  }
+
+  /**
+   * Deletes a session as the engine does (and as another window's `session.delete` would): a
+   * running turn is cancelled and interrupted first, then every connection that has the session
+   * open gets `session.deleted`, and the session is gone.
+   */
+  deleteSession(id: string): void {
+    const session = this.session(id);
+    const turnId = session.activeTurnId;
+    if (turnId !== null) {
+      for (const request of session.pending) {
+        this.emit(id, "request.resolved", {
+          kind: request.kind,
+          turnId: request.turnId,
+          requestId: requestIdOf(request),
+          outcome: "cancelled",
+          response: null,
+        } as Fields<"request.resolved">);
+      }
+      this.emit(id, "turn.finished", {
+        turnId,
+        stopReason: "interrupted",
+        finalText: null,
+        error: null,
+        durationMs: 0,
+      });
+      this.emit(id, "session.status", { status: "idle", waitingOn: null, message: null });
+    }
+    this.emit(id, "session.deleted", {});
+    this.sessions.delete(id);
+    for (const connection of this.connections) connection.open.delete(id);
   }
 
   /** Serves the protocol on one port, as the engine host does. */
@@ -327,6 +360,11 @@ export class FakeEngine {
           open,
         );
         return { session: known(params.sessionId).summary };
+      },
+      "session.delete": (params) => {
+        known(params.sessionId);
+        this.deleteSession(params.sessionId);
+        return {};
       },
       "session.setMode": (params) => {
         this.updateSettings(params.sessionId, { mode: params.mode }, "mode", open);

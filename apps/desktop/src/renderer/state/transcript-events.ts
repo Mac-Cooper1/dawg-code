@@ -647,9 +647,6 @@ export function planProposed(
 ): void {
   const id = itemIds.plan(p.requestId);
   if (indexOfId(readItems(draft, session.id), id) === -1) {
-    // In plan mode: the mode it left for plan mode. A plan proposed from another mode returns to
-    // that mode. Before any `session.updated` in a replay, the summary's (current) mode stands in.
-    const mode = session.internals.eventMode ?? session.summary.mode;
     const item: PlanItem = {
       kind: "plan",
       id,
@@ -661,7 +658,7 @@ export function planProposed(
       planPath: p.planPath,
       state: "pending",
       response: null,
-      modeBeforePlan: mode === "plan" ? session.internals.modeBeforePlan : mode,
+      modeBeforePlan: p.modeBeforePlan,
     };
     writeItems(draft, session.id).push(item);
   }

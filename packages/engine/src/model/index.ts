@@ -12,4 +12,12 @@ export {
   toChatMessages,
   toChatTools,
 } from "./request.ts";
+export {
+  type ScheduledClientOptions,
+  type SlotLease,
+  type SlotPool,
+  type SlotRequest,
+  SlotScheduler,
+  scheduledClient,
+} from "./slots.ts";
 export { type SseEvent, SseParser } from "./sse.ts";

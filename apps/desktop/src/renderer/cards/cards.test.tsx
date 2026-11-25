@@ -528,7 +528,22 @@ describe.each(THEMES)("PlanCard (%s)", (theme) => {
     );
   });
 
-  it("leaves out the mode line when the earlier mode is unknown", () => {
+  it("names the mode the request says approval returns to", () => {
+    renderInTheme(
+      <PlanCard
+        item={planItem({ modeBeforePlan: "acceptEdits" })}
+        shownAgain={false}
+        autoFocus={false}
+        env={makeEnv()}
+      />,
+      theme,
+    );
+    expect(
+      screen.getByText("Approve returns to Accept edits, the mode you were in before planning."),
+    ).toBeInTheDocument();
+  });
+
+  it("leaves out the mode line for plans stored before engines reported the mode", () => {
     renderInTheme(
       <PlanCard
         item={planItem({ modeBeforePlan: null })}

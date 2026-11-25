@@ -3,7 +3,8 @@ import { Icon, type IconName } from "./Icon.tsx";
 import { Kbd } from "./Kbd.tsx";
 import styles from "./ui.module.css";
 
-export type ButtonVariant = "default" | "primary" | "ghost" | "danger";
+/** "danger" is red text; "destructive" fills red, for the button that confirms a deletion. */
+export type ButtonVariant = "default" | "primary" | "ghost" | "danger" | "destructive";
 export type ButtonSize = "sm" | "md" | "lg";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -34,6 +35,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         variant === "primary" && styles.primary,
         variant === "ghost" && styles.ghost,
         variant === "danger" && styles.danger,
+        variant === "destructive" && styles.destructive,
         size === "sm" && styles.sm,
         size === "lg" && styles.lg,
         className,

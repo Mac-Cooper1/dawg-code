@@ -27,6 +27,7 @@ function handlers(): Handlers {
     onFork: vi.fn(),
     onMarkUnread: vi.fn(),
     onArchive: vi.fn(),
+    onDelete: vi.fn(),
     onOpenModelSettings: vi.fn(),
   };
 }
@@ -170,7 +171,7 @@ describe.each(THEMES)("Sidebar (%s)", (theme) => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
-    ).toEqual(["Rename", "Fork", "Mark as unread", "Archive"]);
+    ).toEqual(["Rename", "Fork", "Mark as unread", "Archive", "Delete…"]);
     await user.click(within(menu).getByRole("menuitem", { name: "Fork" }));
     expect(on.onFork).toHaveBeenCalledWith("csv");
 
@@ -189,10 +190,47 @@ describe.each(THEMES)("Sidebar (%s)", (theme) => {
     more.focus();
     await user.keyboard("{Enter}");
     const menu = screen.getByRole("menu");
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(4);
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(5);
     await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{Enter}");
     expect(on.onArchive).toHaveBeenCalledWith("docs");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("asks before deleting, naming the session, and deletes only when confirmed", async () => {
+    const { on, user } = setup(theme);
+    await user.pointer({ keys: "[MouseRight]", target: row(/^Receipt PDF layout/) });
+    const item = screen.getByRole("menuitem", { name: "Delete…" });
+    expect(item.className).toMatch(/danger/);
+    await user.click(item);
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete “Receipt PDF layout”?" });
+    expect(dialog).toHaveAccessibleDescription(
+      "The session and its transcript are deleted for good. This cannot be undone.",
+    );
+    // Cancel has focus: Enter or Esc keeps the session.
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(on.onDelete).not.toHaveBeenCalled();
+    expect(row(/^Receipt PDF layout/)).toHaveFocus();
+
+    const more = screen.getByRole("button", { name: "Actions for Receipt PDF layout" });
+    await user.click(more);
+    await user.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const again = await screen.findByRole("alertdialog");
+    await user.click(within(again).getByRole("button", { name: "Delete" }));
+    expect(on.onDelete).toHaveBeenCalledExactlyOnceWith("pdf");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("says that a running turn stops when the session is deleted", async () => {
+    const { user } = setup(theme);
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Fix the failing split test" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("This cannot be undone.");
+    expect(dialog).toHaveTextContent("dawg is working in it: the running turn stops first.");
   });
 
   it("renames inline: Enter saves", async () => {

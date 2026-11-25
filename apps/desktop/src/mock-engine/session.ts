@@ -21,6 +21,7 @@ import { IdScope } from "./ids.ts";
 import type { Player } from "./player.ts";
 import { SessionState } from "./state.ts";
 import type { Fields } from "./types.ts";
+import { compactAtFor, contextBreakdown } from "./usage.ts";
 
 export interface SessionSettings {
   title: string | null;
@@ -105,6 +106,7 @@ export class MockSession {
   queue: { behind: string } | null = null;
   /** A title made from the first prompt, set once that turn ends. */
   pendingTitle: string | null = null;
+  /** The mode before the session last entered plan mode. */
   modeBeforePlan: PermissionMode = "default";
   /** Emitted request id → its recorded id and the id scope it was raised in. */
   readonly origins = new Map<string, { recordedId: string; scope: IdScope }>();
@@ -146,6 +148,15 @@ export class MockSession {
 
   get modelInfo(): ModelInfo | null {
     return findMockModel(this.settings.model)?.info ?? null;
+  }
+
+  /**
+   * The mode approving a plan returns to unless the answer names one: the mode before plan mode,
+   * or the current mode for a plan proposed outside plan mode. "default" stands in for plan.
+   */
+  get planReturnMode(): PermissionMode {
+    const mode = this.settings.mode === "plan" ? this.modeBeforePlan : this.settings.mode;
+    return mode === "plan" ? "default" : mode;
   }
 
   /** A turn or compaction runs, or something is still playing. */
@@ -232,11 +243,18 @@ export class MockSession {
         break;
       }
       case "question.asked":
+        this.origins.set(String(fields.requestId), {
+          recordedId: template.payload.requestId,
+          scope: ctx.scope,
+        });
+        break;
       case "plan.proposed":
         this.origins.set(String(fields.requestId), {
           recordedId: template.payload.requestId,
           scope: ctx.scope,
         });
+        // The session's own mode history, which may differ from the recording's.
+        fields.modeBeforePlan = this.planReturnMode;
         break;
       default:
         break;
@@ -260,8 +278,9 @@ export class MockSession {
   #continueUsage(recorded: Usage): Usage {
     const before = this.state.usage?.totals;
     const last = recorded.last;
+    const contextWindow = this.modelInfo?.contextWindow ?? recorded.contextWindow;
     return {
-      contextWindow: this.modelInfo?.contextWindow ?? recorded.contextWindow,
+      contextWindow,
       contextUsed: recorded.contextUsed,
       last: { ...last },
       totals: {
@@ -271,6 +290,8 @@ export class MockSession {
         cachedTokens: (before?.cachedTokens ?? 0) + (last.cachedTokens ?? 0),
         malformedToolCalls: before?.malformedToolCalls ?? recorded.totals.malformedToolCalls,
       },
+      compactAt: compactAtFor(contextWindow),
+      breakdown: recorded.breakdown ?? contextBreakdown(recorded.contextUsed),
     };
   }
 
@@ -316,6 +337,7 @@ export class MockSession {
       createdAt: this.createdAt,
       lastActivityAt: this.lastActivityAt,
       status: this.state.status,
+      queuePosition: this.state.queuePosition,
       mode: s.mode,
       model: s.model,
       effort: s.effort,

@@ -12,7 +12,7 @@
 import type {
   EngineEventInput,
   ErrorInfo,
-  EventInputMap,
+  EventMap,
   EventName,
   PermissionMode,
   PermissionResponse,
@@ -25,12 +25,22 @@ import type {
   ToolOutcome,
 } from "@dawg/protocol";
 import { findMockModel } from "../../shared/mock-models.ts";
+import {
+  compactAtFor,
+  contextBreakdown,
+  INSTRUCTION_TOKENS,
+  PREFIX_TOKENS,
+  SYSTEM_PROMPT_TOKENS,
+} from "../usage.ts";
 import { chunkWords, estimateTokens, Random } from "./text.ts";
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-/** An event's payload without the fields every event carries. */
+/**
+ * An event's payload without the fields every event carries. Every field is written out, those
+ * with defaults included, as the engine writes its stored events.
+ */
 export type Fields<E extends EventName> = DistributiveOmit<
-  EventInputMap[E],
+  EventMap[E],
   "sessionId" | "seq" | "time"
 >;
 
@@ -145,6 +155,8 @@ export class Recorder {
   #time: number;
   #seq = 0;
   #settings: SessionSettings;
+  /** The mode an approved plan returns to: the one before plan mode. */
+  #modeBeforePlan: PermissionMode;
   #usage: UsageState = {
     contextUsed: 0,
     requests: 0,
@@ -166,8 +178,9 @@ export class Recorder {
     this.#random = new Random(options.seed);
     this.#time = options.startTime;
     this.#settings = { ...options.settings };
-    this.#prefixTokens = options.prefixTokens ?? 15_104;
-    this.#instructionTokens = options.instructionTokens ?? 1_186;
+    this.#modeBeforePlan = options.settings.mode === "plan" ? "default" : options.settings.mode;
+    this.#prefixTokens = options.prefixTokens ?? PREFIX_TOKENS;
+    this.#instructionTokens = options.instructionTokens ?? INSTRUCTION_TOKENS;
   }
 
   get random(): Random {
@@ -184,6 +197,7 @@ export class Recorder {
       ...this.#settings,
       additionalDirectories: [...this.#settings.additionalDirectories],
     };
+    copy.#modeBeforePlan = this.#modeBeforePlan;
     copy.#usage = { ...this.#usage };
     copy.#pendingTokens = this.#pendingTokens;
     copy.#turn = this.#turn === null ? null : { ...this.#turn };
@@ -256,7 +270,12 @@ export class Recorder {
 
   status(
     status: SessionStatus,
-    options: { waitingOn?: "permission" | "question" | "plan"; message?: string | null } = {},
+    options: {
+      waitingOn?: "permission" | "question" | "plan";
+      message?: string | null;
+      /** Set while the turn waits for a model busy with other sessions (1 = next). */
+      queuePosition?: number;
+    } = {},
   ): void {
     const waitingOn = status === "waiting" ? (options.waitingOn ?? null) : null;
     const message =
@@ -267,11 +286,15 @@ export class Recorder {
           : waitingOn !== null
             ? STATUS_MESSAGES[waitingOn]
             : null;
-    this.emit("session.status", { status, waitingOn, message });
+    const queuePosition = status === "working" ? (options.queuePosition ?? null) : null;
+    this.emit("session.status", { status, waitingOn, message, queuePosition });
   }
 
   /** `session.updated` with the whole settings, after applying `changes`. */
   updateSettings(changes: Partial<SessionSettings>): void {
+    if (changes.mode === "plan" && this.#settings.mode !== "plan") {
+      this.#modeBeforePlan = this.#settings.mode;
+    }
     this.#settings = { ...this.#settings, ...changes };
     const s = this.#settings;
     this.emit("session.updated", {
@@ -290,10 +313,19 @@ export class Recorder {
   // Turns
   // -------------------------------------------------------------------------------------------
 
-  /** `session.status` working, then `turn.started` with the person's message. */
-  startTurn(text: string, options: { statusMessage?: string } = {}): string {
+  /**
+   * `session.status` working, then `turn.started` with the person's message. With
+   * `queuePosition`, the turn starts waiting for a model busy with other sessions.
+   */
+  startTurn(
+    text: string,
+    options: { statusMessage?: string; queuePosition?: number } = {},
+  ): string {
     if (this.#turn !== null) throw new Error("A turn is already running");
-    this.status("working", { message: options.statusMessage ?? "Working" });
+    this.status("working", {
+      message: options.statusMessage ?? "Working",
+      ...(options.queuePosition === undefined ? {} : { queuePosition: options.queuePosition }),
+    });
     const turnId = `turn-${this.#seq + 1}`;
     this.#turn = {
       turnId,
@@ -440,8 +472,20 @@ export class Recorder {
           cachedTokens: u.cachedTokens,
           malformedToolCalls: 0,
         },
+        compactAt: compactAtFor(CONTEXT_WINDOW),
+        breakdown: contextBreakdown(u.contextUsed, this.#fixedTokens()),
       },
     });
+  }
+
+  /** The parts of the model's view that are there before any conversation. */
+  #fixedTokens() {
+    const systemPrompt = Math.round((this.#prefixTokens * SYSTEM_PROMPT_TOKENS) / PREFIX_TOKENS);
+    return {
+      systemPrompt,
+      instructions: this.#instructionTokens,
+      tools: this.#prefixTokens - systemPrompt,
+    };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -601,6 +645,7 @@ export class Recorder {
       toolCallId: call.toolCallId,
       plan: String(call.input.plan),
       planPath,
+      modeBeforePlan: this.#settings.mode === "plan" ? this.#modeBeforePlan : this.#settings.mode,
     });
     this.status("waiting", { waitingOn: "plan" });
   }

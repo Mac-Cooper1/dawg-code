@@ -12,6 +12,7 @@ import {
   type SessionSummary,
   type Usage,
 } from "@dawg/protocol";
+import { contextBreakdown } from "../../../mock-engine/usage.ts";
 import { reduceAll } from "../reducer.ts";
 import type { EngineSlice, ReducerInput, TranscriptItem } from "../types.ts";
 
@@ -91,6 +92,7 @@ export function makeSummary(id: string, overrides: Partial<SessionSummary> = {})
     createdAt: T0 - 60_000,
     lastActivityAt: T0,
     status: "idle",
+    queuePosition: null,
     mode: "default",
     model: MODEL_INFO.id,
     effort: null,
@@ -136,6 +138,8 @@ export function makeUsage(
       completionTokensPerSecond: 41,
     },
     totals: { ...totals, completionTokens: totals.requests * 300, malformedToolCalls: 0 },
+    compactAt: 133_120,
+    breakdown: contextBreakdown(contextUsed),
   };
 }
 

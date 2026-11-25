@@ -8,6 +8,9 @@
  * after the replay; the reducer drops whatever the replay already covered. Everything reaches the
  * store through one batch per animation frame, in arrival order; snapshots and replay pages are
  * flushed at once, so the high-water mark is current before the next replay page is asked for.
+ *
+ * `session.deleted` is never held back: the session is forgotten at once, and a snapshot or
+ * replay still on its way for it is dropped.
  */
 import {
   type Client,
@@ -71,6 +74,11 @@ export interface EngineConnection {
   adoptSnapshot(snapshot: SessionSnapshot): Promise<void>;
   /** True while the session's snapshot or replay is outstanding. */
   isSyncing(sessionId: SessionId): boolean;
+  /**
+   * The session was deleted: stop holding or expecting anything for it. A snapshot or replay on
+   * its way is dropped, and its failure is not reported.
+   */
+  forgetSession(sessionId: SessionId): void;
   /** Hands queued inputs to the store now. */
   flush(): void;
 }
@@ -105,6 +113,8 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
   const live = new Set<SessionId>();
   const held = new Map<SessionId, EngineEvent[]>();
   const syncs = new Map<SessionId, Promise<void>>();
+  /** Deleted sessions: whatever still arrives for them is dropped. */
+  const gone = new Set<SessionId>();
   const unsubscribe: Unsubscribe[] = [];
 
   let client: Client | null = null;
@@ -123,8 +133,21 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
     resolveStarted = null;
   }
 
+  function forget(id: SessionId): void {
+    gone.add(id);
+    live.delete(id);
+    held.delete(id);
+    syncs.delete(id);
+  }
+
   function handleEvent(event: EngineEvent): void {
     const id = event.payload.sessionId;
+    if (event.event === "session.deleted") {
+      forget(id);
+      batcher.push({ type: "event", event });
+      return;
+    }
+    if (gone.has(id)) return;
     if (live.has(id)) {
       batcher.push({ type: "event", event });
       return;
@@ -263,16 +286,24 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
   /** Applies the snapshot, replays from the high-water mark, then releases held events. */
   async function catchUp(current: Client, gen: number, snapshot: SessionSnapshot): Promise<void> {
     const id = snapshot.session.id;
+    if (gone.has(id)) return;
     batcher.push({ type: "snapshot", snapshot });
     batcher.flush();
     let afterSeq = hooks.getSlice().sessions[id]?.highWaterSeq ?? 0;
     for (;;) {
-      const page = await current.request("session.replay", {
-        sessionId: id,
-        afterSeq,
-        limit: REPLAY_PAGE,
-      });
-      if (gen !== generation) return;
+      let page: MethodResult<"session.replay">;
+      try {
+        page = await current.request("session.replay", {
+          sessionId: id,
+          afterSeq,
+          limit: REPLAY_PAGE,
+        });
+      } catch (error) {
+        // Deleted meanwhile: nothing to report.
+        if (gone.has(id)) return;
+        throw error;
+      }
+      if (gen !== generation || gone.has(id)) return;
       const last = page.events[page.events.length - 1];
       const done = !page.hasMore || last === undefined;
       batcher.push({ type: "replay", sessionId: id, events: page.events, done });
@@ -349,7 +380,13 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
       return track(
         sessionId,
         (async () => {
-          const snapshot = await link.current.request("session.resume", { sessionId });
+          let snapshot: SessionSnapshot;
+          try {
+            snapshot = await link.current.request("session.resume", { sessionId });
+          } catch (error) {
+            if (gone.has(sessionId)) return;
+            throw error;
+          }
           if (link.gen !== generation) return;
           await catchUp(link.current, link.gen, snapshot);
         })(),
@@ -370,6 +407,9 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
     },
     isSyncing(sessionId) {
       return syncs.has(sessionId);
+    },
+    forgetSession(sessionId) {
+      forget(sessionId);
     },
     flush() {
       batcher.flush();

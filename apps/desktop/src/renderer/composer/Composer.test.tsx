@@ -417,19 +417,42 @@ describe.each(THEMES)("Composer (%s)", (theme) => {
       const rows = within(dialog)
         .getAllByRole("term")
         .map((term) => term.textContent);
-      expect(rows).toEqual(["Read from cache on the last request", "Rest of the context", "Free"]);
+      expect(rows).toEqual(["System prompt", "Instructions", "Tools", "Messages", "Free"]);
       expect(
         within(dialog)
           .getAllByRole("definition")
           .map((value) => value.textContent),
-      ).toEqual(["72K", "2.2K", "130.6K"]);
+      ).toEqual(["4.1K", "1.2K", "11K", "57.9K", "130.6K"]);
       expect(dialog).toHaveTextContent(
         "Last request: read 1,240 tokens/s, wrote 41 tokens/s, 97% of the prompt from cache.",
       );
-      expect(dialog).toHaveTextContent("Compacts on its own at 65% (133K).");
+      expect(dialog).toHaveTextContent("Compacts on its own at 65% (133.1K).");
+      const mark = within(dialog).getByTestId("compact-mark");
+      expect(mark.style.left).toBe("65%");
       await user.click(within(dialog).getByRole("button", { name: /Compact now/ }));
       expect(on.onCompact).toHaveBeenCalledOnce();
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("falls back for sessions stored before the split and the threshold were reported", async () => {
+      const { user } = setup(theme, {
+        view: {
+          context: {
+            ...(sampleComposer().context as NonNullable<ComposerView["context"]>),
+            breakdown: null,
+            compactAt: null,
+          },
+        },
+      });
+      await user.click(screen.getByRole("button", { name: /^Context used/ }));
+      const dialog = screen.getByRole("dialog");
+      expect(
+        within(dialog)
+          .getAllByRole("term")
+          .map((term) => term.textContent),
+      ).toEqual(["Read from cache on the last request", "Rest of the context", "Free"]);
+      expect(dialog).not.toHaveTextContent("Compacts on its own");
+      expect(within(dialog).queryByTestId("compact-mark")).toBeNull();
     });
 
     it("closes its popover on Esc", async () => {

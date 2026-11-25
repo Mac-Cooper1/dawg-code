@@ -17,7 +17,8 @@ import {
 
 const ID = "docs-search";
 const CWD = "~/code/dawg-site";
-export const QUEUED_MESSAGE = "Queued: waits for the model";
+/** The status line while the turn waits for the model, as the engine words it. */
+export const QUEUED_MESSAGE = "Waiting for the model";
 
 /** "$": file text below holds JavaScript template literals, written `${D}{x}` so lint does not take them for mistakes. */
 const D = "$";
@@ -164,6 +165,7 @@ export function docsSearch(): ScenarioDefinition {
 
   rec.startTurn("Add a search page to the docs. Client-side only, no server.", {
     statusMessage: QUEUED_MESSAGE,
+    queuePosition: 1,
   });
   out.add("stored.jsonl", rec);
 

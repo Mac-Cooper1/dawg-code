@@ -102,7 +102,11 @@ export function touchedSinceCompaction(
   return paths;
 }
 
-/** Usage totals rebuilt from the replies stored in the transcript. */
+/**
+ * Usage totals rebuilt from the replies stored in the transcript. The context size is the last
+ * reply's, or the size a later compaction left. `compactAt` and `breakdown` need the session's
+ * profile and prefix, so they are null here; the runtime fills them in.
+ */
 export function usageFromRecords(
   records: readonly SessionRecord[],
   contextWindow: number,
@@ -115,7 +119,12 @@ export function usageFromRecords(
     malformedToolCalls: 0,
   };
   let last: Usage["last"] | null = null;
+  let contextUsed = 0;
   for (const r of records) {
+    if (r.type === "compact") {
+      if (r.tokensAfter != null) contextUsed = r.tokensAfter;
+      continue;
+    }
     if (r.type !== "assistant") continue;
     totals.malformedToolCalls += r.message.toolCalls.filter(
       (c) => c.rawArguments !== undefined,
@@ -133,14 +142,16 @@ export function usageFromRecords(
       promptTokensPerSecond: u.promptTokensPerSecond,
       completionTokensPerSecond: u.completionTokensPerSecond,
     };
+    contextUsed = (u.promptTokens ?? 0) + (u.completionTokens ?? 0);
   }
   if (last === null) return null;
-  const contextUsed = (last.promptTokens ?? 0) + (last.completionTokens ?? 0);
   return {
     contextWindow,
-    contextUsed: Math.min(contextUsed, Number.MAX_SAFE_INTEGER),
+    contextUsed: Math.min(Math.max(0, Math.round(contextUsed)), Number.MAX_SAFE_INTEGER),
     last: intLast(last),
     totals,
+    compactAt: null,
+    breakdown: null,
   };
 }
 

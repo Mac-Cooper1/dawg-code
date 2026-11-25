@@ -25,12 +25,16 @@ export interface BashRun {
   start?: boolean;
 }
 
-/** The command display for a finished foreground command. */
+/**
+ * The command display for a finished foreground command. `output` is what it printed, without
+ * the notes the tool adds for the model; `notes` are those notes, the exit code left out.
+ */
 export function commandDisplay(
   rec: Recorder,
   command: string,
   exitCode: number | null,
   durationMs: number,
+  printed: { output: string; notes?: string[] },
   interrupted = false,
 ): CommandDisplay {
   return {
@@ -43,12 +47,14 @@ export function commandDisplay(
     interrupted,
     backgroundTaskId: null,
     outputPath: null,
+    output: printed.output,
+    notes: printed.notes ?? [],
   };
 }
 
 /**
  * Runs a Bash call. As in the real tool, a non-zero exit is an error result: the output, then
- * "Exit code N", marked "Error:" for the model.
+ * "Exit code N", marked "Error:" for the model. The display carries the output alone.
  */
 export function runBash(rec: Recorder, call: ToolCall, run: BashRun): void {
   const command = String(call.input.command);
@@ -62,7 +68,7 @@ export function runBash(rec: Recorder, call: ToolCall, run: BashRun): void {
     durationMs: run.durationMs,
     outcome: run.exitCode === 0 ? "success" : "error",
     content,
-    display: commandDisplay(rec, command, run.exitCode, run.durationMs),
+    display: commandDisplay(rec, command, run.exitCode, run.durationMs, { output: body }),
     progress: run.progress ?? spreadOutput(run.output, run.durationMs),
   });
 }

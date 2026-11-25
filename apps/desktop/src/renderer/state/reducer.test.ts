@@ -550,21 +550,18 @@ describe("robustness", () => {
     expect(tools[2]?.startedAt).toBe(stream.time - 40);
   });
 
-  it("remembers the mode before plan mode for the plan card", () => {
+  it("takes the plan card's return mode from the request, not from mode changes", () => {
     const stream = createStream();
-    const updated = (mode: "default" | "acceptEdits" | "plan") =>
-      stream.emit("session.updated", {
-        title: "Plan",
-        mode,
-        model: "qwen3.8-27b-q8",
-        modelInfo: null,
-        effort: null,
-        archived: false,
-        additionalDirectories: [],
-        changed: ["mode"],
-      });
-    updated("acceptEdits");
-    updated("plan");
+    stream.emit("session.updated", {
+      title: "Plan",
+      mode: "plan",
+      model: "qwen3.8-27b-q8",
+      modelInfo: null,
+      effort: null,
+      archived: false,
+      additionalDirectories: [],
+      changed: ["mode"],
+    });
     stream.emit("turn.started", {
       turnId: "t1",
       prompt: { content: [{ type: "text", text: "Plan" }], mentions: [] },
@@ -576,50 +573,27 @@ describe("robustness", () => {
       toolCallId: "c1",
       plan: "# Plan",
       planPath: "/Users/you/.dawg/plans/p.md",
+      modeBeforePlan: "acceptEdits",
+    });
+    // A plan stored before engines reported the mode: no mode is guessed.
+    stream.emit("plan.proposed", {
+      turnId: "t1",
+      requestId: "r2",
+      toolCallId: "c2",
+      plan: "# Plan",
+      planPath: null,
     });
     const replayed = applyReplay(
-      openSession(makeSummary("s1", { mode: "plan" })),
+      openSession(makeSummary("s1", { mode: "default" })),
       "s1",
       stream.events,
     );
-    expect(find(replayed, "plan")[0]?.modeBeforePlan).toBe("acceptEdits");
-    expect(replayed.sessions.s1?.summary.mode).toBe("plan");
-
-    // Live, after loading: the summary's mode is current.
-    const live = createStream();
-    live.emit("session.updated", {
-      title: null,
-      mode: "plan",
-      model: null,
-      modelInfo: null,
-      effort: null,
-      archived: false,
-      additionalDirectories: [],
-      changed: ["mode"],
-    });
-    live.emit("plan.proposed", {
-      turnId: "t1",
-      requestId: "r2",
-      toolCallId: "c1",
-      plan: "# Plan",
-      planPath: null,
-    });
-    const loaded = applyReplay(openSession(makeSummary("s1", { mode: "default" })), "s1", []);
-    expect(find(applyLive(loaded, live.events), "plan")[0]?.modeBeforePlan).toBe("default");
-
-    // A plan proposed without switching to plan mode returns to the mode it came from.
-    const direct = createStream();
-    direct.emit("plan.proposed", {
-      turnId: "t1",
-      requestId: "r3",
-      toolCallId: "c1",
-      plan: "# Plan",
-      planPath: null,
-    });
-    const accepting = openSession(makeSummary("s1", { mode: "acceptEdits" }));
-    expect(find(applyReplay(accepting, "s1", direct.events), "plan")[0]?.modeBeforePlan).toBe(
+    expect(find(replayed, "plan").map((item) => item.modeBeforePlan)).toEqual([
       "acceptEdits",
-    );
+      null,
+    ]);
+    const live = applyLive(applyReplay(openSession(makeSummary("s1")), "s1", []), stream.events);
+    expect(find(live, "plan").map((item) => item.modeBeforePlan)).toEqual(["acceptEdits", null]);
   });
 
   it("records compaction, errors and failed turns", () => {
@@ -707,7 +681,8 @@ describe("robustness", () => {
     stream.emit("session.status", {
       status: "working",
       waitingOn: null,
-      message: "Queued: waits for the model",
+      message: "Waiting for the model",
+      queuePosition: 2,
     });
     stream.emit("session.updated", {
       title: "Fix the split",
@@ -732,7 +707,8 @@ describe("robustness", () => {
     const state = applyLive(openSession(makeSummary("s1")), stream.events);
     expect(state.sessions.s1).toMatchObject({
       status: "working",
-      statusMessage: "Queued: waits for the model",
+      statusMessage: "Waiting for the model",
+      queuePosition: 2,
       modelInfo: { id: "gpt-oss-20b-q4" },
       additionalDirectories: ["/tmp/x"],
       summary: {
@@ -746,6 +722,70 @@ describe("robustness", () => {
     expect(state.sessions.s1?.usage?.totals.requests).toBe(1);
     // A task list outside a turn updates the session only.
     expect(find(state, "tasks")).toEqual([]);
+    expect(state.sessions.s1?.summary.queuePosition).toBe(2);
+    const started = createStream("s1", { seq: stream.seq });
+    started.emit("session.status", { status: "working", waitingOn: null, message: "Working" });
+    expect(applyLive(state, started.events).sessions.s1?.queuePosition).toBeNull();
+  });
+
+  it("takes the place in line from snapshots and list summaries", () => {
+    const snapshot = openSession(makeSummary("s1", { status: "working", queuePosition: 1 }));
+    expect(snapshot.sessions.s1?.queuePosition).toBe(1);
+    const listed = reduce(emptyEngineSlice(), {
+      type: "summaries",
+      sessions: [makeSummary("s2", { status: "working", queuePosition: 2 })],
+    });
+    expect(listed.sessions.s2?.queuePosition).toBe(2);
+    const moved = reduce(listed, {
+      type: "summaries",
+      sessions: [makeSummary("s2", { status: "working", queuePosition: 1 })],
+    });
+    expect(moved.sessions.s2?.queuePosition).toBe(1);
+  });
+
+  it("removes a deleted session with its transcript and pending requests", () => {
+    const stream = createStream();
+    stream.emit("session.status", { status: "working", waitingOn: null, message: null });
+    stream.emit("turn.started", {
+      turnId: "t1",
+      prompt: { content: [{ type: "text", text: "Go" }], mentions: [] },
+      command: null,
+    });
+    stream.emit("plan.proposed", {
+      turnId: "t1",
+      requestId: "r1",
+      toolCallId: "c1",
+      plan: "# Plan",
+      planPath: null,
+      modeBeforePlan: "default",
+    });
+    const other = openSession(makeSummary("other"));
+    let state = applyLive(
+      reduce(openSession(makeSummary("s1")), {
+        type: "snapshot",
+        snapshot: makeSnapshot(makeSummary("other")),
+      }),
+      stream.events,
+    );
+    expect(state.pending.s1).toHaveLength(1);
+    const deleted = createStream("s1", { seq: stream.seq });
+    deleted.emit("session.deleted", {});
+    const before = state;
+    state = applyLive(state, deleted.events);
+    expect(state.sessions.s1).toBeUndefined();
+    expect(state.transcripts.s1).toBeUndefined();
+    expect(state.pending.s1).toBeUndefined();
+    expect(state.sessions.other).toBe(before.sessions.other);
+    // The same from the result of session.delete, and for a session not open here.
+    const stored = reduce(other, { type: "summaries", sessions: [makeSummary("stored")] });
+    expect(
+      reduce(stored, { type: "deleted", sessionId: "stored" }).sessions.stored,
+    ).toBeUndefined();
+    const elsewhere = createStream("stored", { seq: 5 });
+    elsewhere.emit("session.deleted", {});
+    expect(applyLive(stored, elsewhere.events).sessions.stored).toBeUndefined();
+    // Deleting what is not there changes nothing.
+    expect(reduce(other, { type: "deleted", sessionId: "nope" })).toBe(other);
   });
 });
 

@@ -162,6 +162,15 @@ export const SessionSummaryResultSchema = z.object({
   session: SessionSummarySchema,
 });
 
+/**
+ * Deletes a stored session for good: its transcript, events and side files. Works whether or not
+ * the session is open. A running turn or compaction is interrupted first, and every connection
+ * that had the session open gets `session.deleted` as its last event. Forks of it keep working.
+ */
+export const SessionDeleteParamsSchema = z.object({
+  sessionId: SessionIdSchema,
+});
+
 // ---------------------------------------------------------------------------------------------
 // Running a session
 // ---------------------------------------------------------------------------------------------
@@ -289,6 +298,7 @@ export const methods = {
   "session.list": { params: SessionListParamsSchema, result: SessionListResultSchema },
   "session.rename": { params: SessionRenameParamsSchema, result: SessionSummaryResultSchema },
   "session.archive": { params: SessionArchiveParamsSchema, result: SessionSummaryResultSchema },
+  "session.delete": { params: SessionDeleteParamsSchema, result: EmptyResultSchema },
   "session.prompt": { params: SessionPromptParamsSchema, result: SessionPromptResultSchema },
   "session.interrupt": {
     params: SessionInterruptParamsSchema,

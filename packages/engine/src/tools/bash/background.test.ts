@@ -63,7 +63,13 @@ describe("Bash run_in_background", () => {
     expect(saved.map((s) => s.path)).toEqual([outputPath]);
     expect(text(out)).toContain(`Started in the background as task ${id}.`);
     expect(text(out)).toContain(outputPath);
-    expect(out.display).toMatchObject({ exitCode: null, durationMs: null, cwd: root });
+    expect(out.display).toMatchObject({
+      exitCode: null,
+      durationMs: null,
+      cwd: root,
+      output: null,
+      notes: [],
+    });
     expect(
       getBackgroundTasks(state)
         .running()
@@ -155,7 +161,12 @@ describe("TaskStop", () => {
     const out = await taskStopTool.execute({ task_id: id }, ctx);
     expect(out.isError).toBeFalsy();
     expect(text(out)).toBe(`Stopped task ${id} (sleep ${MARK}).`);
-    expect(out.display).toMatchObject({ kind: "command", backgroundTaskId: id });
+    expect(out.display).toMatchObject({
+      kind: "command",
+      backgroundTaskId: id,
+      output: null,
+      notes: [`Stopped task ${id} (sleep ${MARK}).`],
+    });
     expect(getBackgroundTasks(state).get(id)?.status).toBe("stopped");
   });
 
@@ -205,8 +216,13 @@ describe("TaskOutput", () => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     const second = await taskOutputTool.execute({ task_id: id }, ctx);
     expect(text(second)).toMatch(/New output:\ntwo$/);
+    expect(second.display).toMatchObject({ output: "two" });
     const third = await taskOutputTool.execute({ task_id: id }, ctx);
     expect(text(third)).toContain("No new output since the last check.");
+    expect(third.display).toMatchObject({ output: null });
+    if (third.display?.kind !== "command") throw new Error("no command display");
+    expect(third.display.notes).toHaveLength(1);
+    expect(third.display.notes[0]).toMatch(new RegExp(`^Task ${id} is still running`));
   });
 
   it("waits for the task to end with block", async () => {

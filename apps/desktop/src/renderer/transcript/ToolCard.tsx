@@ -16,9 +16,9 @@ import { FileLinesView } from "./FileLinesView.tsx";
 import { useNow } from "./hooks.ts";
 import styles from "./ToolCard.module.css";
 import {
+  commandOutput,
   contentText,
   EDIT_TOOLS,
-  finishedCommandOutput,
   type MetaPart,
   parseReadResult,
   toolDurationMs,
@@ -110,7 +110,7 @@ function useStickToBottom(active: boolean, content: string) {
 
 function BashBody({ item, env }: { item: ToolCallItem; env: TranscriptEnv }) {
   const running = item.state === "running";
-  const finished = useMemo(() => (running ? null : finishedCommandOutput(item)), [running, item]);
+  const finished = useMemo(() => (running ? null : commandOutput(item)), [running, item]);
   let text = finished ? finished.output : item.output.map((chunk) => chunk.text).join("");
   if (text.length > LIVE_OUTPUT_CHARS) text = text.slice(-LIVE_OUTPUT_CHARS);
   const { ref, onScroll } = useStickToBottom(running, text);

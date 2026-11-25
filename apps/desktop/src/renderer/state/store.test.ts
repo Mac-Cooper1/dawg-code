@@ -1,3 +1,4 @@
+import { ErrorCodes, RpcError } from "@dawg/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFakeBridge,
@@ -303,6 +304,78 @@ describe("sessions", () => {
     expect(state(harness).sessions.stored?.summary.archived).toBe(true);
     await actions(harness).archiveSession("stored", false);
     expect(state(harness).sessions.stored?.summary.archived).toBe(false);
+  });
+
+  it("deletes a session: it leaves the store with its UI state, and a neighbour is shown", async () => {
+    const engine = new FakeEngine();
+    withHistory(engine, "a", { title: "A" });
+    withHistory(engine, "b", { title: "B" });
+    running(engine, "c");
+    const harness = await started(setup(engine));
+    // Newest first: c, b, a.
+    actions(harness).selectSession("c");
+    await vi.waitFor(() => expect(state(harness).sessions.c?.loaded).toBe(true));
+    await actions(harness).submit("c", "Then this");
+    actions(harness).setDraft("c", "half typed");
+    actions(harness).setItemOpen("c", "x", true);
+    expect(state(harness).ui.queues.c).toHaveLength(1);
+
+    await actions(harness).deleteSession("c");
+    expect(engine.callsOf("session.delete")).toEqual([{ sessionId: "c" }]);
+    const after = state(harness);
+    expect(after.sessions.c).toBeUndefined();
+    expect(after.transcripts.c).toBeUndefined();
+    expect(after.ui.queues.c).toBeUndefined();
+    expect(after.ui.drafts.c).toBeUndefined();
+    expect(after.ui.openItems.c).toBeUndefined();
+    expect(after.ui.seenSeq.c).toBeUndefined();
+    expect(after.layout.selectedSessionId).toBe("b");
+    await vi.waitFor(() => expect(state(harness).sessions.b?.loaded).toBe(true));
+    // The interrupted turn's queued message was dropped, not sent.
+    expect(engine.callsOf("session.prompt")).toEqual([]);
+    expect(after.notices).toEqual([]);
+
+    // Another window deletes the selected session: the next one down is shown.
+    engine.deleteSession("b");
+    await vi.waitFor(() => expect(state(harness).sessions.b).toBeUndefined());
+    expect(state(harness).layout.selectedSessionId).toBe("a");
+    await vi.waitFor(() => expect(state(harness).sessions.a?.loaded).toBe(true));
+
+    // The last one: nothing is selected.
+    await actions(harness).deleteSession("a");
+    expect(state(harness).sessions).toEqual({});
+    expect(state(harness).layout.selectedSessionId).toBeNull();
+    expect(state(harness).notices).toEqual([]);
+  });
+
+  it("drops a session another window deleted, open or not, without changing the selection", async () => {
+    const engine = new FakeEngine();
+    withHistory(engine, "kept", { title: "Kept" });
+    withHistory(engine, "stored", { title: "Stored" });
+    const harness = await started(setup(engine));
+    actions(harness).selectSession("kept");
+    await vi.waitFor(() => expect(state(harness).sessions.kept?.loaded).toBe(true));
+    // Not open here: this window hears nothing, but session.delete reports it gone.
+    engine.deleteSession("stored");
+    expect(state(harness).sessions.stored).toBeDefined();
+    await actions(harness).deleteSession("stored");
+    expect(state(harness).sessions.stored).toBeUndefined();
+    expect(state(harness).layout.selectedSessionId).toBe("kept");
+    expect(state(harness).notices).toEqual([]);
+  });
+
+  it("keeps the session and says why when deleting fails", async () => {
+    const engine = new FakeEngine();
+    withHistory(engine, "s1", { title: "Busy elsewhere" });
+    engine.overrides["session.delete"] = () => {
+      throw new RpcError(ErrorCodes.InvalidState, "A dawg run in a terminal has it open");
+    };
+    const harness = await started(setup(engine));
+    await actions(harness).deleteSession("s1");
+    expect(state(harness).sessions.s1).toBeDefined();
+    expect(state(harness).notices.map((notice) => notice.text)).toEqual([
+      "Could not delete “Busy elsewhere”: A dawg run in a terminal has it open.",
+    ]);
   });
 
   it("returns null when the folder picker is cancelled", async () => {

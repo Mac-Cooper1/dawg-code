@@ -214,6 +214,12 @@ export function createEngineHost(
       session: await engine.archiveSession(params.sessionId, params.archived ?? true),
     }),
 
+    "session.delete": async (params) => {
+      // Every connection holding the session, this one included, drops it on `session.deleted`.
+      await engine.deleteSession(params.sessionId);
+      return {};
+    },
+
     "session.prompt": async (params) => {
       const runtime = await requireOpen(params.sessionId);
       return runtime.prompt(params.prompt);
@@ -326,7 +332,13 @@ export function createEngineHost(
   // One subscription for the whole engine; only sessions open here are forwarded. Events reach
   // this listener synchronously as they are emitted, so they go out in `seq` order.
   const stopEvents = engine.subscribe((event) => {
-    if (!open.has(event.payload.sessionId)) return;
+    const sessionId = event.payload.sessionId;
+    if (!open.has(sessionId)) return;
+    if (event.event === "session.deleted") {
+      // The session's last event: it is no longer open here, and requests on it find nothing.
+      open.delete(sessionId);
+      attachments.detach(sessionId, holder);
+    }
     try {
       server.notify(event.event, event.payload as EventPayloadInput<EventName>);
     } catch (error) {

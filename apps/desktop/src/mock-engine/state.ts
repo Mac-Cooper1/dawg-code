@@ -35,6 +35,8 @@ export class SessionState {
   status: SessionStatus = "idle";
   waitingOn: "permission" | "question" | "plan" | null = null;
   statusMessage: string | null = null;
+  /** Set while the turn waits for a model busy with other sessions (1 = next). */
+  queuePosition: number | null = null;
   tasks: TaskItem[] = [];
   usage: Usage | null = null;
   /** Oldest first. */
@@ -54,6 +56,7 @@ export class SessionState {
         this.status = p.status;
         this.waitingOn = p.waitingOn;
         this.statusMessage = p.message;
+        this.queuePosition = p.queuePosition;
         return;
       }
       case "tasks.updated":
@@ -130,7 +133,7 @@ export class SessionState {
         return;
       }
       case "plan.proposed": {
-        const { turnId, requestId, toolCallId, plan, planPath } = event.payload;
+        const { turnId, requestId, toolCallId, plan, planPath, modeBeforePlan } = event.payload;
         this.pending.set(requestId, {
           kind: "plan",
           turnId,
@@ -138,6 +141,7 @@ export class SessionState {
           toolCallId,
           plan,
           planPath,
+          modeBeforePlan,
         });
         return;
       }
@@ -160,6 +164,7 @@ export class SessionState {
         this.compaction = null;
         return;
       case "session.updated":
+      case "session.deleted":
       case "prompt.progress":
       case "error":
         return;

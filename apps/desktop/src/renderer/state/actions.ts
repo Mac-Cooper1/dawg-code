@@ -4,7 +4,14 @@
  * Nothing here throws into React: a failed request becomes a one-line notice, and state changes
  * that depend on the engine (titles, modes, answers) arrive as events rather than being guessed.
  */
-import type { PermissionMode, QuestionResponse, SessionId, SessionSnapshot } from "@dawg/protocol";
+import {
+  ErrorCodes,
+  type PermissionMode,
+  type QuestionResponse,
+  RpcError,
+  type SessionId,
+  type SessionSnapshot,
+} from "@dawg/protocol";
 import type { StoreApi } from "zustand";
 import type { DawgBridge, DesktopSettingsPatch } from "../../shared/bridge.ts";
 import { nextMode } from "../lib/modes.ts";
@@ -13,6 +20,7 @@ import { createEngineConnection, type EngineConnection, type SyncInfo } from "./
 import { followUps } from "./follow-ups.ts";
 import * as queue from "./queue.ts";
 import { reduceAll } from "./reducer.ts";
+import { neighbourOf, sidebarOrder } from "./sidebar-order.ts";
 import type {
   AppActions,
   AppStore,
@@ -115,8 +123,17 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     const before = sliceOf(prev);
     const slice = reduceAll(before, inputs);
     if (slice === before) return;
-    const { ui, ended } = followUps(prev, slice);
+    const { ui, ended, removed } = followUps(prev, slice);
     store.setState({ ...slice, ui });
+    const selected = prev.layout.selectedSessionId;
+    if (selected !== null && removed.includes(selected)) {
+      // Its neighbour in the sidebar as it was, among the sessions that are still there.
+      const gone = new Set(removed.filter((id) => id !== selected));
+      const groups = sidebarOrder(prev.sessions, prev.layout.search).map((group) =>
+        group.sessions.map((session) => session.id).filter((id) => !gone.has(id)),
+      );
+      show(neighbourOf(groups, selected), false);
+    }
     for (const turn of ended) {
       if (turn.stopReason === "completed") void sendNextQueued(turn.sessionId);
       else
@@ -352,6 +369,23 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     await connection.start();
   }
 
+  /**
+   * Selects a session (or nothing): marks it seen, and resumes and replays it if needed. With
+   * `toSessions`, Settings gives way to the session view.
+   */
+  function show(id: SessionId | null, toSessions: boolean): void {
+    const layout = get().layout;
+    store.setState({
+      layout: { ...layout, selectedSessionId: id, view: toSessions ? "sessions" : layout.view },
+    });
+    if (id === null) return;
+    setUi((ui) => markSeen(ui, id));
+    const session = get().sessions[id];
+    if (session && (!session.open || !session.loaded) && connection.ready) {
+      if (!connection.isSyncing(id)) void open(id);
+    }
+  }
+
   // --- Actions ---------------------------------------------------------------------------------
 
   const actions: AppActions = {
@@ -369,12 +403,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     },
 
     selectSession(id) {
-      store.setState({ layout: { ...get().layout, selectedSessionId: id, view: "sessions" } });
-      setUi((ui) => markSeen(ui, id));
-      const session = get().sessions[id];
-      if (session && (!session.open || !session.loaded) && connection.ready) {
-        if (!connection.isSyncing(id)) void open(id);
-      }
+      show(id, true);
     },
     setView: (view) => setLayout({ view }),
     setSettingsPage: (settingsPage) => setLayout({ settingsPage, view: "settings" }),
@@ -435,6 +464,19 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         () => connection.request("session.archive", { sessionId: id, archived }),
       );
       if (result) applyResult([{ type: "summaries", sessions: [result.session] }]);
+    },
+    async deleteSession(id) {
+      try {
+        await connection.request("session.delete", { sessionId: id });
+      } catch (error) {
+        // Already gone (another window deleted it): it leaves this window too.
+        if (!(error instanceof RpcError && error.code === ErrorCodes.SessionNotFound)) {
+          notice(`Could not delete “${sessionTitle(id)}”: ${errorText(error)}.`);
+          return;
+        }
+      }
+      connection.forgetSession(id);
+      applyResult([{ type: "deleted", sessionId: id }]);
     },
     markUnread(id) {
       setUi((ui) =>

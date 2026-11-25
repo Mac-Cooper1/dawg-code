@@ -1,8 +1,14 @@
 import { describe, expect, test } from "vitest";
-import { eventSamples, methodSamples } from "./__fixtures__/samples.ts";
+import { eventSamples, methodSamples, usage } from "./__fixtures__/samples.ts";
 import { ErrorInfoSchema, PromptSchema } from "./common.ts";
-import { EVENT_NAMES, events, parseEvent } from "./events.ts";
+import { EVENT_NAMES, type EventName, events, parseEvent } from "./events.ts";
 import { METHOD_NAMES, methods } from "./methods.ts";
+
+/** The `sessionId`, `seq` and `time` of an event's sample. */
+function baseOf(name: EventName) {
+  const { sessionId, seq, time } = eventSamples[name].payload;
+  return { sessionId, seq, time };
+}
 
 describe("methods", () => {
   test.each(METHOD_NAMES)("%s accepts valid params and results and rejects bad ones", (name) => {
@@ -94,6 +100,60 @@ describe("events", () => {
       retryable: false,
     });
     expect(info.kind).toBe("other");
+  });
+
+  test("events stored before a field was added still parse, with the field's default", () => {
+    const status = events["session.status"].parse({
+      ...eventSamples["session.status"].payload,
+      queuePosition: undefined,
+    });
+    expect(status.queuePosition).toBeNull();
+
+    const { compactAt: _compactAt, breakdown: _breakdown, ...oldUsage } = usage;
+    const parsedUsage = events["usage.updated"].parse({
+      ...baseOf("usage.updated"),
+      usage: oldUsage,
+    });
+    expect(parsedUsage.usage.compactAt).toBeNull();
+    expect(parsedUsage.usage.breakdown).toBeNull();
+
+    const plan = events["plan.proposed"].parse(eventSamples["plan.proposed"].payload);
+    expect(plan.modeBeforePlan).toBeNull();
+
+    const finished = events["tool.finished"].parse({
+      ...baseOf("tool.finished"),
+      turnId: "t1",
+      toolCallId: "c1",
+      toolName: "Bash",
+      outcome: "error",
+      content: [{ type: "text", text: "Error: boom\n\nExit code 1" }],
+      display: {
+        kind: "command",
+        command: "make",
+        cwd: "/tmp/project",
+        exitCode: 1,
+        durationMs: 12,
+        timedOut: false,
+        interrupted: false,
+        backgroundTaskId: null,
+        outputPath: null,
+      },
+      durationMs: 12,
+    });
+    expect(finished.display?.kind === "command" && finished.display.output).toBeNull();
+    expect(finished.display?.kind === "command" && finished.display.notes).toEqual([]);
+  });
+
+  test("a queued session reports its place in line", () => {
+    const parsed = events["session.status"].parse({
+      ...baseOf("session.status"),
+      status: "working",
+      waitingOn: null,
+      message: "Waiting for the model",
+      queuePosition: 2,
+    });
+    expect(parsed.queuePosition).toBe(2);
+    expect(events["session.status"].safeParse({ ...parsed, queuePosition: 0 }).success).toBe(false);
   });
 
   test("payloads survive a JSON round trip unchanged", () => {

@@ -77,6 +77,7 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
     renameSession: vi.fn(done),
     forkSession: vi.fn(async () => null),
     archiveSession: vi.fn(done),
+    deleteSession: vi.fn(done),
     markUnread: vi.fn(),
     setDraft: vi.fn((sessionId, text) =>
       set({ ui: { ...get().ui, drafts: { ...get().ui.drafts, [sessionId]: text } } }),
@@ -235,7 +236,8 @@ export function sampleComposer(overrides: Partial<ComposerView> = {}): ComposerV
         promptTokensPerSecond: 1240,
         completionTokensPerSecond: 41,
       },
-      compactAt: 0.65,
+      compactAt: 133_120,
+      breakdown: { systemPrompt: 4_112, instructions: 1_186, tools: 10_992, messages: 57_910 },
       compacting: false,
     },
     queue: [],
@@ -267,7 +269,6 @@ export function sampleTranscript(sessionId: SessionId): TranscriptView {
     openItems: {},
     shownAgain: {},
     queuedTurnIds: {},
-    mode: "acceptEdits",
     cwd: `${HOME}/code/tally`,
   };
 }

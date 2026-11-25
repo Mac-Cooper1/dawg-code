@@ -81,6 +81,27 @@ describe("interactive mode through pipes", () => {
     expect(result.stdout).toContain("still not");
   });
 
+  it("says which mode approving a plan leads to", async () => {
+    h = await startHarness({
+      script: withTitles([
+        toolCall("EnterPlanMode", {}),
+        toolCall("ExitPlanMode", { plan: "1. Write a.txt" }),
+        text("Planned and done."),
+      ]),
+    });
+    const child = h.spawn(["--endpoint", h.mock.baseUrl, "--permission-mode", "acceptEdits"]);
+    const stdin = child.process.stdin;
+    if (stdin === null) throw new Error("no stdin");
+    stdin.write("plan it\n");
+    await child.waitForStdout("Approve? y = yes (then acceptEdits mode)");
+    stdin.write("y\n");
+    await child.waitForStdout("Planned and done.");
+    stdin.end();
+    const result = await child.exited;
+    expect(result.code).toBe(EXIT.ok);
+    expect(result.stdout).toContain("Proposed plan:");
+  });
+
   it("stops waiting for an answer when the turn is interrupted", async () => {
     h = await startHarness({
       script: withTitles([toolCall("Write", { file_path: "a.txt", content: "a" }), text("again")]),

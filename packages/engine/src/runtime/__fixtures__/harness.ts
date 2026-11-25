@@ -24,6 +24,11 @@ export interface HarnessOptions {
   files?: Record<string, string>;
   /** Slots the model provider hands out. */
   slots?: { main: number; utility: number };
+  /**
+   * Slot pools the model provider hands out, the same objects to every session, as on the bundled
+   * runtime: conversation requests then wait for a free slot. Takes the place of `slots`.
+   */
+  pools?: { conversation: readonly number[]; utility?: readonly number[] };
 }
 
 export interface Harness {
@@ -73,13 +78,27 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const problems: string[] = [];
   const lastSeq = new Map<string, number>();
   const engines: Engine[] = [];
+  const pools =
+    options.pools === undefined
+      ? null
+      : {
+          conversation: { slots: options.pools.conversation },
+          utility:
+            options.pools.utility === undefined ? null : { slots: options.pools.utility },
+        };
 
   const makeEngine = (overrides: Partial<EngineOptions> = {}): Engine => {
     const client = createModelClient(mock.endpoint);
     const connection: ModelConnection =
-      options.slots === undefined
-        ? { client }
-        : { client, slot: options.slots.main, utility: { client, slot: options.slots.utility } };
+      pools !== null
+        ? {
+            client,
+            pool: pools.conversation,
+            ...(pools.utility === null ? {} : { utility: { client, pool: pools.utility } }),
+          }
+        : options.slots === undefined
+          ? { client }
+          : { client, slot: options.slots.main, utility: { client, slot: options.slots.utility } };
     const engine = new Engine({
       storeRoot,
       homeDir: home,

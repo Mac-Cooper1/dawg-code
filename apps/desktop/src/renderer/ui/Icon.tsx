@@ -148,6 +148,12 @@ const ICONS = {
     </>
   ),
   unread: <circle cx="8" cy="8" r="3" fill="currentColor" stroke="none" />,
+  trash: (
+    <>
+      <path d="M2.5 4.5h11M6 4.5V3h4v1.5" />
+      <path d="M4 4.5l.7 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.6M6.7 7v4.5M9.3 7v4.5" />
+    </>
+  ),
 } satisfies Record<string, ReactElement>;
 
 export type IconName = keyof typeof ICONS;

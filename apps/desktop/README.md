@@ -5,7 +5,11 @@ serves the engine protocol (`@dawg/protocol`). Spec: `docs/specs/phase-3-desktop
 visual design was approved on 2026-11-22 (see "Visual design" in the spec).
 
 In this wave the engine host runs a **mock engine** that replays recorded sessions; the real
-engine (`@dawg/engine`) plugs into the same place later.
+engine (`@dawg/engine`) plugs into the same place later. The mock engine sends everything the
+real one will: queue positions, the mode a plan returns to, command output apart from what the
+model is told, the context's split and compaction threshold, and `session.delete`. Its
+recordings are written by `node src/mock-engine/record/write-fixtures.ts`; do not edit them by
+hand.
 
 ## Commands
 
@@ -18,7 +22,7 @@ Run from this folder (pnpm runs through corepack: `corepack pnpm …`).
 | `corepack pnpm start` | Runs the built app |
 | `corepack pnpm typecheck` | `tsc` over the Node side and the web side |
 | `corepack pnpm test` | Vitest: `*.test.ts` in Node, `*.test.tsx` components in jsdom |
-| `corepack pnpm e2e` | Builds, then drives the app with Playwright: the shell checks (`e2e/app.spec.ts`) and a tour of every screen and decision card that saves screenshots in both themes to `e2e/screenshots/tour/` (`e2e/tour.spec.ts`) |
+| `corepack pnpm e2e` | Builds, then drives the app with Playwright: the shell checks (`e2e/app.spec.ts`) and a tour of every screen, decision card and the delete dialog that saves screenshots in both themes to `e2e/screenshots/tour/` (`e2e/tour.spec.ts`) |
 
 Lint runs from the repo root: `pnpm lint` (Biome).
 

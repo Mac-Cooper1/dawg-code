@@ -17,6 +17,7 @@ import {
   PromptSchema,
   QuestionResponseSchema,
   QuestionSchema,
+  QueuePositionSchema,
   SessionIdSchema,
   SessionStatusSchema,
   StopReasonSchema,
@@ -63,6 +64,12 @@ export const PlanAskSchema = z.object({
   plan: z.string(),
   /** Where the plan document was saved (absolute), when it was. */
   planPath: z.string().nullable(),
+  /**
+   * The mode the session was in before plan mode. Approving returns to it unless the answer names
+   * another mode ("default" stands in when that mode is no longer allowed, so this is always the
+   * mode an approval without `mode` leads to). Null in plans stored before engines reported it.
+   */
+  modeBeforePlan: PermissionModeSchema.nullable().default(null),
 });
 
 /** A permission, question or plan request that has not been answered yet. */
@@ -83,7 +90,18 @@ export const SessionStatusEventSchema = EventBaseSchema.extend({
   waitingOn: z.enum(["permission", "question", "plan"]).nullable(),
   /** A short line for the sidebar, for example "Waiting for the model". */
   message: z.string().nullable(),
+  /**
+   * Set while the turn waits for its model, which is busy with other sessions' requests: 1 means
+   * it is next. `status` is then "working". The engine sends a new event when the position moves.
+   */
+  queuePosition: QueuePositionSchema,
 });
+
+/**
+ * Added: the session was deleted. Its last event: the session is closed on every connection that
+ * had it open, and its stored events are gone, so this event is never replayed.
+ */
+export const SessionDeletedEventSchema = EventBaseSchema.extend({});
 
 /** Added: the session's settings, sent whole whenever one of them changes. */
 export const SessionUpdatedEventSchema = EventBaseSchema.extend({
@@ -285,6 +303,7 @@ export const ErrorEventSchema = EventBaseSchema.extend({
 export const events = {
   "session.status": SessionStatusEventSchema,
   "session.updated": SessionUpdatedEventSchema,
+  "session.deleted": SessionDeletedEventSchema,
   "turn.started": TurnStartedEventSchema,
   "turn.finished": TurnFinishedEventSchema,
   "message.started": MessageStartedEventSchema,

@@ -82,6 +82,30 @@ export function putSession(draft: Draft, session: MutableSession): void {
   draft.ownSessions.add(session.id);
 }
 
+/** Removes a session with its transcript and pending requests. */
+export function removeSession(draft: Draft, id: SessionId): void {
+  if (id in draft.sessions) {
+    delete sessionsMap(draft)[id];
+    draft.ownSessions.delete(id);
+  }
+  if (id in draft.transcripts) {
+    if (!draft.owned.transcripts) {
+      draft.transcripts = { ...draft.transcripts };
+      draft.owned.transcripts = true;
+    }
+    delete draft.transcripts[id];
+    draft.ownTranscripts.delete(id);
+  }
+  if (id in draft.pending) {
+    if (!draft.owned.pending) {
+      draft.pending = { ...draft.pending };
+      draft.owned.pending = true;
+    }
+    delete draft.pending[id];
+    draft.ownPending.delete(id);
+  }
+}
+
 // --- Transcripts -----------------------------------------------------------------------------
 
 const NO_ITEMS: readonly TranscriptItem[] = Object.freeze([]);

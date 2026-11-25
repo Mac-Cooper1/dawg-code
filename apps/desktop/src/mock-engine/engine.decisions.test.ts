@@ -41,6 +41,28 @@ function finishedTool(events: readonly EngineEvent[], toolName: string) {
   return all(events, "tool.finished").filter((e) => e.payload.toolName === toolName);
 }
 
+/**
+ * The fields the protocol added with defaults are sent, not left to the defaults: every usage
+ * has its threshold and a split that adds up, every command its output, every plan its mode.
+ */
+function expectNewFields(events: readonly EngineEvent[]): void {
+  for (const { payload } of all(events, "usage.updated")) {
+    const { usage } = payload;
+    expect(usage.compactAt).toBe(Math.floor(usage.contextWindow * 0.65));
+    const parts = usage.breakdown;
+    expect(parts && parts.systemPrompt + parts.instructions + parts.tools + parts.messages).toBe(
+      usage.contextUsed,
+    );
+  }
+  for (const { payload } of all(events, "tool.finished")) {
+    if (payload.display?.kind === "command")
+      expect(payload.display.output).toEqual(expect.any(String));
+  }
+  for (const { payload } of all(events, "plan.proposed")) {
+    expect(payload.modeBeforePlan).not.toBeNull();
+  }
+}
+
 function replies(events: readonly EngineEvent[]): string[] {
   return all(events, "message.finished")
     .map((e) => e.payload.text)
@@ -345,6 +367,41 @@ describe("plan", () => {
   });
 });
 
+describe("plan mode", () => {
+  it("tells each plan request the mode approving returns to, from the session's own history", async () => {
+    const peer = await open("multi-currency");
+    const snapshot = await peer.request("session.resume", { sessionId: "multi-currency" });
+    expect(snapshot.pending[0]).toMatchObject({ kind: "plan", modeBeforePlan: "default" });
+    const stored = await peer.request("session.replay", {
+      sessionId: "multi-currency",
+      afterSeq: 0,
+    });
+    expect(first(stored.events, "plan.proposed").payload.modeBeforePlan).toBe("default");
+
+    // Out of plan mode and back while the plan waits: the mode before plan mode is now Accept edits.
+    await peer.request("session.setMode", { sessionId: "multi-currency", mode: "acceptEdits" });
+    await peer.request("session.setMode", { sessionId: "multi-currency", mode: "plan" });
+    await peer.request("plan.respond", {
+      sessionId: "multi-currency",
+      requestId: PLAN,
+      response: { decision: "reject", message: "Use the ECB file." },
+    });
+    await h.runAll();
+    const revised = first(peer.of("multi-currency"), "plan.proposed").payload;
+    expect(revised).toMatchObject({ requestId: PLAN_2, modeBeforePlan: "acceptEdits" });
+
+    await peer.request("plan.respond", {
+      sessionId: "multi-currency",
+      requestId: PLAN_2,
+      response: { decision: "approve" },
+    });
+    await h.runAll();
+    const modes = all(peer.of("multi-currency"), "session.updated").map((e) => e.payload.mode);
+    expect(modes.at(-1)).toBe("acceptEdits");
+    await wholeConforms(peer, "multi-currency");
+  });
+});
+
 describe("answers that are refused", () => {
   it("RequestNotFound for unknown, already answered, or another kind's requests", async () => {
     const peer = await open("flaky-csv");
@@ -512,6 +569,7 @@ describe("the engine's whole output", () => {
       const whole = await peer.request("session.replay", { sessionId: id, afterSeq: 0 });
       expect(checkConformance(whole.events, { requireClosed: true })).toEqual([]);
       expect(all(whole.events, "turn.started").length).toBeGreaterThanOrEqual(2);
+      expectNewFields(whole.events);
       expect(peer.problems).toEqual([]);
       const received = peer.of(id);
       expect(received.map((e) => e.payload.seq)).toEqual(

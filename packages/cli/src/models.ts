@@ -228,6 +228,8 @@ async function setupEndpoint(options: ModelSetupOptions, url: string): Promise<M
   }
   const endpoints = new Map<string, Endpoint>([[first.model, first]]);
   const connections = new Map<string, Promise<ModelConnection>>();
+  // No slot pool: the server's slots are not ours to schedule (other programs may use them), so
+  // requests go out at once and the server orders them.
   const connectionFor = (endpoint: Endpoint): ModelConnection => {
     const client = createModelClient(endpoint);
     return { client };
@@ -294,8 +296,8 @@ async function setupModelFile(options: ModelSetupOptions, file: string): Promise
   }
   const window = options.contextSize ?? DEFAULT_CONTEXT_SIZE;
   const alias = options.model ?? path.basename(modelPath).replace(/\.gguf$/i, "");
-  // Two slots: the conversation, and side requests (titles) so they never evict its cache. The
-  // server splits -c between slots; the real per-slot window is read back from /props.
+  // Two slots: conversations, and side requests (titles) so they never evict a conversation's
+  // cache. The server splits -c between slots; the real per-slot window is read back from /props.
   const supervisor = new RuntimeSupervisor({
     binary,
     model: { path: modelPath },
@@ -328,7 +330,15 @@ async function setupModelFile(options: ModelSetupOptions, file: string): Promise
     `Model ${endpoint.model} ready on the bundled runtime, context window ${endpoint.contextWindow} tokens.`,
   );
   const client = createModelClient(endpoint);
-  const connection: ModelConnection = { client, slot: 0, utility: { client, slot: 1 } };
+  // Every session gets these same two pools, so the engine schedules them: sessions running at
+  // once take turns on the conversation slot, and the one waiting shows as queued. One
+  // conversation slot keeps each session's whole window (the server divides -c by the slots)
+  // and gives a running turn the full speed of the machine.
+  const connection: ModelConnection = {
+    client,
+    pool: { slots: [0] },
+    utility: { client, pool: { slots: [1] } },
+  };
   return {
     defaultModel: endpoint.model,
     provider: {

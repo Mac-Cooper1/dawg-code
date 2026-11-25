@@ -4,6 +4,7 @@ import type { ContextMeterView } from "../state/types.ts";
 import { commandQuery, filterCommands, takesArguments } from "./commands.ts";
 import {
   compactLine,
+  compactMarker,
   contextHeading,
   contextLabel,
   contextSegments,
@@ -59,7 +60,8 @@ const CONTEXT: ContextMeterView = {
     promptTokensPerSecond: 1240,
     completionTokensPerSecond: 41,
   },
-  compactAt: 0.65,
+  compactAt: 133_120,
+  breakdown: null,
   compacting: false,
 };
 
@@ -67,10 +69,45 @@ describe("the context meter's text", () => {
   it("labels and heads the meter", () => {
     expect(contextLabel(CONTEXT)).toBe("74.2K / 204.8K");
     expect(contextHeading(CONTEXT)).toBe("Context · 36% of 204.8K tokens");
-    expect(compactLine(CONTEXT)).toBe("Compacts on its own at 65% (133K).");
+    expect(compactLine(CONTEXT)).toBe("Compacts on its own at 65% (133.1K).");
   });
 
-  it("splits the used part by what the cache served", () => {
+  it("splits the used part by what the engine says fills it", () => {
+    const context: ContextMeterView = {
+      ...CONTEXT,
+      breakdown: { systemPrompt: 4_112, instructions: 1_186, tools: 10_992, messages: 57_910 },
+    };
+    const segments = contextSegments(context);
+    expect(segments.map(({ key, label, tokens }) => [key, label, tokens])).toEqual([
+      ["systemPrompt", "System prompt", 4_112],
+      ["instructions", "Instructions", 1_186],
+      ["tools", "Tools", 10_992],
+      ["messages", "Messages", 57_910],
+      ["free", "Free", 130_600],
+    ]);
+    expect(segments.reduce((sum, segment) => sum + segment.share, 0)).toBeCloseTo(1);
+    // Never more than the window, whatever the parts say.
+    const over = contextSegments({
+      ...context,
+      used: 204_800,
+      breakdown: { systemPrompt: 4_112, instructions: 1_186, tools: 10_992, messages: 300_000 },
+    });
+    expect(over.map(({ tokens }) => tokens)).toEqual([4_112, 1_186, 10_992, 188_510, 0]);
+  });
+
+  it("marks where compaction starts, and says when the context is past it", () => {
+    expect(compactMarker(CONTEXT)).toBeCloseTo(0.65);
+    const past = { ...CONTEXT, used: 140_000, fraction: 140_000 / 204_800 };
+    expect(compactLine(past)).toBe("Compacts on its own before the next turn: past 65% (133.1K).");
+  });
+
+  it("says nothing about compaction when the engine did not report a threshold", () => {
+    const old = { ...CONTEXT, compactAt: null };
+    expect(compactLine(old)).toBeNull();
+    expect(compactMarker(old)).toBeNull();
+  });
+
+  it("splits the used part by what the cache served, for sessions stored before the split", () => {
     expect(contextSegments(CONTEXT).map(({ key, tokens }) => [key, tokens])).toEqual([
       ["cached", 72_000],
       ["rest", 2_200],

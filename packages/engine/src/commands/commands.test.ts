@@ -141,6 +141,26 @@ describe("built-in commands", () => {
     expect(after).toMatch(/Free\s+[\d,]+/);
   });
 
+  it("/context shows instruction files apart, with the session's own numbers", async () => {
+    s = await setup({ script: [text("hi")] });
+    await writeFile(path.join(s.project, "CLAUDE.md"), "Always write tests first.\n");
+    const session = await s.engine.createSession({ cwd: s.project });
+    await session.run(ask("hello"));
+    const usage = session.snapshot().usage;
+    if (usage?.breakdown == null || usage.compactAt === null) throw new Error("no usage");
+    const shown = await outputOf(session, "context");
+    const row = (label: string, value: number) =>
+      new RegExp(`${label}\\s+${value.toLocaleString("en-US")}\\s`);
+    expect(shown).toMatch(row("System prompt", usage.breakdown.systemPrompt));
+    expect(shown).toMatch(row("Instruction files", usage.breakdown.instructions));
+    expect(shown).toMatch(row("Tool definitions", usage.breakdown.tools));
+    expect(shown).toMatch(row("Conversation", usage.breakdown.messages));
+    expect(usage.breakdown.instructions).toBeGreaterThan(0);
+    expect(shown).toContain(
+      `once the context passes ${usage.compactAt.toLocaleString("en-US")} tokens`,
+    );
+  });
+
   it("/permissions lists rules with their sources", async () => {
     const { s, session } = await start();
     await mkdir(path.join(s.project, ".dawg"), { recursive: true });

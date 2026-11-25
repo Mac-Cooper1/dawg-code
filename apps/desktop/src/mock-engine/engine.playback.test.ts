@@ -14,7 +14,7 @@ import {
   names,
   type Peer,
 } from "./test-support.ts";
-import type { Fields } from "./types.ts";
+import type { InputFields } from "./types.ts";
 
 let h: Harness;
 afterEach(() => h?.engine.dispose());
@@ -25,7 +25,7 @@ const prompt = (text: string) => ({ content: [{ type: "text" as const, text }] }
 function recording(sessionId: string) {
   const out: EngineEvent[] = [];
   let seq = 0;
-  const at = <E extends EventName>(time: number, event: E, fields: Fields<E>) => {
+  const at = <E extends EventName>(time: number, event: E, fields: InputFields<E>) => {
     seq += 1;
     const result = parseEvent(event, { sessionId, seq, time, ...fields });
     if (!result.ok) throw new Error(`bad test event ${event}`);
@@ -82,6 +82,27 @@ function timingScenario(): LoadedScenario {
     turns: [],
   };
   return { scenario, recordings: { "stored.jsonl": stored, "live.jsonl": live } };
+}
+
+/** A scenario with a stored part and nothing else, to fill in. */
+function simpleScenario(id: string): Scenario {
+  return {
+    id,
+    session: {
+      title: id,
+      cwd: "~/t",
+      projectDir: "~/t",
+      mode: "default",
+      model: "qwen3.8-27b-q8",
+      effort: null,
+    },
+    storedEndedAgoMs: 1_000,
+    stored: "stored.jsonl",
+    live: null,
+    queuedBehind: null,
+    branches: {},
+    turns: [],
+  };
 }
 
 async function deltas(peer: Peer, h: Harness, ms: number): Promise<number> {
@@ -459,6 +480,11 @@ describe("interrupt", () => {
     const text = finished.content[0]?.type === "text" ? finished.content[0].text : "";
     expect(text).toMatch(/^Error: \.+/);
     expect(text.endsWith("The command was interrupted.")).toBe(true);
+    // The display carries what it printed, without the prefix and the note, and the note apart.
+    const display = finished.display?.kind === "command" ? finished.display : null;
+    expect(display?.output).toMatch(/^\.+$/);
+    expect(text).toBe(`Error: ${display?.output}\n\nThe command was interrupted.`);
+    expect(display?.notes).toEqual(["The command was interrupted."]);
     expect(first(after, "turn.finished").payload.stopReason).toBe("interrupted");
     expect(checkConformance(peer.of("flaky-csv"), { midSession: true })).toEqual([]);
   });
@@ -526,20 +552,30 @@ describe("queuedBehind", () => {
     const peer = await h.connect();
     await peer.request("session.resume", { sessionId: "fix-split" });
     const docs = await peer.request("session.resume", { sessionId: "docs-search" });
-    expect(docs.session.status).toBe("working");
+    expect(docs.session).toMatchObject({ status: "working", queuePosition: 1 });
     expect(docs.activeTurnId).not.toBeNull();
+    const listed = await peer.request("session.list", {});
+    const queued = listed.sessions.filter((s) => s.queuePosition !== null);
+    expect(queued.map((s) => [s.id, s.queuePosition])).toEqual([["docs-search", 1]]);
     const stored = await peer.request("session.replay", { sessionId: "docs-search", afterSeq: 0 });
     expect(stored.events.map((e) => e.event)).toEqual(["session.status", "turn.started"]);
     expect(stored.events[0]?.payload).toMatchObject({
       status: "working",
-      message: "Queued: waits for the model",
+      message: "Waiting for the model",
+      queuePosition: 1,
     });
     await until(h, peer, "fix-split", (events) => names(events).includes("turn.finished"), 100);
     expect(peer.of("docs-search")).toEqual([]);
     const ended = first(peer.of("fix-split"), "turn.finished").payload.time;
     await h.advance(1_000);
     const started = peer.of("docs-search")[0];
-    expect(started?.payload).toMatchObject({ status: "working", message: "Working" });
+    expect(started?.payload).toMatchObject({
+      status: "working",
+      message: "Working",
+      queuePosition: null,
+    });
+    const after = await peer.request("session.resume", { sessionId: "docs-search" });
+    expect(after.session.queuePosition).toBeNull();
     expect((started?.payload.time ?? 0) - ended).toBe(500);
     await h.advance(200_000);
     const finished = first(peer.of("docs-search"), "turn.finished").payload;
@@ -562,6 +598,95 @@ describe("queuedBehind", () => {
       status: "working",
       message: "Working",
     });
+  });
+
+  it("numbers the sessions in line, and moves them up when one leaves", async () => {
+    const blocker = recording("blocker");
+    blocker.at(0, "session.status", { status: "working", waitingOn: null, message: "Working" });
+    blocker.at(0, "turn.started", {
+      turnId: "t1",
+      prompt: { content: [{ type: "text", text: "go" }], mentions: [] },
+      command: null,
+    });
+    const blockerStored = blocker.take();
+    blocker.at(60_000, "turn.finished", {
+      turnId: "t1",
+      stopReason: "completed",
+      finalText: null,
+      error: null,
+      durationMs: 60_000,
+    });
+    blocker.at(60_000, "session.status", { status: "idle", waitingOn: null, message: null });
+    const waiter = (id: string): LoadedScenario => {
+      const r = recording(id);
+      r.at(0, "session.status", {
+        status: "working",
+        waitingOn: null,
+        message: "Waiting for the model",
+        queuePosition: 1,
+      });
+      r.at(0, "turn.started", {
+        turnId: "t1",
+        prompt: { content: [{ type: "text", text: "wait" }], mentions: [] },
+        command: null,
+      });
+      const stored = r.take();
+      r.at(1_000, "session.status", { status: "working", waitingOn: null, message: "Working" });
+      r.at(2_000, "turn.finished", {
+        turnId: "t1",
+        stopReason: "completed",
+        finalText: null,
+        error: null,
+        durationMs: 2_000,
+      });
+      r.at(2_000, "session.status", { status: "idle", waitingOn: null, message: null });
+      return {
+        scenario: { ...simpleScenario(id), live: "live.jsonl", queuedBehind: "blocker" },
+        recordings: { "stored.jsonl": stored, "live.jsonl": r.take() },
+      };
+    };
+    h = harness({
+      scenarios: [
+        {
+          scenario: { ...simpleScenario("blocker"), live: "live.jsonl" },
+          recordings: { "stored.jsonl": blockerStored, "live.jsonl": blocker.take() },
+        },
+        waiter("first"),
+        waiter("second"),
+      ],
+    });
+    const peer = await h.connect();
+    await peer.request("session.resume", { sessionId: "first" });
+    await peer.request("session.resume", { sessionId: "second" });
+    const positions = async () =>
+      (await peer.request("session.list", {})).sessions.map((s) => [s.id, s.queuePosition]);
+    expect(await positions()).toEqual(
+      expect.arrayContaining([
+        ["first", 1],
+        ["second", 2],
+        ["blocker", null],
+      ]),
+    );
+    // The second already had its place in the stored status: only a change is sent.
+    const replayed = await peer.request("session.replay", { sessionId: "second", afterSeq: 0 });
+    expect(all(replayed.events, "session.status").map((e) => e.payload.queuePosition)).toEqual([
+      1, 2,
+    ]);
+    expect(peer.of("first")).toEqual([]);
+
+    await peer.request("session.interrupt", { sessionId: "first" });
+    expect(all(peer.of("second"), "session.status").at(-1)?.payload).toMatchObject({
+      status: "working",
+      message: "Waiting for the model",
+      queuePosition: 1,
+    });
+    expect(first(peer.of("first"), "session.status").payload.queuePosition).toBeNull();
+    await h.advance(61_000);
+    expect(all(peer.of("second"), "session.status").at(-1)?.payload.queuePosition).toBeNull();
+    for (const id of ["first", "second"]) {
+      const whole = await peer.request("session.replay", { sessionId: id, afterSeq: 0 });
+      expect(checkConformance(whole.events)).toEqual([]);
+    }
   });
 
   it("never starts once interrupted itself", async () => {

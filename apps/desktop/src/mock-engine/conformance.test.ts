@@ -4,7 +4,7 @@ import { checkConformance } from "./conformance.ts";
 import { Recorder } from "./record/recorder.ts";
 import { hunk } from "./record/text.ts";
 import { callBash, callEdit, runBash, runEdit } from "./record/tools.ts";
-import type { Fields } from "./types.ts";
+import type { InputFields } from "./types.ts";
 
 /** Parses recorder output the way a client receives it. */
 function parsed(events: readonly { event: string; payload: unknown }[]): EngineEvent[] {
@@ -64,7 +64,7 @@ function goodStream(): EngineEvent[] {
 function stream(seq = 1) {
   const out: EngineEvent[] = [];
   let next = seq;
-  const add = <E extends EventName>(event: E, fields: Fields<E>) => {
+  const add = <E extends EventName>(event: E, fields: InputFields<E>) => {
     const result = parseEvent(event, {
       sessionId: "s1",
       seq: next++,
@@ -304,6 +304,37 @@ describe("checkConformance", () => {
     const violations = checkConformance(s.out).join("\n");
     expect(violations).toMatch(/message.started while compaction k1 runs/);
     expect(violations).toMatch(/k2 finishes but is not running/);
+  });
+
+  it("finds a queue position outside working", () => {
+    const s = stream();
+    s.add("session.status", { ...working, queuePosition: 2 })("session.status", {
+      ...idle,
+      queuePosition: 1,
+    });
+    expect(checkConformance(s.out)).toEqual([
+      expect.stringMatching(/status idle with queuePosition 1; only working waits/),
+    ]);
+  });
+
+  it("accepts session.deleted as the last event, after an interrupted turn has closed", () => {
+    const s = stream();
+    s.add("session.status", working)("turn.started", { turnId: "t1", prompt, command: null })(
+      "turn.finished",
+      { ...finished("t1"), stopReason: "interrupted" },
+    )("session.status", idle)("session.deleted", {});
+    expect(checkConformance(s.out, { requireClosed: true })).toEqual([]);
+  });
+
+  it("finds session.deleted while a turn runs, and events after it", () => {
+    const s = stream();
+    s.add("session.status", working)("turn.started", { turnId: "t1", prompt, command: null })(
+      "session.deleted",
+      {},
+    )("session.status", idle);
+    const violations = checkConformance(s.out).join("\n");
+    expect(violations).toMatch(/session.deleted while turn t1 runs; interrupt it first/);
+    expect(violations).toMatch(/an event follows session.deleted/);
   });
 
   it("accepts a slice that starts mid-turn when told so", () => {

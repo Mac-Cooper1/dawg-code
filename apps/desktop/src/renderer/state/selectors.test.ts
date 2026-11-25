@@ -143,7 +143,8 @@ function mockupSlice(): EngineSlice {
   docs.emit("session.status", {
     status: "working",
     waitingOn: null,
-    message: "Queued: waits for the model",
+    message: "Waiting for the model",
+    queuePosition: 1,
   });
   slice = applyLive(slice, docs.events);
   // Idle, in a worktree of that project.
@@ -284,6 +285,47 @@ describe("selectSidebar", () => {
     const state = withUi(appState(slice), { seenSeq: { stored: 30 } });
     expect(rows(state).stored?.mark).toBe("unread");
     expect(rows(withUi(state, { seenSeq: { stored: 40 } })).stored?.mark).toBe("idle");
+  });
+
+  it("marks a queued session by its place in line, whatever the engine's message says", () => {
+    const queued = (id: string, position: number, message: string | null) => {
+      const stream = createStream(id);
+      stream.emit("session.status", {
+        status: "working",
+        waitingOn: null,
+        message,
+        queuePosition: position,
+      });
+      return stream.events;
+    };
+    let slice = open(emptyEngineSlice(), "a", { lastActivityAt: NOW - 1000 });
+    slice = applyLive(slice, queued("a", 1, "Queued behind another session"));
+    let byId = rows(appState(slice));
+    expect(byId.a).toMatchObject({ mark: "queued", subtitle: "Queued: waits for the model" });
+
+    slice = open(slice, "b", { lastActivityAt: NOW - 2000, projectDir: SITE, cwd: SITE });
+    slice = applyLive(slice, queued("b", 2, null));
+    byId = rows(appState(slice));
+    expect(byId.a?.subtitle).toBe("Queued: next in line for the model");
+    expect(byId.b).toMatchObject({ mark: "queued", subtitle: "Queued: 2nd in line for the model" });
+
+    // A working status without a place in line is not queued, even if its text says so.
+    const w = createStream("a", { seq: 1 });
+    w.emit("session.status", {
+      status: "working",
+      waitingOn: null,
+      message: "Queued: waits for the model",
+    });
+    expect(rows(appState(applyLive(slice, w.events))).a?.mark).toBe("working");
+
+    // A stored session lists its place in line too.
+    const listed = reduceAll(emptyEngineSlice(), [
+      {
+        type: "summaries",
+        sessions: [makeSummary("stored", { status: "working", queuePosition: 3 })],
+      },
+    ]);
+    expect(rows(appState(listed)).stored?.subtitle).toBe("Queued: 3rd in line for the model");
   });
 
   it("describes a working session by its status line when no call runs", () => {
@@ -440,7 +482,6 @@ describe("selectTranscript", () => {
       working: false,
       activeTurnId: null,
       toolCallDisplay: "smart",
-      mode: "default",
       cwd: PROJECT,
     });
     expect(selectTranscript(byYou, "missing")).toBeNull();
@@ -523,7 +564,8 @@ describe("selectComposer", () => {
       context: {
         used: 74_200,
         window: 204_800,
-        compactAt: 0.65,
+        compactAt: 133_120,
+        breakdown: { systemPrompt: 4_112, instructions: 1_186, tools: 10_992, messages: 57_910 },
         compacting: false,
         last: { promptTokens: 18_000, cachedTokens: 16_000 },
       },
@@ -537,6 +579,23 @@ describe("selectComposer", () => {
     const after = { ...state, ...applyLive(state, stream.events) };
     expect(after.sessions.s1).not.toBe(state.sessions.s1);
     expect(selectComposer(after, "s1")).toBe(view);
+  });
+
+  it("leaves the threshold and the split out for sessions stored before engines sent them", () => {
+    const {
+      compactAt: _compactAt,
+      breakdown: _breakdown,
+      ...old
+    } = makeUsage({ requests: 1, promptTokens: 18_000, cachedTokens: 16_000 }, 20_000);
+    const usage = { ...old, compactAt: null, breakdown: null };
+    const slice = reduceAll(emptyEngineSlice(), [
+      { type: "snapshot", snapshot: makeSnapshot(makeSummary("s1"), { usage }) },
+    ]);
+    expect(selectComposer(appState(slice), "s1")?.context).toMatchObject({
+      used: 20_000,
+      compactAt: null,
+      breakdown: null,
+    });
   });
 
   it("falls back to the model id and hides the meter before anything is known", () => {

@@ -140,6 +140,32 @@ describe.each(BUILT_IN_SCENARIOS.map((s) => [s.scenario.id, s] as const))(
       }
     });
 
+    it("writes out every field the engine stores, defaults included", () => {
+      for (const [name, text] of Object.entries(files(id))) {
+        if (!name.endsWith(".jsonl")) continue;
+        for (const line of text.trimEnd().split("\n")) {
+          const { event, payload } = JSON.parse(line);
+          const where = `${name}: ${event} ${payload.seq}`;
+          if (event === "session.status") expect(payload, where).toHaveProperty("queuePosition");
+          if (event === "plan.proposed")
+            expect(payload.modeBeforePlan, where).toEqual(expect.any(String));
+          if (event === "usage.updated") {
+            const { usage } = payload;
+            expect(usage.compactAt, where).toBe(Math.floor(usage.contextWindow * 0.65));
+            const parts = usage.breakdown;
+            expect(
+              parts.systemPrompt + parts.instructions + parts.tools + parts.messages,
+              where,
+            ).toBe(usage.contextUsed);
+          }
+          if (event === "tool.finished" && payload.display?.kind === "command") {
+            expect(payload.display.output, where).toEqual(expect.any(String));
+            expect(payload.display.notes, where).toEqual(expect.any(Array));
+          }
+        }
+      }
+    });
+
     it("writes paths under the home directory as ~/", () => {
       const text = Object.values(files(id)).join("\n");
       expect(text).not.toMatch(/\/Users\//);

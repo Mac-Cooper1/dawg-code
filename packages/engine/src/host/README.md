@@ -31,6 +31,12 @@ starts a turn returns its `turnId`, one that opens a session (`/clear`, `/resume
 new session's snapshot and that session is open on this connection from then on. An unknown
 command or a bad argument is `InvalidParams` and never reaches the model.
 
+`session.delete` works whether or not the session is open, on this connection or another. Every
+connection that had it open receives `session.deleted` (after the interrupted turn's events, if
+one was running) and drops it from its open sessions; later requests on it are
+`SessionNotFound`. A session another process has open (a `dawg` run in a terminal) is
+`InvalidState`.
+
 `initialize` capabilities are given to every session the connection opens. When several
 connections hold one session, it gets the union: if any of them can answer a permission prompt,
 prompts are raised.
@@ -53,7 +59,7 @@ outside the working directories of the connection's sessions are replaced with `
 
 ## When the connection closes
 
-For each session the connection had open:
+For each session the connection had open (a deleted session is no longer among them):
 
 - **Another connection still holds it:** nothing stops; that connection now answers alone.
 - **Idle:** it is closed at once (the transcript is flushed and its lock released). It can be

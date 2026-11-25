@@ -98,6 +98,8 @@ export function toolItem(overrides: Partial<ToolCallItem> = {}): ToolCallItem {
       interrupted: false,
       backgroundTaskId: null,
       outputPath: null,
+      output: "8 passed in 0.19s",
+      notes: [],
     },
     startedAt: 1_000,
     durationMs: 800,
@@ -106,6 +108,10 @@ export function toolItem(overrides: Partial<ToolCallItem> = {}): ToolCallItem {
   };
 }
 
+/**
+ * A failed command from a session stored before engines reported `output` and `notes`: the card
+ * takes the model's text apart, colours included.
+ */
 export function bashFailure(overrides: Partial<ToolCallItem> = {}): ToolCallItem {
   return toolItem({
     id: "tool-fail",
@@ -127,6 +133,8 @@ export function bashFailure(overrides: Partial<ToolCallItem> = {}): ToolCallItem
       interrupted: false,
       backgroundTaskId: null,
       outputPath: null,
+      output: null,
+      notes: [],
     },
     durationMs: 900,
     ...overrides,
@@ -401,7 +409,6 @@ export function makeView(overrides: Partial<TranscriptView> = {}): TranscriptVie
     openItems: {},
     shownAgain: {},
     queuedTurnIds: {},
-    mode: "default",
     cwd: CWD,
     ...overrides,
   };

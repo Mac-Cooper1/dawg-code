@@ -14,6 +14,7 @@ import {
   type Scenario,
   ScenarioSchema,
 } from "../../mock-engine/format.ts";
+import { commandOutput, finishedCommandOutput } from "../transcript/toolInfo.ts";
 import { transcriptProblems } from "./__fixtures__/invariants.ts";
 import { finishInterrupted, fullTurn, interruptedTurn } from "./__fixtures__/scenarios.ts";
 import {
@@ -180,6 +181,20 @@ describe("recorded event streams", () => {
 
       it("ignores the whole stream applied a second time", () => {
         expect(applyLive(live, item.events)).toBe(live);
+      });
+
+      it("reports each command's output as the model's text would give it apart", () => {
+        // The engine's own rule: the text without "Error: " and the footer; notes without the
+        // exit code. The fallback for older sessions must agree with what engines now send.
+        for (const tool of live.transcripts[item.sessionId] ?? []) {
+          if (tool.kind !== "tool" || tool.display?.kind !== "command") continue;
+          if (tool.display.output === null) continue;
+          const legacy = finishedCommandOutput({ ...tool, output: [] });
+          expect(commandOutput(tool)).toEqual({
+            output: legacy.output.replace(/\n+$/, ""),
+            notes: legacy.notes,
+          });
+        }
       });
     });
   }

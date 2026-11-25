@@ -113,6 +113,12 @@
   font-weight: 500;
 }
 
+/* An item that destroys something (Delete…): red text and icon. */
+.danger,
+.danger .icon {
+  color: var(--red);
+}
+
 .separator {
   height: 1px;
   margin: 4px 0;
