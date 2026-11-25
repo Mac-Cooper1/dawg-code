@@ -9,6 +9,8 @@
  * - When the engine host exits unexpectedly, every window is told (it shows a one-line notice),
  *   the host is restarted after a backoff, and every window gets a fresh port without asking.
  * - After too many quick failures in a row it gives up and says so once; `restart()` tries again.
+ * - Messages the engine host posts to main (model requests) go to `onMessage`, with a `reply`
+ *   that reaches the host that asked, and only while it runs. `post` reaches the current host.
  */
 
 export interface SupervisedChild<Port> {
@@ -16,6 +18,8 @@ export interface SupervisedChild<Port> {
   kill(): void;
   /** Called once when the process ends, whatever the cause. */
   onExit(listener: (code: number | null) => void): void;
+  /** Called for every message the process posts to main. */
+  onMessage(listener: (message: unknown) => void): void;
 }
 
 export interface EngineClient<Port> {
@@ -43,6 +47,11 @@ export interface EngineSupervisorOptions<Port> {
   log?: (message: string) => void;
   /** Called when the supervisor stops restarting. `restart()` starts again. */
   onGaveUp?(reason: string): void;
+  /**
+   * A message from the engine host. `reply` posts back to the host that sent it, and does
+   * nothing once that host has exited (its replacement never sees an answer it did not ask for).
+   */
+  onMessage?(message: unknown, reply: (message: unknown) => void): void;
 }
 
 export type SupervisorState = "idle" | "running" | "waiting" | "failed" | "stopped";
@@ -60,6 +69,8 @@ export interface EngineSupervisor<Port> {
   restart(reason?: string): void;
   /** Kills the engine host for good (app quit). */
   stop(): void;
+  /** Posts a message to the running engine host. False when none runs. */
+  post(message: unknown): boolean;
 }
 
 export const DEFAULT_BACKOFF_MS = [250, 1000, 5000] as const;
@@ -98,6 +109,17 @@ export function createEngineSupervisor<Port>(
       if (child !== next) return;
       child = null;
       handleExit(code);
+    });
+    next.onMessage((message) => {
+      if (child !== next) return;
+      options.onMessage?.(message, (answer) => {
+        if (child !== next) return;
+        try {
+          next.postMessage(answer, []);
+        } catch (error) {
+          log(`Could not answer the engine host: ${messageOf(error)}`);
+        }
+      });
     });
   }
 
@@ -191,6 +213,16 @@ export function createEngineSupervisor<Port>(
       const current = child;
       child = null;
       current?.kill();
+    },
+    post(message) {
+      if (state !== "running" || !child) return false;
+      try {
+        child.postMessage(message, []);
+        return true;
+      } catch (error) {
+        log(`Could not post to the engine host: ${messageOf(error)}`);
+        return false;
+      }
     },
   };
 }

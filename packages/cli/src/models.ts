@@ -26,6 +26,7 @@ import {
   resolveRuntimeBinary,
   RuntimeError as SupervisorError,
   toEndpoint,
+  twoSlotLayout,
 } from "@dawg/models";
 
 /** Why the model could not be set up: the person's input, or the model side. */
@@ -296,14 +297,22 @@ async function setupModelFile(options: ModelSetupOptions, file: string): Promise
   }
   const window = options.contextSize ?? DEFAULT_CONTEXT_SIZE;
   const alias = options.model ?? path.basename(modelPath).replace(/\.gguf$/i, "");
-  // Two slots: conversations, and side requests (titles) so they never evict a conversation's
-  // cache. The server splits -c between slots; the real per-slot window is read back from /props.
+  // Two slots on one shared cache: conversations get the whole window, side requests (titles)
+  // a small reserve beside it, so they never evict a conversation's cache. The real per-slot
+  // window is read back from /props.
+  const layout = twoSlotLayout(window);
   const supervisor = new RuntimeSupervisor({
     binary,
     model: { path: modelPath },
-    contextSize: window * 2,
-    slots: 2,
-    settings: { cacheRamMiB: 4096, ctxCheckpoints: 8, checkpointMinStep: 256, alias },
+    contextSize: layout.contextSize,
+    slots: layout.slots,
+    settings: {
+      cacheRamMiB: 4096,
+      ctxCheckpoints: 8,
+      checkpointMinStep: 256,
+      ...layout.settings,
+      alias,
+    },
     paths: {
       slotSaveDir: path.join(options.dawgHome, "runtime", "slots"),
       logDir: path.join(options.dawgHome, "logs"),
@@ -332,12 +341,12 @@ async function setupModelFile(options: ModelSetupOptions, file: string): Promise
   const client = createModelClient(endpoint);
   // Every session gets these same two pools, so the engine schedules them: sessions running at
   // once take turns on the conversation slot, and the one waiting shows as queued. One
-  // conversation slot keeps each session's whole window (the server divides -c by the slots)
-  // and gives a running turn the full speed of the machine.
+  // conversation slot keeps each session's whole window and gives a running turn the full speed
+  // of the machine.
   const connection: ModelConnection = {
     client,
-    pool: { slots: [0] },
-    utility: { client, pool: { slots: [1] } },
+    pool: { slots: [...layout.slotIds.conversation] },
+    utility: { client, pool: { slots: [...layout.slotIds.utility] } },
   };
   return {
     defaultModel: endpoint.model,

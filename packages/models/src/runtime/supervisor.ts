@@ -39,7 +39,7 @@ export interface RuntimeModel extends LaunchModel {
 /** Everything that, when changed, requires a new process. */
 export interface RuntimeConfig {
   model: RuntimeModel;
-  /** Total context (`-c`); the per-slot window is read back from the server. */
+  /** `-c`, the cache in tokens (see `twoSlotLayout`); the per-slot window is read back from the server. */
   contextSize: number;
   slots: number;
   settings: RuntimeSettings;
@@ -95,6 +95,11 @@ export interface SupervisorOptions extends RuntimeConfig {
    * for any reason. Without it only clean exits and catchable signals are covered.
    */
   watchdog?: boolean;
+  /**
+   * The watchdog script. Defaults to the one beside this module (`watchdogEntry()`). An app that
+   * bundles this package builds the script on its own and passes where it put it.
+   */
+  watchdogPath?: string;
   /**
    * Node binary for the watchdog. Defaults to process.execPath; under Electron pass
    * process.execPath and set ELECTRON_RUN_AS_NODE=1 in `watchdogEnv`.
@@ -596,7 +601,7 @@ export class RuntimeSupervisor extends EventEmitter<SupervisorEvents> {
       ? spawn(
           this.options.nodePath ?? process.execPath,
           [
-            watchdogEntry(),
+            this.options.watchdogPath ?? watchdogEntry(),
             "--grace-ms",
             String(this.timing.stopGraceMs),
             "--",

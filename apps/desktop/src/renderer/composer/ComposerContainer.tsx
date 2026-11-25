@@ -9,6 +9,7 @@ export function ComposerContainer(props: { sessionId: SessionId }) {
   const { sessionId } = props;
   const view = useAppStore((state) => selectComposer(state, sessionId));
   const models = useAppStore((state) => state.models);
+  const loadedModelId = useAppStore((state) => state.modelStatus?.modelId ?? null);
   const phase = useAppStore((state) => state.connection.phase);
   const actions = useActions();
   if (!view) return null;
@@ -17,6 +18,7 @@ export function ComposerContainer(props: { sessionId: SessionId }) {
     <Composer
       view={view}
       models={models}
+      loadedModelId={loadedModelId}
       canSend={phase === "ready"}
       disabled={phase === "failed"}
       onDraftChange={(text) => actions.setDraft(sessionId, text)}

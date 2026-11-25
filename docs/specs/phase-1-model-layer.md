@@ -118,7 +118,7 @@ Owns the single `llama-server` child process.
 
 ```
 llama-server -m <model path> --host 127.0.0.1 --port <free port> --api-key-file <0600 temp file>
-  -c <context> -np <slots> -ngl all --no-ui --offline
+  -c <window + 8192> -np 2 --kv-unified --kv-unified-per-slot <window> -ngl all --no-ui --offline
   --slot-save-path ~/.dawg/runtime/slots --cache-ram <MiB>
   --ctx-checkpoints <n> --checkpoint-min-step <n>
   --log-file ~/.dawg/logs/llama-server.log
@@ -179,6 +179,10 @@ interface Endpoint {
 - **Ollama / LM Studio:** detected by probing their default local ports. Offered in settings, never chosen silently. `cacheControl` is false.
 - **Remote:** a URL and key typed by the user. The key is stored in the Keychain.
 
+### Context and slots
+
+Settled on 2026-11-24 against the pinned build (b12359). The bundled runtime runs two slots, one for conversations and one for side requests such as titles, over one unified KV cache: `-c <window + 8192> -np 2 --kv-unified --kv-unified-per-slot <window>`. Each slot's window is then `<window>` (llama-server reports it in `/props` as `n_ctx`), and the cache holds one window plus a small reserve for the side slot instead of two full windows. Without `--kv-unified`, llama-server splits `-c` evenly between slots. The app and the command-line tool both take this layout from `twoSlotLayout` (`packages/models/src/runtime/args.ts`), and the app's memory check counts `<window + 8192>` tokens of cache.
+
 ### Bundling the runtime
 
 - A lock file records the llama.cpp release tag and the SHA-256 of each macOS archive (arm64 and x64).
@@ -229,7 +233,6 @@ interface Endpoint {
 
 ## Open questions
 
-- How the pinned build divides context between slots (`-c`, `-np`, `--kv-unified-per-slot`). Settle by reading `/props` on the reference Mac.
 - Whether to use llama-server's own router mode for model switching instead of restarting. Restart is simpler; revisit if switching feels slow.
 - Whether the catalog needs a signature beyond HTTPS from the repo.
 - Local speed and memory numbers for every catalog entry. These can only be measured on the reference Mac.

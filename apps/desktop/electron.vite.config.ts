@@ -11,7 +11,7 @@ const root = import.meta.dirname;
  * node_modules, so they (and zod, which they share with main) are bundled, never loaded at run
  * time. Other dependencies stay external in main so native modules (node-pty, later) still work.
  */
-const BUNDLED_DEPENDENCIES = ["@dawg/protocol", "zod"];
+const BUNDLED_DEPENDENCIES = ["@dawg/engine", "@dawg/models", "@dawg/protocol", "zod"];
 
 /**
  * The page's Content-Security-Policy allows only scripts from 'self'. In the dev server,
@@ -47,6 +47,9 @@ export default defineConfig({
         input: {
           index: resolve(root, "src/main/index.ts"),
           "engine-host": resolve(root, "src/engine-host/index.ts"),
+          // The runtime supervisor's watchdog, a script of its own: main runs it from
+          // out/main/watchdog.js so llama-server never outlives the app (see src/main/models).
+          watchdog: resolve(root, "../../packages/models/src/runtime/watchdog.ts"),
         },
       },
     },

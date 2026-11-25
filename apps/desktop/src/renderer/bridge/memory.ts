@@ -1,8 +1,8 @@
 /**
  * The bridge outside Electron (the Vite dev server in a plain browser, previews, tests):
- * settings and window state in memory, saved to localStorage when there is one, and an engine
- * running in the page, reached over a real `MessageChannel` exactly as the app reaches the
- * engine host.
+ * settings and window state in memory, saved to localStorage when there is one, a fake model
+ * manager (downloads that progress on timers), and an engine running in the page, reached over a
+ * real `MessageChannel` exactly as the app reaches the engine host.
  */
 import {
   createMessagePortTransport,
@@ -24,13 +24,20 @@ import {
   type EngineRestartInfo,
   ExternalUrlSchema,
   type ModelOption,
+  type ModelsState,
   type PlatformInfo,
   type Unsubscribe,
   type WindowState,
   WindowStateSchema,
 } from "../../shared/bridge.ts";
-import { MOCK_MODEL_STATUS, MOCK_MODELS } from "../../shared/mock-models.ts";
+import { mockModelsState } from "../../shared/mock-models.ts";
+import {
+  createFakeModelManager,
+  type FakeModelManager,
+  type FakeModelManagerOptions,
+} from "./fake-models.ts";
 import { createPortHub } from "./port-hub.ts";
+import { validate } from "./validate.ts";
 
 /** Anything that can serve the protocol on a transport, such as the mock engine. */
 export interface EngineLike {
@@ -44,7 +51,12 @@ export interface MemoryBridgeOptions {
   platform?: Partial<PlatformInfo>;
   settings?: Partial<DesktopSettings>;
   windowState?: Partial<WindowState>;
+  /** The installed models, in place of the mock ones (the rest of the models state stays). */
   models?: ModelOption[];
+  /** Where the fake model manager starts. Default: every mock model installed. */
+  modelsState?: ModelsState;
+  /** Timing of the fake model manager's downloads and loads. */
+  modelTiming?: Omit<FakeModelManagerOptions, "state">;
   /**
    * Serves each port `engine.connect()` hands out. Default: a mock engine with the built-in
    * scenarios, created on first connect.
@@ -62,6 +74,8 @@ export interface MemoryBridgeOptions {
 export interface MemoryBridge extends DawgBridge {
   /** Test helper: simulates an engine host restart (onRestart, then a fresh port). */
   simulateEngineRestart(reason?: string): void;
+  /** The fake model manager behind `models`, for tests to drive. */
+  readonly modelManager: FakeModelManager;
 }
 
 export const BROWSER_HOME_DIR = "/Users/you";
@@ -95,7 +109,11 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
   const settingsListeners = new Set<(value: DesktopSettings) => void>();
   const restartListeners = new Set<(info: EngineRestartInfo) => void>();
   const hub = createPortHub();
-  const models = options.models ?? MOCK_MODELS.map((model) => model.option);
+  const modelsState = options.modelsState ?? mockModelsState();
+  const modelManager = createFakeModelManager({
+    ...options.modelTiming,
+    state: options.models ? { ...modelsState, installed: options.models } : modelsState,
+  });
 
   /** The engine sides of the ports handed out, closed on a simulated restart. */
   const engineEnds = new Set<Transport>();
@@ -159,11 +177,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
       onPort: (listener) => hub.onPort(listener),
       onRestart: (listener) => subscribe(restartListeners, listener),
     },
-    models: {
-      list: async () => models.map((model) => ({ ...model })),
-      status: async () => ({ ...MOCK_MODEL_STATUS }),
-      onStatus: () => () => {},
-    },
+    models: modelManager.api,
     dialogs: {
       chooseFolder: async (folderOptions) => {
         validate(ChooseFolderOptionsSchema, folderOptions, "folder options");
@@ -176,6 +190,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
         globalThis.window?.open(valid, "_blank", "noopener,noreferrer");
       },
     },
+    modelManager,
     simulateEngineRestart(reason = "The engine host restarted (simulated)") {
       for (const transport of [...engineEnds]) transport.close();
       if (!options.engine && defaultEngine) {
@@ -194,17 +209,6 @@ function subscribe<T>(set: Set<(value: T) => void>, listener: (value: T) => void
   return () => {
     set.delete(listener);
   };
-}
-
-function validate<S extends z.ZodType>(schema: S, value: unknown, what: string): z.output<S> {
-  const result = schema.safeParse(value);
-  if (result.success) return result.data;
-  const issues = result.error.issues
-    .map((issue) =>
-      issue.path.length > 0 ? `${issue.path.join(".")}: ${issue.message}` : issue.message,
-    )
-    .join("; ");
-  throw new Error(`Invalid ${what}: ${issues}`);
 }
 
 /** Answers `initialize` with the reason the engine is missing; every other method is refused. */

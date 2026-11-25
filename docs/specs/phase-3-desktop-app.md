@@ -87,6 +87,7 @@ Approved on 2026-11-22 from a clickable mockup of first run, the main window, de
 | Amber, blue, red, green  | `#A34A00`, `#1D5BD1`, `#C2261E`, `#1A7536` | `#F6B44A`, `#7EA8FF`, `#FF7B72`, `#6CD38D` |
 
 - **Status colours.** Amber means "Needs you", blue means done-unread and cached tokens, red means an error, green means success.
+- **Logo and app icon.** A lime line-art bulldog head on graphite, chosen by the project owner on 2026-11-24. The artwork is the owner's vector, `apps/desktop/resources/brand/logo.svg`. The app icon (`resources/icon.icns`, `resources/icon.png`) is made from it: the artwork's centre on a rounded graphite tile on Apple's 1024 grid, with a soft shadow.
 - **Type.** UI text at 13 px, code at 12 px in a monospace face. The mockup uses Geist and Geist Mono; see Open questions.
 - **Status marks** differ in shape as well as colour: a spinning ring (working), an amber "!" (needs you), a blue dot (done, unread), a dashed ring (queued), a red × (error), and no mark (idle).
 - **Tool calls** open "what needs a look" by default: failed commands and edits are open; reads, searches and passing commands are closed. Settings → General also offers All closed and All open.
@@ -250,4 +251,3 @@ As in the shared baseline, plus:
 - Whether several windows are needed at launch, or one window with multiple sessions is enough.
 - How much of the Files pane editor to build before people simply open their own editor. An "open in editor" action may cover most of the need.
 - Fonts. The mockup uses Geist and Geist Mono, which are under the SIL Open Font License, outside the dependency licence rule in PLAN.md section 12. Either use the macOS system fonts (SF Pro and SF Mono, nothing to bundle) or allow OFL for fonts. Default: the system fonts.
-- The app icon. The paw mark in the mockup is a placeholder.

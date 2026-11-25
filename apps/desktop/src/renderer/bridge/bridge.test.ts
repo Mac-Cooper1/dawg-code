@@ -5,13 +5,15 @@ import {
   PROTOCOL_VERSION,
   type Transport,
 } from "@dawg/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_WINDOW_STATE,
   ENGINE_PORT_MESSAGE,
+  type ModelsState,
   type PreloadApi,
 } from "../../shared/bridge.ts";
+import { mockModelsState } from "../../shared/mock-models.ts";
 import { createElectronBridge, type PortWindow } from "./electron.ts";
 import {
   BROWSER_CHOSEN_FOLDER,
@@ -19,12 +21,14 @@ import {
   type EngineLike,
   getBridge,
   type StorageLike,
+  scenarioOf,
   setBridgeForTests,
 } from "./index.ts";
 import { STORAGE_KEYS } from "./memory.ts";
 
 const ports: MessagePort[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const port of ports.splice(0)) port.close();
   setBridgeForTests(null);
 });
@@ -175,6 +179,65 @@ describe("memory bridge", () => {
     expect(bridge.platform).toMatchObject({ os: "browser", homeDir: "/home/x", engine: "mock" });
     expect((await bridge.models.list()).length).toBeGreaterThan(0);
     expect((await bridge.models.status()).state).toBe("ready");
+  });
+});
+
+describe("the browser fallback's model manager", () => {
+  it("downloads on a timer, checks the download, installs it and loads it", async () => {
+    vi.useFakeTimers();
+    const bridge = createMemoryBridge({
+      storage: null,
+      modelsState: mockModelsState("empty"),
+      modelTiming: { tickMs: 250, bytesPerSecond: 10_000_000_000, loadMs: 1000 },
+    });
+    const states: ModelsState[] = [];
+    bridge.models.onState((state) => states.push(state));
+    await bridge.models.download("qwen3.8-27b-q8");
+    expect(states.at(-1)?.downloads[0]).toMatchObject({ phase: "checking", bytesDone: 0 });
+    await vi.advanceTimersByTimeAsync(1250);
+    expect(states.at(-1)?.downloads[0]).toMatchObject({
+      phase: "downloading",
+      bytesDone: 10_000_000_000,
+      bytesPerSecond: 10_000_000_000,
+      secondsLeft: 2,
+    });
+    await bridge.models.pauseDownload("qwen3.8-27b-q8");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(states.at(-1)?.downloads[0]).toMatchObject({ phase: "paused", bytesDone: 10e9 });
+    await bridge.models.download("qwen3.8-27b-q8");
+    await vi.advanceTimersByTimeAsync(3000);
+    const done = states.at(-1);
+    expect(done?.downloads[0]?.phase).toBe("done");
+    expect(done?.installed.map((option) => option.id)).toEqual(["qwen3.8-27b-q8"]);
+    expect(done?.catalog[0]?.state).toBe("installed");
+
+    const started = bridge.models.start("qwen3.8-27b-q8");
+    expect((await bridge.models.status()).state).toBe("loading");
+    await vi.advanceTimersByTimeAsync(1000);
+    await started;
+    expect(await bridge.models.status()).toMatchObject({
+      state: "ready",
+      modelId: "qwen3.8-27b-q8",
+    });
+    bridge.modelManager.dispose();
+  });
+
+  it("validates input like the real bridge", async () => {
+    const bridge = createMemoryBridge({ storage: null });
+    await expect(bridge.models.download("")).rejects.toThrow(/Invalid model id/);
+    await expect(bridge.models.connectServer({ url: "ftp://x" })).rejects.toThrow(/Invalid server/);
+    // @ts-expect-error: not a number of minutes
+    await expect(bridge.models.setIdleUnload("soon")).rejects.toThrow(/Invalid idle time/);
+    await expect(bridge.models.start("nope")).rejects.toThrow(
+      "No model called nope is on this Mac",
+    );
+  });
+
+  it("starts with nothing installed, or on a small Mac, from the page's query", () => {
+    expect(scenarioOf("?models=none")).toBe("empty");
+    expect(scenarioOf("?models=small")).toBe("small");
+    expect(scenarioOf("")).toBe("installed");
+    expect(scenarioOf(undefined)).toBe("installed");
   });
 });
 

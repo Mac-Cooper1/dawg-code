@@ -8,13 +8,29 @@ import { MenuOption } from "./MenuOption.tsx";
 export interface ModelMenuProps {
   current: { id: string | null; label: string };
   models: readonly ModelOption[];
+  /** The model loaded in the bundled runtime, if any. Only one runs at a time. */
+  loadedModelId?: string | null;
   disabled?: boolean;
   onSetModel(id: string): void;
   onManageModels(): void;
 }
 
+/**
+ * The line under a model's name. The bundled runtime holds one model at a time, so a bundled
+ * model other than the loaded one says that switching to it reloads the model.
+ */
+function optionLine(model: ModelOption, loadedModelId: string | null | undefined): string {
+  const anotherLoaded = loadedModelId != null && loadedModelId !== model.id;
+  if (model.source !== "bundled" || !anotherLoaded || /reload/i.test(model.description)) {
+    return model.description;
+  }
+  return `${model.description} · switching reloads the model`;
+}
+
 /** The model pill and its menu: models on this Mac, then models on servers. */
 export function ModelMenu(props: ModelMenuProps) {
+  const loaded = props.models.find((model) => model.id === props.loadedModelId);
+  const loadedBundled = loaded?.source === "bundled" ? loaded.id : null;
   const groups = [
     { label: "On this Mac", models: props.models.filter((model) => model.source === "bundled") },
     { label: "Servers", models: props.models.filter((model) => model.source === "server") },
@@ -53,7 +69,7 @@ export function ModelMenu(props: ModelMenuProps) {
                   key={model.id}
                   value={model.id}
                   title={model.label}
-                  description={model.description}
+                  description={optionLine(model, loadedBundled)}
                 />
               ))}
             </DropdownMenu.RadioGroup>
@@ -62,7 +78,7 @@ export function ModelMenu(props: ModelMenuProps) {
             className={`${menu.item} ${menu.footerItem}`}
             onSelect={props.onManageModels}
           >
-            Manage models and servers…
+            Manage models…
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

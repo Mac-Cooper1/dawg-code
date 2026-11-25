@@ -260,7 +260,10 @@ describe("sessions", () => {
 
     const created = await actions(harness).newSession();
     expect(created).toMatch(/^created-/);
-    expect(engine.callsOf("session.create")).toEqual([{ cwd: "/Users/you/code/new-thing" }]);
+    // The default model goes with it, so the session stores a model the picker knows.
+    expect(engine.callsOf("session.create")).toEqual([
+      { cwd: "/Users/you/code/new-thing", model: "qwen3.8-27b-q8" },
+    ]);
     expect(state(harness).layout.selectedSessionId).toBe(created);
     await vi.waitFor(() => expect(state(harness).sessions[created ?? ""]?.loaded).toBe(true));
     // The event the engine sent before its response was not lost or doubled.
@@ -732,6 +735,7 @@ describe("settings and window state", () => {
       modelId: null,
       label: null,
       message: "Loading into memory",
+      memoryBytes: null,
     });
     expect(state(harness).modelStatus?.message).toBe("Loading into memory");
   });

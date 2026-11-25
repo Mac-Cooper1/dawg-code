@@ -9,6 +9,9 @@ export {
   type ReasoningSettings,
   RUNTIME_HOST,
   type RuntimeSettings,
+  type SlotLayout,
+  twoSlotLayout,
+  UTILITY_CONTEXT_RESERVE,
 } from "./args.ts";
 export {
   type CacheTarget,

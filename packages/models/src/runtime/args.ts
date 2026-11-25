@@ -66,7 +66,11 @@ export interface LaunchModel {
 
 export interface LaunchInput {
   model: LaunchModel;
-  /** Total context passed to `-c`. The server divides it between slots; read /props for the real per-slot size. */
+  /**
+   * `-c`: the KV cache in tokens. Without a unified cache the server divides it between slots;
+   * with one (see `twoSlotLayout`) the slots share it, each capped by `kvUnifiedPerSlot`. Read
+   * /props for the real per-slot size.
+   */
   contextSize: number;
   /** Parallel slots (`-np`): one for the main agent, plus subagent slots. */
   slots: number;
@@ -125,6 +129,42 @@ const RESERVED_FLAGS = new Set([
   "--models-dir",
   "--models-preset",
 ]);
+
+/** Tokens of the shared cache kept for side requests (titles), beside the conversation's window. */
+export const UTILITY_CONTEXT_RESERVE = 8192;
+
+/** How dawg lays out llama-server's slots and cache for one model. */
+export interface SlotLayout {
+  /** `-c`: the cache both slots share. This many tokens of cache is what memory must hold. */
+  contextSize: number;
+  /** `-np`: one slot for conversations, one for side requests. */
+  slots: 2;
+  /** `--kv-unified` and `--kv-unified-per-slot`: each slot may use up to the window. */
+  settings: { kvUnified: true; kvUnifiedPerSlot: number };
+  /** The slot ids the engine schedules: conversations take turns on one, side requests use the other. */
+  slotIds: { conversation: number[]; utility: number[] };
+}
+
+/**
+ * The two-slot layout every launch uses: slot 0 for conversations, slot 1 for side requests
+ * such as titles, so those never evict a conversation's cache. The cache is unified: it holds
+ * `window` tokens for the conversation plus `reserve` for side requests, and each slot is capped
+ * at `window`, so /props reports `window` as the per-slot context. Checked on b12359:
+ * `-c 5120 -np 2 --kv-unified --kv-unified-per-slot 4096` serves two slots of 4096.
+ */
+export function twoSlotLayout(
+  window: number,
+  reserve: number = UTILITY_CONTEXT_RESERVE,
+): SlotLayout {
+  positiveInt("window", window);
+  positiveInt("reserve", reserve);
+  return {
+    contextSize: window + reserve,
+    slots: 2,
+    settings: { kvUnified: true, kvUnifiedPerSlot: window },
+    slotIds: { conversation: [0], utility: [1] },
+  };
+}
 
 export class LaunchArgsError extends Error {
   constructor(message: string) {

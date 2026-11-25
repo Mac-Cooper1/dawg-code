@@ -53,7 +53,9 @@ function onEscape(event: KeyboardEvent, store: AppStoreApi): void {
 }
 
 function onCommand(key: string, store: AppStoreApi): boolean {
-  const { actions, layout } = store.getState();
+  const { actions, layout, onboarding } = store.getState();
+  // First run has no sessions yet: only Settings opens.
+  if (onboarding !== null && key !== ",") return key === "b" || key === "n" || key === "k";
   switch (key) {
     case "b":
       if (layout.view === "sessions") actions.setSidebarOpen(!layout.sidebarOpen);

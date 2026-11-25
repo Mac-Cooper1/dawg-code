@@ -38,6 +38,19 @@ export const RESTART_NOTICE = "The engine restarted. Sessions were resumed from 
 const REPLAY_PAGE = 2000;
 const LIST_PAGE = 500;
 
+/**
+ * Requests the engine may hold while main loads a model into memory, which takes minutes for a
+ * large model. They wait a little longer than the engine host does (15 minutes) instead of the
+ * client's default 30 seconds, so the window never gives up while the engine still works.
+ */
+export const MODEL_BOUND_METHODS: ReadonlySet<MethodName> = new Set<MethodName>([
+  "session.create",
+  "session.resume",
+  "session.fork",
+  "session.setModel",
+]);
+export const MODEL_BOUND_TIMEOUT_MS = 16 * 60_000;
+
 export interface SyncInfo {
   /** True when this is a new port after the engine host restarted. */
   restart: boolean;
@@ -58,6 +71,8 @@ export interface ConnectionHooks {
   notice(text: string, tone: "neutral" | "error"): void;
   scheduleFrame?: FrameScheduler;
   onProblem?(problem: ClientProtocolProblem): void;
+  /** How many model-bound requests are waiting on the engine, after every change. */
+  onModelWaits?(count: number): void;
 }
 
 export interface EngineConnection {
@@ -118,6 +133,8 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
   const unsubscribe: Unsubscribe[] = [];
 
   let client: Client | null = null;
+  /** Model-bound requests on their way. */
+  let modelWaits = 0;
   /** Bumped for every port; work started for an older port stops at its next step. */
   let generation = 0;
   let ready = false;
@@ -127,6 +144,21 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
   let wasOpen: Set<SessionId> | null = null;
   let started: Promise<void> | null = null;
   let resolveStarted: (() => void) | null = null;
+
+  /** Sends a request; a model-bound one waits as long as a model can take to load. */
+  function send<M extends MethodName>(
+    current: Client,
+    method: M,
+    params: MethodParams<M>,
+  ): Promise<MethodResult<M>> {
+    if (!MODEL_BOUND_METHODS.has(method)) return current.request(method, params);
+    modelWaits++;
+    hooks.onModelWaits?.(modelWaits);
+    return current.request(method, params, { timeoutMs: MODEL_BOUND_TIMEOUT_MS }).finally(() => {
+      modelWaits--;
+      hooks.onModelWaits?.(modelWaits);
+    });
+  }
 
   function settleStart(): void {
     resolveStarted?.();
@@ -362,7 +394,7 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
     },
     request(method, params) {
       try {
-        return connected().current.request(method, params);
+        return send(connected().current, method, params);
       } catch (error) {
         return Promise.reject(error);
       }
@@ -382,7 +414,7 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
         (async () => {
           let snapshot: SessionSnapshot;
           try {
-            snapshot = await link.current.request("session.resume", { sessionId });
+            snapshot = await send(link.current, "session.resume", { sessionId });
           } catch (error) {
             if (gone.has(sessionId)) return;
             throw error;

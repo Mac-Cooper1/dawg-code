@@ -140,6 +140,12 @@ const host = flag("--host") ?? "127.0.0.1";
 const port = Number(flag("--port") ?? "8080");
 const nCtx = Number(flag("-c", "--ctx-size") ?? "4096");
 const nSlots = Number(flag("-np", "--parallel") ?? "1");
+// As b12359: a unified cache is shared, each slot capped by --kv-unified-per-slot (else the whole
+// cache); otherwise -c is divided between the slots.
+const perSlotCap = flag("--kv-unified-per-slot");
+const nCtxSlot = flags.has("--kv-unified")
+  ? Math.min(nCtx, perSlotCap === undefined ? nCtx : Number(perSlotCap))
+  : Math.floor(nCtx / nSlots);
 const slotSavePath = flag("--slot-save-path");
 const alias = flag("--alias");
 const keyFile = flag("--api-key-file");
@@ -256,7 +262,7 @@ function props() {
     ...propsTemplate,
     default_generation_settings: {
       ...propsTemplate.default_generation_settings,
-      n_ctx: Math.floor(nCtx / nSlots),
+      n_ctx: nCtxSlot,
     },
     total_slots: nSlots,
     model_path: modelPath,
@@ -280,7 +286,7 @@ function models() {
         ...entry,
         id: modelId,
         aliases: [modelId],
-        meta: { ...entry.meta, n_ctx: Math.floor(nCtx / nSlots), n_ctx_train: model.nCtxTrain ?? 8192 },
+        meta: { ...entry.meta, n_ctx: nCtxSlot, n_ctx_train: model.nCtxTrain ?? 8192 },
       },
     ],
   };
@@ -312,7 +318,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(
       res,
       200,
-      slotCache.map((c, id) => ({ id, n_ctx: Math.floor(nCtx / nSlots), is_processing: false, cached: c.length })),
+      slotCache.map((c, id) => ({ id, n_ctx: nCtxSlot, is_processing: false, cached: c.length })),
     );
   }
   if (req.method === "POST" && path === "/v1/chat/completions") {
@@ -427,7 +433,7 @@ server.listen({ host, port, exclusive: true }, () => {
   if (model.neverHealthy) return;
   setTimeout(() => {
     loaded = true;
-    log(`I srv    load_model: initializing, n_slots = ${nSlots}, n_ctx_slot = ${Math.floor(nCtx / nSlots)}`);
+    log(`I srv    load_model: initializing, n_slots = ${nSlots}, n_ctx_slot = ${nCtxSlot}`);
     log("I main: model loaded");
     const crashTimes = model.crashTimes ?? Number.POSITIVE_INFINITY;
     if (model.crashAfterMs !== undefined && launch <= crashTimes) {

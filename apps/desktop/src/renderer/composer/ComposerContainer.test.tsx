@@ -89,7 +89,7 @@ describe.each(THEMES)("ComposerContainer (%s)", (theme) => {
   it("opens Settings → Models from the model menu", async () => {
     const { user, actions, store } = setup(theme);
     await user.click(screen.getByRole("button", { name: /^Model:/ }));
-    await user.click(screen.getByRole("menuitem", { name: "Manage models and servers…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Manage models…" }));
     expect(actions.setSettingsPage).toHaveBeenCalledWith("models");
     expect(store.getState().layout).toMatchObject({ view: "settings", settingsPage: "models" });
   });

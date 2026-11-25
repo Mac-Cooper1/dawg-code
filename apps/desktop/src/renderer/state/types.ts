@@ -40,24 +40,32 @@ import type {
   Usage,
 } from "@dawg/protocol";
 import type {
+  AddedModelFile,
   Appearance,
+  ConnectServerInput,
   DesktopSettings,
   ModelOption,
   ModelStatus,
+  ModelsState,
   Pane,
   ResolvedTheme,
+  ServerInfo,
   ToolCallDisplay,
   WindowState,
 } from "../../shared/bridge.ts";
 import type { SessionInternals } from "./internals.ts";
 
 export type {
+  AddedModelFile,
   Appearance,
+  ConnectServerInput,
   DesktopSettings,
   ModelOption,
   ModelStatus,
+  ModelsState,
   Pane,
   ResolvedTheme,
+  ServerInfo,
   ToolCallDisplay,
   WindowState,
 };
@@ -347,6 +355,15 @@ export type ConnectionState =
   /** Cannot continue, for example a protocol version mismatch. */
   | { phase: "failed"; message: string };
 
+/**
+ * The first-run screens, shown in place of the sessions view until a model runs: Welcome, then
+ * Downloading the chosen model, then Starting it. `error` is a sentence when that step failed.
+ */
+export type OnboardingState =
+  | { step: "welcome" }
+  | { step: "download"; modelId: string; error: string | null }
+  | { step: "start"; modelId: string; error: string | null };
+
 export interface Layout {
   view: "sessions" | "settings";
   settingsPage: SettingsPage;
@@ -393,8 +410,17 @@ export interface AppState {
   layout: Layout;
   ui: UiState;
   settings: DesktopSettings;
+  /** Models that can run now, the default first: `modelsState.installed`. */
   models: ModelOption[];
+  /** The bundled runtime's status: `modelsState.status`. */
   modelStatus: ModelStatus | null;
+  /** Everything the model manager reports, for Settings → Models and first run. Null until loaded. */
+  modelsState: ModelsState | null;
+  /**
+   * The first-run screens, when they show. They start while nothing is installed (or no model is
+   * the default yet) and end once the chosen model runs.
+   */
+  onboarding: OnboardingState | null;
   notices: Notice[];
 }
 
@@ -634,6 +660,43 @@ export interface AppActions {
   setEffort(sessionId: SessionId, effort: string | null): Promise<void>;
   /** Runs `/compact`. */
   compact(sessionId: SessionId): Promise<void>;
+
+  // --- Models (Settings → Models and the first-run screens) ------------------------------------
+  // Failures become notices; progress and results arrive with the next models state.
+  downloadModel(modelId: string): Promise<void>;
+  pauseDownload(modelId: string): Promise<void>;
+  /** Stops a download, deletes what it fetched, and drops it from the list. */
+  cancelDownload(modelId: string): Promise<void>;
+  /** Drops a finished or failed download from the list. */
+  dismissDownload(modelId: string): Promise<void>;
+  /** Adopts the copy another app has (`CatalogModel.foundIn`) instead of downloading. */
+  adoptExistingModel(modelId: string): Promise<void>;
+  /** Deletes a downloaded model's files. */
+  removeModel(modelId: string): Promise<void>;
+  /** Loads a model into the bundled runtime (or checks its server answers). */
+  startModel(modelId: string): Promise<void>;
+  stopModel(): Promise<void>;
+  /** The model new sessions use. */
+  setDefaultModel(modelId: string): Promise<void>;
+  setIdleUnload(minutes: number | null): Promise<void>;
+  /** The native file picker. The added model, or null when cancelled (or it failed). */
+  addModelFile(): Promise<AddedModelFile | null>;
+  /** Adds a remote server: the server, or the sentence saying why it could not be added. */
+  connectServer(input: ConnectServerInput): Promise<{ server: ServerInfo } | { error: string }>;
+  removeServer(serverId: string): Promise<void>;
+  refreshServers(): Promise<void>;
+  /** Opens an http(s) link (a model's licence) in the system browser. */
+  openExternal(url: string): Promise<void>;
+
+  // --- First run -------------------------------------------------------------------------------
+  /**
+   * Sets the chosen model up and makes it the default: downloads it unless it is on this Mac
+   * already (`useExisting` adopts another app's copy instead), then starts it. The first-run
+   * screens follow each step and give way to the sessions view once it runs.
+   */
+  setUpModel(modelId: string, options?: { useExisting?: boolean }): Promise<void>;
+  /** Back to the welcome screen, to choose another model. */
+  showWelcome(): void;
 
   // --- Decisions -------------------------------------------------------------------------------
   respondPermission(

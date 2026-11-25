@@ -7,9 +7,15 @@
  * the page.
  */
 import { type DawgBridge, PRELOAD_GLOBAL, type PreloadApi } from "../../shared/bridge.ts";
+import { type MockModelsScenario, mockModelsState } from "../../shared/mock-models.ts";
 import { createElectronBridge } from "./electron.ts";
 import { createMemoryBridge } from "./memory.ts";
 
+export {
+  createFakeModelManager,
+  type FakeModelManager,
+  type FakeModelManagerOptions,
+} from "./fake-models.ts";
 export {
   BROWSER_CHOSEN_FOLDER,
   BROWSER_HOME_DIR,
@@ -39,5 +45,16 @@ function createPageBridge(): DawgBridge {
   const page = globalThis.window as (Window & { [PRELOAD_GLOBAL]?: PreloadApi }) | undefined;
   const preload = page?.[PRELOAD_GLOBAL];
   if (page && preload) return createElectronBridge(preload, page);
-  return createMemoryBridge();
+  return createMemoryBridge({ modelsState: mockModelsState(scenarioOf(page?.location?.search)) });
+}
+
+/**
+ * In the browser, `?models=none` starts with nothing installed (the welcome screen) and
+ * `?models=small` on a Mac no catalog model fits. Anything else: every mock model installed.
+ */
+export function scenarioOf(search: string | undefined): MockModelsScenario {
+  const value = new URLSearchParams(search ?? "").get("models");
+  if (value === "none") return "empty";
+  if (value === "small") return "small";
+  return "installed";
 }

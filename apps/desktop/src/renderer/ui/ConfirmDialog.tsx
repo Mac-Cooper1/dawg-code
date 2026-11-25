@@ -11,6 +11,8 @@ export interface ConfirmDialogProps {
   /** What will happen, in a sentence or two. */
   children: ReactNode;
   confirmLabel: string;
+  /** The button that leaves things as they are. Default "Cancel". */
+  cancelLabel?: string;
   /** Fills the confirm button red, for an action that cannot be undone. */
   destructive?: boolean;
   onConfirm(): void;
@@ -37,7 +39,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           </AlertDialog.Description>
           <div className={styles.dialogActions}>
             <AlertDialog.Cancel asChild>
-              <Button>Cancel</Button>
+              <Button>{props.cancelLabel ?? "Cancel"}</Button>
             </AlertDialog.Cancel>
             <AlertDialog.Action asChild>
               <Button

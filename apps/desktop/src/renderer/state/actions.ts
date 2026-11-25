@@ -13,11 +13,25 @@ import {
   type SessionSnapshot,
 } from "@dawg/protocol";
 import type { StoreApi } from "zustand";
-import type { DawgBridge, DesktopSettingsPatch } from "../../shared/bridge.ts";
+import type {
+  DawgBridge,
+  DesktopSettingsPatch,
+  ModelStatus,
+  ModelsState,
+} from "../../shared/bridge.ts";
 import { nextMode } from "../lib/modes.ts";
 import type { FrameScheduler } from "./batcher.ts";
 import { createEngineConnection, type EngineConnection, type SyncInfo } from "./connection.ts";
 import { followUps } from "./follow-ups.ts";
+import { shallowEqual } from "./memo.ts";
+import {
+  findDownload,
+  findInstalled,
+  firstRunStep,
+  modelName,
+  needsSetup,
+  sameOptions,
+} from "./models.ts";
 import * as queue from "./queue.ts";
 import { reduceAll } from "./reducer.ts";
 import { neighbourOf, sidebarOrder } from "./sidebar-order.ts";
@@ -27,6 +41,7 @@ import type {
   EngineSlice,
   Layout,
   Notice,
+  OnboardingState,
   ReducerInput,
   UiState,
 } from "./types.ts";
@@ -52,9 +67,18 @@ export interface Runtime {
 
 const MAX_NOTICES = 4;
 
+/** The notice shown while a request waits for a model to load. */
+export const MODEL_LOADING_NOTICE_ID = "model-loading";
+
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.trim().replace(/\.$/, "");
+}
+
+/** An error as a sentence, for showing on its own: "Not enough free space." */
+function sentence(error: unknown): string {
+  const text = errorText(error);
+  return text === "" ? "Something went wrong." : `${text}.`;
 }
 
 function sliceOf(state: AppStore): EngineSlice {
@@ -82,6 +106,13 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
   const unsubscribe: (() => void)[] = [];
   let started: Promise<void> | null = null;
   let stopped = false;
+  /** False until the first models state arrives: first run may start then. */
+  let modelsSeen = false;
+  /** The model first run is starting, so a burst of models states starts it once. */
+  let startingModel: string | null = null;
+  /** Requests waiting on the engine while it may be loading a model (see connection.ts). */
+  let modelWaits = 0;
+  let loadingNoticeShown = false;
 
   // --- State helpers -------------------------------------------------------------------------
 
@@ -157,6 +188,10 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     setConnection: (state) => store.setState({ connection: state }),
     onSynced,
     notice,
+    onModelWaits(count) {
+      modelWaits = count;
+      followModelLoading();
+    },
     ...(deps.scheduleFrame ? { scheduleFrame: deps.scheduleFrame } : {}),
   });
 
@@ -330,16 +365,145 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     }
   }
 
+  /** Runs a bridge call; a failure becomes a notice. True when it succeeded. */
+  async function attempt(failure: string, run: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await run();
+      return true;
+    } catch (error) {
+      notice(`${failure}: ${errorText(error)}.`);
+      return false;
+    }
+  }
+
+  // --- Models and first run ------------------------------------------------------------------
+
+  function setOnboarding(onboarding: OnboardingState | null): void {
+    if (!shallowEqual(get().onboarding, onboarding)) store.setState({ onboarding });
+  }
+
+  function nameOf(modelId: string): string {
+    return modelName(get().modelsState, modelId);
+  }
+
+  /** Takes a models state from main, keeping unchanged parts identical for the selectors. */
+  function applyModelsState(next: ModelsState): void {
+    const prev = get();
+    const models = sameOptions(prev.models, next.installed) ? prev.models : next.installed;
+    const modelStatus =
+      prev.modelStatus && shallowEqual(prev.modelStatus, next.status)
+        ? prev.modelStatus
+        : next.status;
+    store.setState({ modelsState: next, models, modelStatus });
+    followModelLoading();
+    const first = !modelsSeen;
+    modelsSeen = true;
+    if (get().onboarding === null) {
+      // At launch a missing default also starts first run; later only an empty list does.
+      if (first ? needsSetup(next) : next.installed.length === 0) {
+        setOnboarding(firstRunStep(next));
+      }
+    }
+    followDownload(next);
+  }
+
+  function applyModelStatus(status: ModelStatus): void {
+    const { modelStatus, modelsState } = get();
+    if (modelStatus && shallowEqual(modelStatus, status)) return;
+    store.setState({
+      modelStatus: status,
+      modelsState: modelsState ? { ...modelsState, status } : modelsState,
+    });
+    followModelLoading();
+  }
+
+  /**
+   * While a request waits on the engine and the runtime is loading a model, say so: a large
+   * model takes minutes, and the session carries on once it is in.
+   */
+  function followModelLoading(): void {
+    const status = get().modelStatus;
+    const loading = modelWaits > 0 && status?.state === "loading";
+    if (loading === loadingNoticeShown) return;
+    loadingNoticeShown = loading;
+    const others = get().notices.filter((existing) => existing.id !== MODEL_LOADING_NOTICE_ID);
+    if (!loading) {
+      if (others.length !== get().notices.length) store.setState({ notices: others });
+      return;
+    }
+    const loadingNotice: Notice = {
+      id: MODEL_LOADING_NOTICE_ID,
+      text: `Loading ${status?.label ?? "the model"} into memory. This can take a few minutes.`,
+      tone: "neutral",
+    };
+    store.setState({ notices: [...others, loadingNotice].slice(-MAX_NOTICES) });
+  }
+
+  /** First run's download step: on to starting once the model is in, back when cancelled. */
+  function followDownload(state: ModelsState): void {
+    const onboarding = get().onboarding;
+    if (onboarding?.step !== "download") return;
+    const { modelId } = onboarding;
+    const download = findDownload(state, modelId);
+    if (findInstalled(state, modelId) || download?.phase === "done") {
+      if (download) void bridge.models.dismissDownload(modelId).catch(() => {});
+      void startFirstModel(modelId);
+    } else if (download?.phase === "cancelled") {
+      setOnboarding({ step: "welcome" });
+    } else if (download?.phase === "failed" && onboarding.error !== download.error) {
+      setOnboarding({ step: "download", modelId, error: download.error });
+    }
+  }
+
+  /** First run's last step: load the model, make it the default, then the sessions view. */
+  async function startFirstModel(modelId: string): Promise<void> {
+    if (startingModel === modelId) return;
+    startingModel = modelId;
+    setOnboarding({ step: "start", modelId, error: null });
+    const stillStarting = () => {
+      const onboarding = get().onboarding;
+      return onboarding?.step === "start" && onboarding.modelId === modelId;
+    };
+    try {
+      await bridge.models.start(modelId);
+      await bridge.models.setDefault(modelId);
+      if (stillStarting()) setOnboarding(null);
+    } catch (error) {
+      if (stillStarting()) setOnboarding({ step: "start", modelId, error: sentence(error) });
+    } finally {
+      if (startingModel === modelId) startingModel = null;
+    }
+  }
+
+  async function loadModels(): Promise<void> {
+    try {
+      const state = await bridge.models.state();
+      if (!stopped && !modelsSeen) applyModelsState(state);
+      return;
+    } catch {
+      // An older main without the models state: the picker and the footer still work.
+    }
+    const [models, modelStatus] = await Promise.allSettled([
+      bridge.models.list(),
+      bridge.models.status(),
+    ]);
+    if (stopped) return;
+    if (models.status === "fulfilled") store.setState({ models: models.value });
+    if (modelStatus.status === "fulfilled" && get().modelStatus === null) {
+      store.setState({ modelStatus: modelStatus.value });
+    }
+  }
+
   // --- Startup -------------------------------------------------------------------------------
 
   async function startUp(): Promise<void> {
     unsubscribe.push(bridge.settings.onChange((settings) => store.setState({ settings })));
-    unsubscribe.push(bridge.models.onStatus((modelStatus) => store.setState({ modelStatus })));
-    const [settings, windowState, models, modelStatus] = await Promise.allSettled([
+    unsubscribe.push(bridge.models.onState((state) => applyModelsState(state)));
+    unsubscribe.push(bridge.models.onStatus((status) => applyModelStatus(status)));
+    const [settings, windowState] = await Promise.allSettled([
       bridge.settings.get(),
       bridge.windowState.load(),
-      bridge.models.list(),
-      bridge.models.status(),
+      loadModels(),
     ]);
     if (stopped) return;
     if (settings.status === "fulfilled") store.setState({ settings: settings.value });
@@ -347,10 +511,6 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       store.setState(applyWindowState(get(), windowState.value));
     } else {
       notice(`Could not restore the window layout: ${errorText(windowState.reason)}.`);
-    }
-    if (models.status === "fulfilled") store.setState({ models: models.value });
-    if (modelStatus.status === "fulfilled" && get().modelStatus === null) {
-      store.setState({ modelStatus: modelStatus.value });
     }
 
     // Save layout and seen marks from here on.
@@ -435,8 +595,10 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       }
       if (dir === null) return null;
       const cwd = dir;
+      // Sessions store the model they use, so it is always one the picker knows.
+      const model = get().modelsState?.defaultModelId ?? null;
       const snapshot = await request("Could not start a session", () =>
-        connection.request("session.create", { cwd }),
+        connection.request("session.create", model === null ? { cwd } : { cwd, model }),
       );
       if (!snapshot) return null;
       await adoptAndSelect(snapshot);
@@ -590,6 +752,103 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
           { type: "command-output", sessionId, command: "/compact", output: result.output },
         ]);
       }
+    },
+
+    async downloadModel(modelId) {
+      await attempt(`Could not download ${nameOf(modelId)}`, () => bridge.models.download(modelId));
+    },
+    async pauseDownload(modelId) {
+      await attempt("Could not pause the download", () => bridge.models.pauseDownload(modelId));
+    },
+    async cancelDownload(modelId) {
+      const cancelled = await attempt("Could not cancel the download", () =>
+        bridge.models.cancelDownload(modelId),
+      );
+      if (!cancelled) return;
+      const onboarding = get().onboarding;
+      if (onboarding?.step === "download" && onboarding.modelId === modelId) {
+        setOnboarding({ step: "welcome" });
+      }
+      await bridge.models.dismissDownload(modelId).catch(() => {});
+    },
+    async dismissDownload(modelId) {
+      await attempt("Could not clear the download", () => bridge.models.dismissDownload(modelId));
+    },
+    async adoptExistingModel(modelId) {
+      await attempt(`Could not use the copy of ${nameOf(modelId)}`, () =>
+        bridge.models.useExisting(modelId),
+      );
+    },
+    async removeModel(modelId) {
+      await attempt(`Could not delete ${nameOf(modelId)}`, () => bridge.models.remove(modelId));
+    },
+    async startModel(modelId) {
+      await attempt(`Could not start ${nameOf(modelId)}`, () => bridge.models.start(modelId));
+    },
+    async stopModel() {
+      await attempt("Could not stop the model", () => bridge.models.stop());
+    },
+    async setDefaultModel(modelId) {
+      await attempt("Could not change the default model", () => bridge.models.setDefault(modelId));
+    },
+    async setIdleUnload(minutes) {
+      await attempt("Could not save the setting", () => bridge.models.setIdleUnload(minutes));
+    },
+    async addModelFile() {
+      return request("Could not add the model file", () => bridge.models.addModelFile());
+    },
+    async connectServer(input) {
+      try {
+        return { server: await bridge.models.connectServer(input) };
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async removeServer(serverId) {
+      await attempt("Could not remove the server", () => bridge.models.removeServer(serverId));
+    },
+    async refreshServers() {
+      await attempt("Could not look for servers", () => bridge.models.refreshServers());
+    },
+    async openExternal(url) {
+      await attempt("Could not open the link", () => bridge.shell.openExternal(url));
+    },
+
+    async setUpModel(modelId, options) {
+      const state = get().modelsState;
+      if (state === null) return;
+      if (options?.useExisting) {
+        setOnboarding({ step: "start", modelId, error: null });
+        try {
+          // biome-ignore lint/correctness/useHookAtTopLevel: a bridge call named like a hook
+          await bridge.models.useExisting(modelId);
+        } catch (error) {
+          setOnboarding({ step: "start", modelId, error: sentence(error) });
+          return;
+        }
+        await startFirstModel(modelId);
+        return;
+      }
+      if (findInstalled(state, modelId)) {
+        await startFirstModel(modelId);
+        return;
+      }
+      setOnboarding({ step: "download", modelId, error: null });
+      try {
+        await bridge.models.download(modelId);
+      } catch (error) {
+        const onboarding = get().onboarding;
+        if (onboarding?.step === "download" && onboarding.modelId === modelId) {
+          setOnboarding({ step: "download", modelId, error: sentence(error) });
+        }
+        return;
+      }
+      // It may be in already (a finished download, or a state that arrived first).
+      const latest = get().modelsState;
+      if (latest) followDownload(latest);
+    },
+    showWelcome() {
+      setOnboarding({ step: "welcome" });
     },
 
     async respondPermission(sessionId, requestId, response) {

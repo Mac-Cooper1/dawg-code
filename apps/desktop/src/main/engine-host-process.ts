@@ -1,6 +1,7 @@
 /**
- * The Electron side of the engine supervisor: starts the engine host as a utility process and
- * forwards its output to main's log, line by line, with a prefix.
+ * The Electron side of the engine supervisor: starts the engine host as a utility process,
+ * forwards its output to main's log, line by line, with a prefix, and hands its messages (model
+ * requests, see shared/engine-host-messages.ts) to the supervisor.
  */
 import { type MessagePortMain, utilityProcess } from "electron";
 import type { SupervisedChild } from "./engine-supervisor.ts";
@@ -31,6 +32,9 @@ export function spawnEngineHost(options: EngineHostSpawnOptions): SupervisedChil
     },
     onExit(listener) {
       child.once("exit", (code) => listener(code));
+    },
+    onMessage(listener) {
+      child.on("message", (message: unknown) => listener(message));
     },
   };
 }

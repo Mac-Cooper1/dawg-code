@@ -1,35 +1,57 @@
 /**
- * The one seam where the engine host picks its engine.
- *
- * This wave serves the mock engine. The real engine plugs in here later, without touching the
- * rest of the engine host:
- *
- *   const engine = createEngine({ storeRoot: dataRoot, homeDir, models, ... });   // @dawg/engine
- *   return {
- *     kind: "real",
- *     connect: (transport) => createEngineHost(engine, transport, { homeDir, ... }),
- *     dispose: () => engine.close(),
- *   };
- *
- * (`createEngineHost` serves one connection; see packages/engine/src/host/README.md.)
+ * The one seam where the engine host picks its engine: the real engine (`@dawg/engine`, see
+ * `real-engine.ts`) unless DAWG_ENGINE=mock, which replays recorded sessions
+ * (`src/mock-engine`) and never asks main for a model.
  */
 import type { Transport } from "@dawg/protocol";
 import { createMockEngine } from "../mock-engine/index.ts";
+import type { HostToMain } from "../shared/engine-host-messages.ts";
+import type { ModelMessage } from "./model-provider.ts";
+import { createRealEngine } from "./real-engine.ts";
+
+export type EngineKind = "mock" | "real";
 
 export interface HostedEngine {
-  readonly kind: "mock" | "real";
+  readonly kind: EngineKind;
   /** Serves the protocol on one transport (one window's port). */
   connect(transport: Transport): void;
-  dispose(): void;
+  /** One of main's messages about models. The mock engine has no use for them. */
+  receive?(message: ModelMessage): void;
+  /** Stops the engine: open sessions are closed and their transcripts flushed. */
+  dispose(): void | Promise<void>;
 }
 
-export interface EngineConfig {
-  homeDir: string;
-  /** Mock playback speed (DAWG_MOCK_SPEED). */
-  speed: number;
-}
+export type EngineConfig =
+  | {
+      kind: "mock";
+      homeDir: string;
+      /** Playback speed (DAWG_MOCK_SPEED). */
+      speed: number;
+    }
+  | {
+      kind: "real";
+      homeDir: string;
+      /** The data root (DAWG_HOME). */
+      dataRoot: string;
+      /** The bundled ripgrep, or null to look one up. */
+      ripgrepPath: string | null;
+      log(message: string): void;
+    };
 
-export function createHostedEngine(config: EngineConfig): HostedEngine {
+/** `send` posts a message to main; only the real engine uses it. */
+export function createHostedEngine(
+  config: EngineConfig,
+  send: (message: HostToMain) => void,
+): HostedEngine {
+  if (config.kind === "real") {
+    return createRealEngine({
+      dataRoot: config.dataRoot,
+      homeDir: config.homeDir,
+      ripgrepPath: config.ripgrepPath,
+      send,
+      log: config.log,
+    });
+  }
   const engine = createMockEngine({ homeDir: config.homeDir, speed: config.speed });
   return {
     kind: "mock",
@@ -38,6 +60,19 @@ export function createHostedEngine(config: EngineConfig): HostedEngine {
     },
     dispose: () => engine.dispose(),
   };
+}
+
+/** DAWG_ENGINE: "mock" for the mock engine; unset, empty or "real" for the real one. */
+export function parseEngineKind(
+  raw: string | undefined,
+  log: (message: string) => void,
+): EngineKind {
+  const value = raw?.trim() ?? "";
+  if (value === "mock") return "mock";
+  if (value !== "" && value !== "real") {
+    log(`Ignoring DAWG_ENGINE="${raw}": it must be "mock" or "real". Running the real engine.`);
+  }
+  return "real";
 }
 
 /**

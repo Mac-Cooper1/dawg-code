@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/*.md", "!evals/tasks", "!**/__fixtures__", "!**/fixtures"]
+    "includes": [
+      "**",
+      "!**/*.md",
+      "!evals/tasks",
+      "!**/__fixtures__",
+      "!**/fixtures",
+      "!apps/desktop/resources/brand"
+    ]
   },
   "formatter": {
     "enabled": true,

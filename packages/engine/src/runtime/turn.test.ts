@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { text, toolCall } from "@dawg/mock-model";
 import { afterEach, describe, expect, it } from "vitest";
+import { type ModelClient, ModelError } from "../contracts/model.ts";
+import { createModelClient } from "../model/index.ts";
 import { type Harness, historyProblems, startHarness, textOf } from "./__fixtures__/harness.ts";
 
 let h: Harness | null = null;
@@ -150,5 +152,47 @@ describe("a whole turn", () => {
     expect((titleRequest?.body as { tools?: unknown[] } | undefined)?.tools ?? []).toEqual([]);
     expect(session.view.some((m) => textOf(m).includes("Fix the parser."))).toBe(false);
     h.mock.assertDone();
+  });
+
+  it("shows a provider's 'unavailable' message as it is, and retries it once when retryable", async () => {
+    const refusal = "No model is installed yet. Download one in Settings → Models.";
+    const failures: ModelError[] = [];
+    let attempts = 0;
+    h = await startHarness({ script: [text("Back again.")] });
+    const real = createModelClient(h.mock.endpoint);
+    const client: ModelClient = {
+      endpoint: real.endpoint,
+      async *stream(request) {
+        attempts += 1;
+        const failure = failures.shift();
+        if (failure !== undefined) throw failure;
+        yield* real.stream(request);
+      },
+      countTokens: (request) => real.countTokens(request),
+    };
+    const engine = h.newEngine({ models: { connect: async () => ({ client }) } });
+    const session = await engine.createSession({ cwd: h.project });
+
+    // Not retryable: the turn ends at once, in the provider's words.
+    failures.push(new ModelError("unavailable", refusal));
+    const failed = await session.run({ content: [{ type: "text", text: "Hi" }] });
+    expect(failed.stopReason).toBe("error");
+    expect(failed.error).toEqual({
+      kind: "model_unavailable",
+      message: refusal,
+      detail: null,
+      retryable: false,
+    });
+    expect(attempts).toBe(1);
+    const shown = h.ofType(session.id, "turn.finished").at(-1)?.payload.error;
+    expect(shown).toMatchObject({ kind: "model_unavailable", message: refusal });
+
+    // Retryable: sent once more, which works.
+    attempts = 0;
+    failures.push(new ModelError("unavailable", "The runtime is restarting.", { retryable: true }));
+    const recovered = await session.run({ content: [{ type: "text", text: "Again" }] });
+    expect(recovered.error).toBeNull();
+    expect(recovered.finalText).toBe("Back again.");
+    expect(attempts).toBe(2);
   });
 });

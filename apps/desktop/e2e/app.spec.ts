@@ -38,6 +38,7 @@ test.beforeAll(async () => {
   }
   delete env.ELECTRON_RENDERER_URL; // Always the built page, even when run from a dev shell.
   env.DAWG_HOME = dawgHome;
+  env.DAWG_ENGINE = "mock"; // The recorded sessions; real-engine.spec.ts runs the real one.
   env.DAWG_MOCK_SPEED = "Infinity";
 
   launchedAt = Date.now();

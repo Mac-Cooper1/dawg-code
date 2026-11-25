@@ -9,15 +9,55 @@ import {
   isTrustedSender,
 } from "./app-url.ts";
 import { createInvokeHandlers, type MainServices } from "./ipc-handlers.ts";
+import { createMockModelService } from "./models/mock.ts";
+import type { ModelService } from "./models/service.ts";
 import type { SettingsStore, WindowStateStore } from "./stores.ts";
 import { initialBounds } from "./window-geometry.ts";
+
+/** The mock service, recording every call that changes something. */
+function recordingModels(): ModelService & { calls: [string, ...unknown[]][] } {
+  const calls: [string, ...unknown[]][] = [];
+  const base = createMockModelService();
+  const record =
+    (name: string) =>
+    async (...args: unknown[]) => {
+      calls.push([name, ...args]);
+    };
+  return {
+    ...base,
+    calls,
+    download: record("download"),
+    pauseDownload: record("pauseDownload"),
+    cancelDownload: record("cancelDownload"),
+    dismissDownload: record("dismissDownload"),
+    useExisting: record("useExisting"),
+    remove: record("remove"),
+    start: record("start"),
+    stop: record("stop"),
+    setDefault: record("setDefault"),
+    setIdleUnload: record("setIdleUnload"),
+    removeServer: record("removeServer"),
+    refreshServers: record("refreshServers"),
+    addModelFile: async (choose) => {
+      calls.push(["addModelFile", await choose()]);
+      return null;
+    },
+    connectServer: async (input) => {
+      calls.push(["connectServer", input]);
+      return base.connectServer(input);
+    },
+  };
+}
 
 function services(): MainServices<string> & {
   opened: string[];
   changed: unknown[];
+  models: ReturnType<typeof recordingModels>;
+  pickedFor: string[];
 } {
   const opened: string[] = [];
   const changed: unknown[] = [];
+  const pickedFor: string[] = [];
   const settings: SettingsStore = {
     get: async () => DEFAULT_SETTINGS,
     update: async (patch) => ({ ...DEFAULT_SETTINGS, ...(patch as object) }),
@@ -26,8 +66,14 @@ function services(): MainServices<string> & {
   return {
     opened,
     changed,
+    pickedFor,
     settings,
     windowState,
+    models: recordingModels(),
+    chooseModelFile: async (sender) => {
+      pickedFor.push(sender);
+      return "/models/picked.gguf";
+    },
     windowIdFor: () => "main",
     settingsChanged: (value) => changed.push(value),
     chooseFolder: async (_sender, options) => options?.defaultPath ?? "/picked",
@@ -77,9 +123,95 @@ describe("IPC handlers", () => {
     expect(target.windowState.save).toHaveBeenCalledWith("main", { sidebarOpen: false });
   });
 
-  it("serves the mock models", async () => {
+  it("serves the models the service has", async () => {
     expect(await handler(IPC.modelsList)("sender", [])).toEqual(MOCK_MODELS.map((m) => m.option));
     expect(await handler(IPC.modelsStatus)("sender", [])).toMatchObject({ state: "ready" });
+    expect(await handler(IPC.modelsState)("sender", [])).toMatchObject({
+      defaultModelId: "qwen3.8-27b-q8",
+      downloads: [],
+    });
+  });
+
+  it("validates model ids before they reach the model service", async () => {
+    const target = services();
+    const channels = [
+      IPC.modelsDownload,
+      IPC.modelsPauseDownload,
+      IPC.modelsCancelDownload,
+      IPC.modelsDismissDownload,
+      IPC.modelsUseExisting,
+      IPC.modelsRemove,
+      IPC.modelsStart,
+      IPC.modelsSetDefault,
+    ];
+    for (const channel of channels) {
+      for (const bad of ["", 42, undefined, "x".repeat(513), { id: "a" }]) {
+        await expect(handler(channel, target)("sender", [bad])).rejects.toThrow(/Invalid model id/);
+      }
+      await handler(channel, target)("sender", ["qwen3.8-27b-q8"]);
+    }
+    await expect(handler(IPC.modelsRemoveServer, target)("sender", [""])).rejects.toThrow(
+      /Invalid server id/,
+    );
+    await handler(IPC.modelsRemoveServer, target)("sender", ["remote:1f3a9c"]);
+    expect(target.models.calls).toEqual([
+      ["download", "qwen3.8-27b-q8"],
+      ["pauseDownload", "qwen3.8-27b-q8"],
+      ["cancelDownload", "qwen3.8-27b-q8"],
+      ["dismissDownload", "qwen3.8-27b-q8"],
+      ["useExisting", "qwen3.8-27b-q8"],
+      ["remove", "qwen3.8-27b-q8"],
+      ["start", "qwen3.8-27b-q8"],
+      ["setDefault", "qwen3.8-27b-q8"],
+      ["removeServer", "remote:1f3a9c"],
+    ]);
+  });
+
+  it("validates the idle unload time", async () => {
+    const target = services();
+    const set = handler(IPC.modelsSetIdleUnload, target);
+    for (const bad of [0, -5, 1.5, 24 * 60 + 1, "10", undefined]) {
+      await expect(set("sender", [bad])).rejects.toThrow(/Invalid idle unload time/);
+    }
+    await set("sender", [null]);
+    await set("sender", [30]);
+    expect(target.models.calls).toEqual([
+      ["setIdleUnload", null],
+      ["setIdleUnload", 30],
+    ]);
+  });
+
+  it("validates a server before connecting to it", async () => {
+    const target = services();
+    const connect = handler(IPC.modelsConnectServer, target);
+    for (const bad of [
+      { url: "ftp://example.com" },
+      { url: "not a url" },
+      { url: "https://example.com", apiKey: "" },
+      { url: "https://example.com", extra: true },
+      "https://example.com",
+    ]) {
+      await expect(connect("sender", [bad])).rejects.toThrow(/Invalid server/);
+    }
+    await connect("sender", [{ url: "https://example.com/v1", apiKey: "sk-1" }]);
+    expect(target.models.calls).toEqual([
+      ["connectServer", { url: "https://example.com/v1", apiKey: "sk-1" }],
+    ]);
+  });
+
+  it("asks for a model file with the native picker of the calling window", async () => {
+    const target = services();
+    expect(await handler(IPC.modelsAddFile, target)("window-1", [])).toBeNull();
+    expect(target.pickedFor).toEqual(["window-1"]);
+    expect(target.models.calls).toEqual([["addModelFile", "/models/picked.gguf"]]);
+  });
+
+  it("has a handler for every invoke channel of the models bridge", () => {
+    const handlers = createInvokeHandlers(services());
+    const invokeChannels = Object.entries(IPC)
+      .filter(([name]) => name.startsWith("models") && !name.endsWith("Changed"))
+      .map(([, channel]) => channel);
+    for (const channel of invokeChannels) expect(handlers[channel]).toBeTypeOf("function");
   });
 });
 

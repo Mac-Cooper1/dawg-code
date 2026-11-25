@@ -67,6 +67,8 @@ export function initialAppState(
     settings: DEFAULT_SETTINGS,
     models: [],
     modelStatus: null,
+    modelsState: null,
+    onboarding: null,
     notices: [],
   };
 }

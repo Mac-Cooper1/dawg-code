@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTheme } from "../../shared/bridge.ts";
+import { mockModelsState } from "../../shared/mock-models.ts";
 import { createTestStore, renderWithStore } from "../app/testing.tsx";
 import { THEMES } from "../test/render.tsx";
 import { SettingsContainer } from "./SettingsContainer.tsx";
@@ -9,6 +10,7 @@ import { SettingsContainer } from "./SettingsContainer.tsx";
 function setup(theme: ResolvedTheme) {
   const test = createTestStore((state) => ({
     layout: { ...state.layout, view: "settings" },
+    modelsState: mockModelsState(),
   }));
   test.store.setState({ resolvedTheme: theme });
   renderWithStore(<SettingsContainer />, { theme, store: test.store });
@@ -37,6 +39,19 @@ describe.each(THEMES)("SettingsContainer (%s)", (theme) => {
     const next = theme === "dark" ? "light" : "dark";
     await user.click(screen.getByRole("button", { name: `Switch to ${next} appearance` }));
     expect(actions.setAppearance).toHaveBeenCalledWith(next);
+  });
+
+  it("shows Settings → Models from the store, with its actions and notices", async () => {
+    const { user, actions, store } = setup(theme);
+    store.setState({ notices: [{ id: "n1", text: "Could not delete the model.", tone: "error" }] });
+    await user.click(screen.getByRole("button", { name: "Models" }));
+    expect(actions.setSettingsPage).toHaveBeenCalledWith("models");
+    expect(screen.getByRole("heading", { level: 1, name: "Models" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not delete the model.");
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(actions.stopModel).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(actions.dismissNotice).toHaveBeenCalledWith("n1");
   });
 
   it("moves between pages and back to the sessions", async () => {

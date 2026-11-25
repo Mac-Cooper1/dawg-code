@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   basename,
   displayPath,
+  formatBytes,
   formatDuration,
+  formatMemory,
   formatNumber,
   formatPercent,
   formatRelativeTime,
+  formatSpeed,
+  formatTimeLeft,
   formatTokens,
   shortenPath,
   truncate,
@@ -31,6 +35,20 @@ describe("format", () => {
     expect(formatDuration(72_000)).toBe("1 min 12 s");
     expect(formatDuration(120_000)).toBe("2 min");
     expect(formatDuration(3_900_000)).toBe("1 h 5 min");
+  });
+
+  it("formats sizes, memory, speeds and time left", () => {
+    expect(formatBytes(512_000)).toBe("512 KB");
+    expect(formatBytes(950_000_000)).toBe("950 MB");
+    expect(formatBytes(30_000_000_000)).toBe("30.0 GB");
+    expect(formatBytes(180_400_000_000)).toBe("180 GB");
+    expect(formatBytes(1_210_000_000_000)).toBe("1.21 TB");
+    expect(formatMemory(64 * 2 ** 30)).toBe("64 GB");
+    expect(formatMemory(43.5 * 2 ** 30)).toBe("43.5 GB");
+    expect(formatMemory(512 * 2 ** 20)).toBe("512 MB");
+    expect(formatSpeed(86_000_000)).toBe("86 MB/s");
+    expect(formatTimeLeft(150)).toBe("about 2 min 30 s left");
+    expect(formatTimeLeft(0.2)).toBe("about 1 s left");
   });
 
   it("formats relative times for the sidebar", () => {

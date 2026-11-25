@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { buildLaunchArgs, LaunchArgsError, type LaunchInput } from "./args.ts";
+import {
+  buildLaunchArgs,
+  LaunchArgsError,
+  type LaunchInput,
+  twoSlotLayout,
+  UTILITY_CONTEXT_RESERVE,
+} from "./args.ts";
 
 const base: LaunchInput = {
   model: { path: "/models/qwen.gguf" },
@@ -126,4 +132,38 @@ describe("buildLaunchArgs", () => {
       ).toThrow(/managed by the supervisor/);
     },
   );
+});
+
+describe("twoSlotLayout", () => {
+  test("shares one unified cache: the window plus a reserve for side requests", () => {
+    expect(twoSlotLayout(204_800)).toEqual({
+      contextSize: 204_800 + UTILITY_CONTEXT_RESERVE,
+      slots: 2,
+      settings: { kvUnified: true, kvUnifiedPerSlot: 204_800 },
+      slotIds: { conversation: [0], utility: [1] },
+    });
+    expect(UTILITY_CONTEXT_RESERVE).toBe(8192);
+    expect(twoSlotLayout(4096, 1024).contextSize).toBe(5120);
+  });
+
+  test("becomes the flags b12359 was checked with", () => {
+    const layout = twoSlotLayout(4096, 1024);
+    const args = buildLaunchArgs({
+      ...base,
+      contextSize: layout.contextSize,
+      slots: layout.slots,
+      settings: { ...base.settings, ...layout.settings },
+    });
+    const at = (flag: string) => args[args.indexOf(flag) + 1];
+    expect(at("-c")).toBe("5120");
+    expect(at("-np")).toBe("2");
+    expect(args).toContain("--kv-unified");
+    expect(at("--kv-unified-per-slot")).toBe("4096");
+  });
+
+  test("rejects a window or reserve that is not a positive integer", () => {
+    expect(() => twoSlotLayout(0)).toThrow(LaunchArgsError);
+    expect(() => twoSlotLayout(4096.5)).toThrow(LaunchArgsError);
+    expect(() => twoSlotLayout(4096, -1)).toThrow(LaunchArgsError);
+  });
 });

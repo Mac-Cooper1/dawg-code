@@ -7,17 +7,23 @@
  */
 import type { z } from "zod";
 import {
+  type AddedModelFile,
   BRIDGE_VERSION,
   ChooseFolderOptionsSchema,
+  ConnectServerInputSchema,
   type DesktopSettings,
   DesktopSettingsPatchSchema,
   type EngineRestartInfo,
   ExternalUrlSchema,
+  IdleUnloadSchema,
   IPC,
+  ModelIdSchema,
   type ModelOption,
   type ModelStatus,
+  type ModelsState,
   type PlatformInfo,
   type PreloadApi,
+  type ServerInfo,
   type Unsubscribe,
   type WindowState,
   WindowStateSchema,
@@ -57,6 +63,14 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
     };
   }
 
+  /** A call that takes one model id: validated here, then sent. */
+  function withModelId(channel: string, what = "model id") {
+    return async (id: string): Promise<void> => {
+      const valid = validate(ModelIdSchema, id, what);
+      await ipc.invoke(channel, valid);
+    };
+  }
+
   return {
     bridgeVersion: BRIDGE_VERSION,
     platform,
@@ -83,6 +97,32 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
       list: async () => (await ipc.invoke(IPC.modelsList)) as ModelOption[],
       status: async () => (await ipc.invoke(IPC.modelsStatus)) as ModelStatus,
       onStatus: (listener) => subscribe<ModelStatus>(IPC.modelsStatusChanged, listener),
+      state: async () => (await ipc.invoke(IPC.modelsState)) as ModelsState,
+      onState: (listener) => subscribe<ModelsState>(IPC.modelsStateChanged, listener),
+      download: withModelId(IPC.modelsDownload),
+      pauseDownload: withModelId(IPC.modelsPauseDownload),
+      cancelDownload: withModelId(IPC.modelsCancelDownload),
+      dismissDownload: withModelId(IPC.modelsDismissDownload),
+      useExisting: withModelId(IPC.modelsUseExisting),
+      remove: withModelId(IPC.modelsRemove),
+      start: withModelId(IPC.modelsStart),
+      stop: async () => {
+        await ipc.invoke(IPC.modelsStop);
+      },
+      setDefault: withModelId(IPC.modelsSetDefault),
+      setIdleUnload: async (minutes) => {
+        const valid = validate(IdleUnloadSchema, minutes, "idle unload time");
+        await ipc.invoke(IPC.modelsSetIdleUnload, valid);
+      },
+      addModelFile: async () => (await ipc.invoke(IPC.modelsAddFile)) as AddedModelFile | null,
+      connectServer: async (input) => {
+        const valid = validate(ConnectServerInputSchema, input, "server");
+        return (await ipc.invoke(IPC.modelsConnectServer, valid)) as ServerInfo;
+      },
+      removeServer: withModelId(IPC.modelsRemoveServer, "server id"),
+      refreshServers: async () => {
+        await ipc.invoke(IPC.modelsRefreshServers);
+      },
     },
     dialogs: {
       chooseFolder: async (options) => {

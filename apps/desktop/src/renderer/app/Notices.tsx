@@ -4,7 +4,8 @@ import styles from "./Notices.module.css";
 
 export interface NoticesProps {
   notices: readonly Notice[];
-  connection: ConnectionState;
+  /** The engine connection; left out where the engine does not matter (first run, Settings). */
+  connection?: ConnectionState;
   onDismiss(id: string): void;
 }
 
@@ -28,7 +29,7 @@ function connectionLine(connection: ConnectionState): Notice | null {
  * be sent until it is fixed.
  */
 export function Notices(props: NoticesProps) {
-  const connection = connectionLine(props.connection);
+  const connection = props.connection ? connectionLine(props.connection) : null;
   if (!connection && props.notices.length === 0) return null;
   return (
     <div className={styles.notices} aria-live="polite">

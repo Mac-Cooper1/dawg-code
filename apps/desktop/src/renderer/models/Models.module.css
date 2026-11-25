@@ -1,0 +1,360 @@
+/*
+ * Pieces the model screens share: first run and Settings → Models (mockup .card, .r, .mn, .mm,
+ * .prog, .mem, .inp, .lbl, .grid2, .stp, .sic).
+ */
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.row:first-child {
+  border-top: 0;
+}
+
+.rowTop {
+  align-items: flex-start;
+}
+
+.rowStack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.titleLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--text);
+  font-weight: 600;
+}
+
+.name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  margin: 2px 0 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: var(--text-sm);
+  color: var(--amber);
+}
+
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--red);
+}
+
+.success {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--green);
+  font-size: var(--text-sm);
+}
+
+.warning svg,
+.error svg {
+  margin-top: 2px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form .error,
+.form .success {
+  font-size: var(--text-sm);
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+}
+
+/* A text button that reads as a link: "Read" next to a licence. */
+.link {
+  color: var(--acc-text);
+  font-weight: 500;
+  font-size: var(--text-sm);
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/* Progress of a download (mockup .prog). */
+.progress {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.progressFill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--acc-text);
+  transition: width 0.4s;
+}
+
+.progress[data-paused="true"] .progressFill {
+  background: var(--ink-3);
+}
+
+.progress[data-failed="true"] .progressFill {
+  background: var(--red);
+}
+
+/* The running model's mark: a dot, or a spinner while it loads; level with its name. */
+.statusMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 21px;
+  flex: none;
+}
+
+.runningName {
+  font-size: 14px;
+}
+
+.memoryBlock {
+  margin-top: 10px;
+}
+
+.downloadBar {
+  max-width: 420px;
+  margin-top: 8px;
+}
+
+/* Memory the running model takes, of the Mac's (mockup .mem). */
+.memory {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 10px;
+  border: 0;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.memory::-webkit-meter-bar {
+  height: 10px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--line);
+}
+
+.memory::-webkit-meter-optimum-value,
+.memory::-webkit-meter-suboptimum-value,
+.memory::-webkit-meter-even-less-good-value {
+  background: var(--acc-text);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 2px;
+  background: var(--acc-text);
+  vertical-align: -1px;
+}
+
+/* Form fields (mockup .lbl, .inp). */
+.label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.input:focus-visible {
+  outline-offset: 0;
+  border-color: var(--focus);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+.select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* A status dot: green when ready, grey when stopped, red on an error (mockup .dot). */
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.dot[data-state="stopped"] {
+  background: var(--line-2);
+}
+
+.dot[data-state="error"] {
+  background: var(--red);
+}
+
+/* Steps of starting a model (mockup .stp, .sic). */
+.steps {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  color: var(--ink-3);
+}
+
+.step[data-state="active"] {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.step[data-state="done"] {
+  color: var(--ink-2);
+}
+
+.step[data-state="failed"] {
+  color: var(--red);
+  font-weight: 500;
+}
+
+.stepIcon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step[data-state="done"] .stepIcon {
+  color: var(--green);
+}
+
+/* A step not reached yet: a dashed ring (as the sidebar's "queued" mark). */
+.waiting {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px dashed var(--ink-3);
+}
+
+.serverModels {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.serverModel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  font-size: var(--text-sm);
+}
+
+.icon {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.empty {
+  margin: 0;
+  color: var(--ink-3);
+}

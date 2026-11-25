@@ -37,6 +37,7 @@ test.beforeAll(async () => {
   }
   delete env.ELECTRON_RENDERER_URL;
   env.DAWG_HOME = dawgHome;
+  env.DAWG_ENGINE = "mock"; // The recorded sessions; real-engine.spec.ts runs the real one.
   // Fast enough for a short test, slow enough to catch the reply while it streams.
   env.DAWG_MOCK_SPEED = "3";
   app = await electron.launch({ args: [appDir], cwd: appDir, env, timeout: 30_000 });

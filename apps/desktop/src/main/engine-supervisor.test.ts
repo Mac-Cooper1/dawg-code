@@ -14,6 +14,7 @@ class FakeChild implements SupervisedChild<Port> {
   readonly posted: { message: unknown; transfer: Port[] }[] = [];
   killed = false;
   private exitListener: ((code: number | null) => void) | null = null;
+  private messageListener: ((message: unknown) => void) | null = null;
 
   postMessage(message: unknown, transfer: Port[]): void {
     this.posted.push({ message, transfer });
@@ -24,6 +25,13 @@ class FakeChild implements SupervisedChild<Port> {
   }
   onExit(listener: (code: number | null) => void): void {
     this.exitListener = listener;
+  }
+  onMessage(listener: (message: unknown) => void): void {
+    this.messageListener = listener;
+  }
+  /** The engine host posts a message to main. */
+  send(message: unknown): void {
+    this.messageListener?.(message);
   }
   exit(code: number | null): void {
     const listener = this.exitListener;
@@ -60,7 +68,12 @@ class FakeTimers implements Timers {
   }
 }
 
-function setup(options: { maxRestarts?: number } = {}) {
+function setup(
+  options: {
+    maxRestarts?: number;
+    onMessage?: (message: unknown, reply: (message: unknown) => void) => void;
+  } = {},
+) {
   const children: FakeChild[] = [];
   const timers = new FakeTimers();
   const gaveUp: string[] = [];
@@ -79,6 +92,7 @@ function setup(options: { maxRestarts?: number } = {}) {
     now: () => timers.now,
     stableAfterMs: 30_000,
     ...(options.maxRestarts === undefined ? {} : { maxRestarts: options.maxRestarts }),
+    ...(options.onMessage === undefined ? {} : { onMessage: options.onMessage }),
     onGaveUp: (reason) => gaveUp.push(reason),
   });
   return { supervisor, children, timers, gaveUp };
@@ -214,5 +228,44 @@ describe("engine supervisor", () => {
     expect(supervisor.state).toBe("stopped");
     timers.advance(10_000);
     expect(children).toHaveLength(2);
+  });
+
+  it("hands the host's messages to main and replies to the host that asked", () => {
+    const replies: ((message: unknown) => void)[] = [];
+    const received: unknown[] = [];
+    const { supervisor, children, timers } = setup({
+      onMessage: (message, reply) => {
+        received.push(message);
+        replies.push(reply);
+      },
+    });
+    supervisor.start();
+    children[0]?.send({ type: "model-request", requestId: "r1", modelId: null });
+    expect(received).toEqual([{ type: "model-request", requestId: "r1", modelId: null }]);
+    replies[0]?.({ type: "model-refused", requestId: "r1", message: "no", retryable: false });
+    expect(children[0]?.posted.at(-1)).toEqual({
+      message: { type: "model-refused", requestId: "r1", message: "no", retryable: false },
+      transfer: [],
+    });
+
+    // An answer that arrives after its host exited is dropped, not sent to the new host.
+    children[0]?.send({ type: "model-request", requestId: "r2", modelId: "m" });
+    children[0]?.exit(1);
+    timers.advance(250);
+    replies[1]?.({ type: "model-refused", requestId: "r2", message: "late", retryable: true });
+    expect(children[1]?.posted).toEqual([]);
+  });
+
+  it("posts to the running host only", () => {
+    const { supervisor, children, timers } = setup();
+    expect(supervisor.post({ type: "models-changed" })).toBe(false);
+    supervisor.start();
+    expect(supervisor.post({ type: "models-changed" })).toBe(true);
+    expect(children[0]?.posted).toEqual([{ message: { type: "models-changed" }, transfer: [] }]);
+    children[0]?.exit(1);
+    expect(supervisor.post({ type: "models-changed" })).toBe(false);
+    timers.advance(250);
+    expect(supervisor.post({ type: "models-changed" })).toBe(true);
+    expect(children[1]?.posted).toEqual([{ message: { type: "models-changed" }, transfer: [] }]);
   });
 });

@@ -369,7 +369,13 @@ describe("selectModelFooter", () => {
     const option = MOCK_MODELS[0]?.option;
     const state = appState(mockupSlice(), {
       models: MOCK_MODELS.map((model) => model.option),
-      modelStatus: { state: "ready", modelId: option?.id ?? null, label: null, message: null },
+      modelStatus: {
+        state: "ready",
+        modelId: option?.id ?? null,
+        label: null,
+        message: null,
+        memoryBytes: null,
+      },
     });
     const footer = selectModelFooter(state);
     expect(footer).toEqual({
@@ -387,6 +393,7 @@ describe("selectModelFooter", () => {
           modelId: null,
           label: null,
           message: "Loading into memory",
+          memoryBytes: null,
         },
       }),
     ).toMatchObject({ label: "No model", state: "loading", detail: "Loading into memory" });

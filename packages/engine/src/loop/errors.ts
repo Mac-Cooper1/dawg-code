@@ -51,6 +51,9 @@ export function errorInfoFrom(error: unknown): ErrorInfo {
         );
       case "aborted":
         return errorInfo("other", "The request was stopped.", detail, true);
+      case "unavailable":
+        // The provider's own sentence, for the person; there is nothing more to show.
+        return errorInfo("model_unavailable", error.message, null, error.retryable);
     }
   }
   if (error instanceof SessionStoreError) {

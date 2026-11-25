@@ -88,9 +88,15 @@ export type WindowState = z.infer<typeof WindowStateSchema>;
 export const DEFAULT_WINDOW_STATE: WindowState = WindowStateSchema.parse({});
 
 // ---------------------------------------------------------------------------------------------
-// Models (from the model manager in main; mock data in this wave, see shared/mock-models.ts)
+// Models (from the model manager in main: `@dawg/models` under it; with DAWG_ENGINE=mock, the
+// mock data in shared/mock-models.ts)
+//
+// Model ids are stable, because sessions store them: a catalog entry's id ("qwen3.8-27b-q8"),
+// "file:<sha256 of the path>" for a model file added by hand, and "<server id>/<model>" for a
+// server's model ("ollama/qwen3:32b", "remote:1f3a9c/gpt-oss-120b").
 // ---------------------------------------------------------------------------------------------
 
+/** A model that can run now: something the composer's model picker offers. */
 export const ModelOptionSchema = z.object({
   /** The id sessions use, passed to `session.setModel`. */
   id: z.string().min(1),
@@ -103,19 +109,170 @@ export const ModelOptionSchema = z.object({
   /** "bundled" lists under "On this Mac", "server" under "Servers". */
   source: z.enum(["bundled", "server"]),
   contextWindow: z.number().int().positive(),
+  /**
+   * Where it comes from: a catalog download, a model file added by hand, or a server (Ollama,
+   * LM Studio, or a remote URL).
+   */
+  origin: z.enum(["catalog", "file", "ollama", "lmstudio", "remote"]).default("catalog"),
+  /** True when Settings → Models can delete its files (a catalog model dawg downloaded). */
+  removable: z.boolean().default(false),
 });
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
 
 export const ModelStatusSchema = z.object({
+  /** The bundled runtime: a model loaded and answering, loading, nothing loaded, or failed. */
   state: z.enum(["ready", "loading", "stopped", "error"]),
   /** The loaded model, or null when nothing runs. */
   modelId: z.string().nullable(),
   /** Short label of the loaded model: "Qwen3.8 27B · 8-bit". */
   label: z.string().nullable(),
-  /** A short line when not ready: "Loading into memory", "Stopped". */
+  /** A short line when not ready: "Loading into memory", "Stopped", or what failed. */
   message: z.string().nullable(),
+  /** Memory the runtime uses, while a model is loaded; null when unknown. */
+  memoryBytes: z.number().int().nonnegative().nullable().default(null),
 });
 export type ModelStatus = z.infer<typeof ModelStatusSchema>;
+
+/** What the app knows about this Mac: shown on the welcome screen, used for the memory checks. */
+export const MachineInfoSchema = z.object({
+  /** "Apple M4 Max". */
+  chip: z.string(),
+  arch: z.enum(["arm64", "x64"]),
+  memoryBytes: z.number().int().nonnegative(),
+  /** Free space where models are stored. */
+  freeDiskBytes: z.number().int().nonnegative(),
+  macosVersion: z.string(),
+});
+export type MachineInfo = z.infer<typeof MachineInfoSchema>;
+
+/** One catalog entry: a model dawg can download and run on the bundled runtime. */
+export const CatalogModelSchema = z.object({
+  /** The catalog entry's id, which is also the model id once installed. */
+  id: z.string().min(1),
+  /** "Qwen3.8 27B (8-bit)". */
+  displayName: z.string(),
+  /** "Qwen3.8 27B · 8-bit". */
+  shortLabel: z.string(),
+  licence: z.object({ spdx: z.string(), url: z.string() }),
+  /** Download size: the weights, plus the vision projector when the entry has one. */
+  sizeBytes: z.number().int().nonnegative(),
+  /** Memory it needs at its default context. */
+  memoryBytes: z.number().int().nonnegative(),
+  context: z.object({ default: z.number().int().positive(), max: z.number().int().positive() }),
+  capabilities: z.object({ tools: z.boolean(), vision: z.boolean(), reasoning: z.boolean() }),
+  /** The catalog's pick for this Mac. At most one entry is recommended. */
+  recommended: z.boolean(),
+  /** Whether it fits this Mac's memory and free disk space. */
+  fits: z.boolean(),
+  /** Why it does not fit, as a sentence ("Needs 48 GB of memory; this Mac has 24 GB."); else null. */
+  fitNote: z.string().nullable(),
+  /** Where it stands on this Mac. */
+  state: z.enum(["available", "downloading", "paused", "failed", "installed"]),
+  /**
+   * Set when another app already has its files (found by the scanner), so `useExisting` can
+   * adopt them instead of downloading.
+   */
+  foundIn: z.enum(["lmstudio", "ollama", "huggingface"]).nullable(),
+});
+export type CatalogModel = z.infer<typeof CatalogModelSchema>;
+
+/** A download, by the catalog entry it fetches. Sent whole on every change (about 4 a second). */
+export const DownloadStateSchema = z.object({
+  modelId: z.string().min(1),
+  phase: z.enum([
+    "queued",
+    "checking",
+    "downloading",
+    "verifying",
+    "paused",
+    "done",
+    "failed",
+    "cancelled",
+  ]),
+  /** Bytes on disk so far, across the entry's files. */
+  bytesDone: z.number().int().nonnegative(),
+  bytesTotal: z.number().int().nonnegative(),
+  /** Recent speed; 0 until known. */
+  bytesPerSecond: z.number().nonnegative(),
+  /** Null when unknown. */
+  secondsLeft: z.number().nonnegative().nullable(),
+  /** A sentence when `phase` is "failed"; else null. */
+  error: z.string().nullable(),
+});
+export type DownloadState = z.infer<typeof DownloadStateSchema>;
+
+/** A model server dawg can use: Ollama or LM Studio found on this Mac, or a remote URL. */
+export const ServerInfoSchema = z.object({
+  /** "ollama", "lmstudio", or "remote:<short hash of the URL>". The prefix of its models' ids. */
+  id: z.string().min(1),
+  kind: z.enum(["ollama", "lmstudio", "remote"]),
+  /** For display, without credentials: "http://localhost:11434". */
+  url: z.string(),
+  /** Whether it answered the last check. */
+  reachable: z.boolean(),
+  /** The ids of its models, which are also in `ModelsState.installed`. */
+  modelIds: z.array(z.string()),
+  /** True when a key is stored for it. The key itself never leaves main (it is in the Keychain). */
+  hasKey: z.boolean(),
+});
+export type ServerInfo = z.infer<typeof ServerInfoSchema>;
+
+/**
+ * Everything Settings → Models and the welcome screen show, sent whole on every change. The
+ * welcome screen shows while `installed` is empty.
+ */
+export const ModelsStateSchema = z.object({
+  machine: MachineInfoSchema,
+  /** Models that can run now, the default first: installed catalog models, model files, servers'. */
+  installed: z.array(ModelOptionSchema),
+  /** The catalog, the recommended entry first, then best for this Mac first. */
+  catalog: z.array(CatalogModelSchema),
+  /** Unfinished downloads, plus finished or failed ones until the person dismisses them. */
+  downloads: z.array(DownloadStateSchema),
+  servers: z.array(ServerInfoSchema),
+  status: ModelStatusSchema,
+  /** The model new sessions use; null while nothing is installed. */
+  defaultModelId: z.string().nullable(),
+  /** Unload the bundled runtime's model after this many idle minutes; null never. */
+  idleUnloadMinutes: z.number().int().positive().nullable(),
+});
+export type ModelsState = z.infer<typeof ModelsStateSchema>;
+
+export const ModelIdSchema = z.string().min(1).max(512);
+
+/** A server's address: an OpenAI-compatible root, http or https ("https://example.com/v1"). */
+export const ServerUrlSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" || url.protocol === "http:";
+    } catch {
+      return false;
+    }
+  }, "A server address must be an http or https URL");
+
+export const ConnectServerInputSchema = z.strictObject({
+  url: ServerUrlSchema,
+  /** Stored in the Keychain, never on disk in the clear and never sent back to the renderer. */
+  apiKey: z.string().min(1).max(4096).optional(),
+});
+export type ConnectServerInput = z.infer<typeof ConnectServerInputSchema>;
+
+export const IdleUnloadSchema = z
+  .number()
+  .int()
+  .positive()
+  .max(24 * 60)
+  .nullable();
+
+/** The result of adding a model file: the new option, and a warning when it may not fit. */
+export interface AddedModelFile {
+  option: ModelOption;
+  /** "This model may need more memory than this Mac has (…)." Null when it fits. */
+  memoryWarning: string | null;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Platform
@@ -130,7 +287,7 @@ export const PlatformInfoSchema = z.object({
   appVersion: z.string(),
   /** True in `electron-vite dev` and in the browser fallback. */
   isDev: z.boolean(),
-  /** Which engine the engine host runs. Only "mock" exists in this wave. */
+  /** Which engine the engine host runs: "real" unless DAWG_ENGINE=mock. */
   engine: z.enum(["mock", "real"]),
 });
 export type PlatformInfo = z.infer<typeof PlatformInfoSchema>;
@@ -205,9 +362,43 @@ export interface DawgBridge {
   };
 
   readonly models: {
+    /** Models that can run now: the same as `state().installed`. */
     list(): Promise<ModelOption[]>;
     status(): Promise<ModelStatus>;
     onStatus(listener: (status: ModelStatus) => void): Unsubscribe;
+    /** Everything at once, for the welcome screen and Settings → Models. */
+    state(): Promise<ModelsState>;
+    /** The whole state after every change, a running download's progress included. */
+    onState(listener: (state: ModelsState) => void): Unsubscribe;
+    /** Starts or resumes downloading a catalog model. Progress arrives through `onState`. */
+    download(modelId: string): Promise<void>;
+    pauseDownload(modelId: string): Promise<void>;
+    /** Stops a download and removes its partial files. */
+    cancelDownload(modelId: string): Promise<void>;
+    /** Drops a finished, failed or cancelled download from `downloads`. */
+    dismissDownload(modelId: string): Promise<void>;
+    /** Uses the copy another app already has (`CatalogModel.foundIn`) instead of downloading. */
+    useExisting(modelId: string): Promise<void>;
+    /** Deletes a downloaded catalog model's files, unloading it first when it is loaded. */
+    remove(modelId: string): Promise<void>;
+    /**
+     * Loads a model into the bundled runtime, replacing the loaded one; for a server's model,
+     * checks the server answers. Resolves once it is ready, rejects with a readable reason.
+     */
+    start(modelId: string): Promise<void>;
+    /** Unloads the bundled runtime's model. */
+    stop(): Promise<void>;
+    /** The model new sessions use. */
+    setDefault(modelId: string): Promise<void>;
+    setIdleUnload(minutes: number | null): Promise<void>;
+    /** Asks for a GGUF model file with the native picker and adds it. Null when cancelled. */
+    addModelFile(): Promise<AddedModelFile | null>;
+    /** Adds a remote server, after checking it answers, or replaces its key. */
+    connectServer(input: ConnectServerInput): Promise<ServerInfo>;
+    /** Forgets a remote server and its key. */
+    removeServer(serverId: string): Promise<void>;
+    /** Looks for Ollama and LM Studio again, and asks every server for its models. */
+    refreshServers(): Promise<void>;
   };
 
   readonly dialogs: {
@@ -237,6 +428,22 @@ export const IPC = {
   modelsList: "dawg:models:list",
   modelsStatus: "dawg:models:status",
   modelsStatusChanged: "dawg:models:status-changed",
+  modelsState: "dawg:models:state",
+  modelsStateChanged: "dawg:models:state-changed",
+  modelsDownload: "dawg:models:download",
+  modelsPauseDownload: "dawg:models:pause-download",
+  modelsCancelDownload: "dawg:models:cancel-download",
+  modelsDismissDownload: "dawg:models:dismiss-download",
+  modelsUseExisting: "dawg:models:use-existing",
+  modelsRemove: "dawg:models:remove",
+  modelsStart: "dawg:models:start",
+  modelsStop: "dawg:models:stop",
+  modelsSetDefault: "dawg:models:set-default",
+  modelsSetIdleUnload: "dawg:models:set-idle-unload",
+  modelsAddFile: "dawg:models:add-file",
+  modelsConnectServer: "dawg:models:connect-server",
+  modelsRemoveServer: "dawg:models:remove-server",
+  modelsRefreshServers: "dawg:models:refresh-servers",
   chooseFolder: "dawg:dialogs:choose-folder",
   openExternal: "dawg:shell:open-external",
   platform: "dawg:platform",

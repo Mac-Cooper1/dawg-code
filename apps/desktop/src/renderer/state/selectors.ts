@@ -7,6 +7,7 @@
 import type { SessionId } from "@dawg/protocol";
 import { basename, formatRelativeTime, shortenPath } from "../lib/format.ts";
 import { createKeyedMemo, shallowEqual, stable } from "./memo.ts";
+import { serverOf } from "./models.ts";
 import { isQueuedForModel, MARK_LABELS, sessionMark } from "./session-marks.ts";
 import { sidebarOrder } from "./sidebar-order.ts";
 import { INTERRUPTED_BY_YOU_NOTE, INTERRUPTED_NOTE } from "./transcript-events.ts";
@@ -126,34 +127,55 @@ const NOT_READY_DETAIL: Record<ModelFooterView["state"], string> = {
 };
 
 export function selectModelFooter(state: AppStore): ModelFooterView {
-  const { models, modelStatus, sessions, pending } = state;
-  return footerMemo.get("footer", [models, modelStatus, sessions, pending], (previous) => {
-    const modelId = modelStatus?.modelId ?? null;
-    const label =
-      (modelId !== null ? models.find((model) => model.id === modelId)?.shortLabel : undefined) ??
-      modelStatus?.label ??
-      modelId ??
-      "No model";
-    const status = modelStatus?.state ?? "stopped";
-    let detail: string;
-    if (status === "ready") {
-      let running = 0;
-      let queued = 0;
-      for (const session of Object.values(sessions)) {
-        if ((pending[session.id]?.length ?? 0) > 0 || session.status === "waiting") continue;
-        if (isQueuedForModel(session)) queued++;
-        else if (session.status === "working" || session.activeTurnId !== null) running++;
+  const { models, modelStatus, modelsState, sessions, pending } = state;
+  const defaultId = modelsState?.defaultModelId ?? null;
+  const servers = modelsState?.servers;
+  return footerMemo.get(
+    "footer",
+    [models, modelStatus, defaultId, servers, sessions, pending],
+    (previous) => {
+      const modelId = modelStatus?.modelId ?? null;
+      const defaultOption =
+        defaultId !== null ? models.find((model) => model.id === defaultId) : undefined;
+      // Nothing loaded in the bundled runtime and a server's model is the default: that model.
+      if (modelId === null && defaultOption?.source === "server" && modelsState) {
+        const reachable = serverOf(modelsState, defaultOption.id)?.reachable ?? true;
+        return stable(previous, {
+          label: defaultOption.shortLabel,
+          state: reachable ? "ready" : "error",
+          detail: reachable ? readyDetail(sessions, pending) : "The server does not answer",
+        });
       }
-      const counts = [
-        ...(running > 0 ? [`${running} running`] : []),
-        ...(queued > 0 ? [`${queued} queued`] : []),
-      ];
-      detail = counts.length > 0 ? `Ready · ${counts.join(", ")}` : "Ready";
-    } else {
-      detail = modelStatus?.message ?? NOT_READY_DETAIL[status];
-    }
-    return stable(previous, { label, state: status, detail });
-  });
+      const label =
+        (modelId !== null ? models.find((model) => model.id === modelId)?.shortLabel : undefined) ??
+        modelStatus?.label ??
+        modelId ??
+        defaultOption?.shortLabel ??
+        "No model";
+      const status = modelStatus?.state ?? "stopped";
+      const detail =
+        status === "ready"
+          ? readyDetail(sessions, pending)
+          : (modelStatus?.message ?? NOT_READY_DETAIL[status]);
+      return stable(previous, { label, state: status, detail });
+    },
+  );
+}
+
+/** "Ready", or "Ready · 1 running, 1 queued". One model serves every session. */
+function readyDetail(sessions: AppStore["sessions"], pending: AppStore["pending"]): string {
+  let running = 0;
+  let queued = 0;
+  for (const session of Object.values(sessions)) {
+    if ((pending[session.id]?.length ?? 0) > 0 || session.status === "waiting") continue;
+    if (isQueuedForModel(session)) queued++;
+    else if (session.status === "working" || session.activeTurnId !== null) running++;
+  }
+  const counts = [
+    ...(running > 0 ? [`${running} running`] : []),
+    ...(queued > 0 ? [`${queued} queued`] : []),
+  ];
+  return counts.length > 0 ? `Ready · ${counts.join(", ")}` : "Ready";
 }
 
 // --- Title bar ---------------------------------------------------------------------------------

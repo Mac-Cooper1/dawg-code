@@ -112,7 +112,12 @@ export type ModelErrorKind =
   | "context_overflow"
   /** The endpoint answered with something that is not a chat completion. */
   | "invalid_response"
-  | "timeout";
+  | "timeout"
+  /**
+   * Whatever provides the model could not make it available (none installed, the runtime
+   * restarting). The message is written for the person and is shown as it is.
+   */
+  | "unavailable";
 
 export interface ModelErrorOptions {
   status?: number;

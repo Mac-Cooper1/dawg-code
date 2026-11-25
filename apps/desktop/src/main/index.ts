@@ -1,6 +1,6 @@
 /**
- * The main process: one window, the menu, settings and window state, and the engine host.
- * See README.md ("Processes") for how the pieces talk.
+ * The main process: one window, the menu, settings and window state, the model manager and the
+ * engine host. See README.md ("Processes") for how the pieces talk.
  */
 import path from "node:path";
 import {
@@ -23,14 +23,19 @@ import {
   type DesktopSettings,
   type EngineRestartInfo,
   IPC,
+  type ModelStatus,
+  type ModelsState,
   type PlatformInfo,
   PlatformInfoSchema,
 } from "../shared/bridge.ts";
+import type { MainToHost } from "../shared/engine-host-messages.ts";
 import { appLocation, appUrl, describeRefusedSender, isTrustedSender } from "./app-url.ts";
 import { spawnEngineHost } from "./engine-host-process.ts";
 import { createEngineSupervisor, type EngineSupervisor } from "./engine-supervisor.ts";
 import { createInvokeHandlers } from "./ipc-handlers.ts";
 import { menuTemplate } from "./menu.ts";
+import { createModelService, engineMode, resolveResourcesDir } from "./models/index.ts";
+import { answerHostMessage } from "./models/service.ts";
 import { homeDirFrom, resolveDataRoot, settingsFile, stateFile } from "./paths.ts";
 import { installSecurity } from "./security.ts";
 import { createSettingsStore, createWindowStateStore } from "./stores.ts";
@@ -59,6 +64,17 @@ const homeDir = homeDirFrom();
 const dataRoot = resolveDataRoot(process.env, homeDir);
 const settings = createSettingsStore(settingsFile(dataRoot), log);
 const windowState = createWindowStateStore(stateFile(dataRoot), log);
+const mode = engineMode(process.env);
+const resourcesDir = resolveResourcesDir(app.isPackaged, here);
+const models = createModelService({
+  env: process.env,
+  dataRoot,
+  homeDir,
+  resourcesDir,
+  isPackaged: app.isPackaged,
+  mainDir: here,
+  log: (message) => log(`[models] ${message}`),
+});
 
 app.setName(APP_NAME);
 // Chromium's profile: separate for dev so a dev build and the built app can run side by side,
@@ -77,13 +93,26 @@ const platform: PlatformInfo = PlatformInfoSchema.parse({
   homeDir,
   appVersion: app.getVersion(),
   isDev,
-  engine: "mock",
+  engine: mode,
 });
 
 async function start(): Promise<void> {
   installSecurity(location, log);
   applyAppearance(await settings.get());
   nativeTheme.on("updated", () => updateWindowBackgrounds());
+  if (!app.isPackaged) showDockIcon();
+
+  models.onState((state) => broadcast(IPC.modelsStateChanged, state));
+  models.onStatus((status) => broadcast(IPC.modelsStatusChanged, status));
+  models.onModelsChanged(() => {
+    const message: MainToHost = { type: "models-changed" };
+    supervisor?.post(message);
+  });
+  void models.init().catch((error: unknown) => {
+    log(
+      `The model manager did not start: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
 
   supervisor = createEngineSupervisor<MessagePortMain>({
     spawn: () =>
@@ -94,6 +123,11 @@ async function start(): Promise<void> {
     },
     log: (message) => log(`[supervisor] ${message}`),
     onGaveUp: (reason) => void showEngineFailure(reason),
+    onMessage: (message, reply) => {
+      void answerHostMessage(models, message, (line) => log(`[models] ${line}`)).then((answer) => {
+        if (answer) reply(answer);
+      });
+    },
   });
   supervisor.start();
 
@@ -121,8 +155,29 @@ function engineHostEnv(): Record<string, string> {
   }
   env.HOME = homeDir;
   env.DAWG_HOME = dataRoot;
+  env.DAWG_ENGINE = mode;
+  env.DAWG_RESOURCES_DIR = resourcesDir;
   if (process.env.DAWG_MOCK_SPEED !== undefined) env.DAWG_MOCK_SPEED = process.env.DAWG_MOCK_SPEED;
   return env;
+}
+
+/** A packaged build takes its icon from the bundle; unpackaged, Electron's own would show. */
+function showDockIcon(): void {
+  const icon = path.join(resourcesDir, "icon.png");
+  try {
+    app.dock?.setIcon(icon);
+  } catch (error) {
+    log(
+      `Could not show the Dock icon from ${icon}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/** Sends to every window's page. */
+function broadcast(channel: string, value: ModelsState | ModelStatus): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.webContents.isDestroyed()) window.webContents.send(channel, value);
+  }
 }
 
 function createMainWindow(): void {
@@ -224,6 +279,7 @@ function registerIpc(): void {
   const handlers = createInvokeHandlers<WebContents>({
     settings,
     windowState,
+    models,
     windowIdFor: () => "main",
     settingsChanged: (value) => {
       applyAppearance(value);
@@ -237,6 +293,19 @@ function registerIpc(): void {
         properties: ["openDirectory", "createDirectory"],
         ...(options?.title === undefined ? {} : { title: options.title }),
         ...(options?.defaultPath === undefined ? {} : { defaultPath: options.defaultPath }),
+      };
+      const result = owner
+        ? await dialog.showOpenDialog(owner, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
+    chooseModelFile: async (sender) => {
+      const owner = BrowserWindow.fromWebContents(sender);
+      const dialogOptions: OpenDialogOptions = {
+        title: "Add a model file",
+        buttonLabel: "Add",
+        properties: ["openFile"],
+        filters: [{ name: "GGUF model", extensions: ["gguf"] }],
       };
       const result = owner
         ? await dialog.showOpenDialog(owner, dialogOptions)
@@ -299,6 +368,22 @@ async function showEngineFailure(reason: string): Promise<void> {
 // ---------------------------------------------------------------------------------------------
 // Quit
 // ---------------------------------------------------------------------------------------------
+
+// The runtime stops before the app goes: no llama-server outlives it. Quitting waits for that,
+// at most `QUIT_GRACE_MS` (llama-server gets SIGTERM, then SIGKILL after 10 s).
+const QUIT_GRACE_MS = 12_000;
+let modelsStopped = false;
+app.on("before-quit", (event) => {
+  if (modelsStopped) return;
+  event.preventDefault();
+  modelsStopped = true;
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, QUIT_GRACE_MS).unref());
+  void Promise.race([models.dispose(), timeout])
+    .catch((error: unknown) => {
+      log(`Stopping the models failed: ${error instanceof Error ? error.message : String(error)}`);
+    })
+    .finally(() => app.quit());
+});
 
 app.on("will-quit", () => {
   supervisor?.stop();

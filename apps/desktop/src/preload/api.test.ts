@@ -85,4 +85,87 @@ describe("preload API", () => {
     expect(reasons).toEqual(["gone"]);
     expect(listeners.get(IPC.engineRestart)?.size).toBe(0);
   });
+
+  it("validates every models call before it reaches IPC", async () => {
+    const { ipc, invoked } = fakeIpc();
+    const api = createPreloadApi(ipc, platform);
+    const bad = [
+      api.models.download(""),
+      // @ts-expect-error: not a string
+      api.models.pauseDownload(7),
+      api.models.cancelDownload("x".repeat(513)),
+      api.models.dismissDownload(""),
+      api.models.useExisting(""),
+      api.models.remove(""),
+      api.models.start(""),
+      api.models.setDefault(""),
+      api.models.setIdleUnload(0),
+      api.models.setIdleUnload(2.5),
+      api.models.setIdleUnload(24 * 60 + 1),
+      api.models.connectServer({ url: "file:///etc/passwd" }),
+      api.models.connectServer({ url: "https://example.com", apiKey: "" }),
+      // @ts-expect-error: unknown key
+      api.models.connectServer({ url: "https://example.com", headers: {} }),
+      api.models.removeServer(""),
+    ];
+    for (const call of bad) await expect(call).rejects.toThrow(/^Invalid /);
+    expect(invoked).toEqual([]);
+  });
+
+  it("sends models calls over their channels", async () => {
+    const { ipc, invoked } = fakeIpc();
+    const api = createPreloadApi(ipc, platform);
+    await api.models.state();
+    await api.models.download("qwen3.8-27b-q8");
+    await api.models.pauseDownload("qwen3.8-27b-q8");
+    await api.models.cancelDownload("qwen3.8-27b-q8");
+    await api.models.dismissDownload("qwen3.8-27b-q8");
+    await api.models.useExisting("qwen3.8-27b-q8");
+    await api.models.remove("qwen3.8-27b-q8");
+    await api.models.start("ollama/qwen3:32b");
+    await api.models.stop();
+    await api.models.setDefault("qwen3.8-27b-q8");
+    await api.models.setIdleUnload(null);
+    await api.models.setIdleUnload(15);
+    await api.models.addModelFile();
+    await api.models.connectServer({ url: "https://example.com/v1", apiKey: "sk-1" });
+    await api.models.removeServer("remote:1f3a9c");
+    await api.models.refreshServers();
+    expect(invoked).toEqual([
+      { channel: IPC.modelsState, args: [] },
+      { channel: IPC.modelsDownload, args: ["qwen3.8-27b-q8"] },
+      { channel: IPC.modelsPauseDownload, args: ["qwen3.8-27b-q8"] },
+      { channel: IPC.modelsCancelDownload, args: ["qwen3.8-27b-q8"] },
+      { channel: IPC.modelsDismissDownload, args: ["qwen3.8-27b-q8"] },
+      { channel: IPC.modelsUseExisting, args: ["qwen3.8-27b-q8"] },
+      { channel: IPC.modelsRemove, args: ["qwen3.8-27b-q8"] },
+      { channel: IPC.modelsStart, args: ["ollama/qwen3:32b"] },
+      { channel: IPC.modelsStop, args: [] },
+      { channel: IPC.modelsSetDefault, args: ["qwen3.8-27b-q8"] },
+      { channel: IPC.modelsSetIdleUnload, args: [null] },
+      { channel: IPC.modelsSetIdleUnload, args: [15] },
+      { channel: IPC.modelsAddFile, args: [] },
+      {
+        channel: IPC.modelsConnectServer,
+        args: [{ url: "https://example.com/v1", apiKey: "sk-1" }],
+      },
+      { channel: IPC.modelsRemoveServer, args: ["remote:1f3a9c"] },
+      { channel: IPC.modelsRefreshServers, args: [] },
+    ]);
+  });
+
+  it("delivers models state and status pushed by main", () => {
+    const { ipc, emit } = fakeIpc();
+    const api = createPreloadApi(ipc, platform);
+    const states: unknown[] = [];
+    const statuses: unknown[] = [];
+    const stopState = api.models.onState((state) => states.push(state.defaultModelId));
+    api.models.onStatus((status) => statuses.push(status.state));
+    emit(IPC.modelsStateChanged, { defaultModelId: "a" });
+    emit(IPC.modelsStatusChanged, { state: "loading" });
+    stopState();
+    emit(IPC.modelsStateChanged, { defaultModelId: "b" });
+    expect(states).toEqual(["a"]);
+    expect(statuses).toEqual(["loading"]);
+  });
 });

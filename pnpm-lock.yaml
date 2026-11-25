@@ -190,6 +190,12 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@dawg/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
+      '@dawg/models':
+        specifier: workspace:*
+        version: link:../../packages/models
       '@dawg/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

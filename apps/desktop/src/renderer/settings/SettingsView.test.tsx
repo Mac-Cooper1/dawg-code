@@ -113,7 +113,6 @@ describe.each(THEMES)("SettingsView (%s)", (theme) => {
   });
 
   it.each([
-    ["models", "Models", "The models on this Mac, the ones you can download"],
     ["permissions", "Permissions", "The default permission mode"],
     ["shortcuts", "Shortcuts", "Every keyboard shortcut in dawg-code"],
   ] as const)("says the %s page is not in this build yet", (page, title, line) => {

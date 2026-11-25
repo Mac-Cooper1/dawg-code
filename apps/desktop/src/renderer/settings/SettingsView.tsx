@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Appearance, ResolvedTheme, ToolCallDisplay } from "../../shared/bridge.ts";
 import { ThemeSwitch } from "../app/ThemeSwitch.tsx";
 import titleBar from "../app/TitleBar.module.css";
@@ -9,11 +10,7 @@ import styles from "./Settings.module.css";
 
 const PAGES: readonly { id: SettingsPage; label: string; comingLine: string }[] = [
   { id: "general", label: "General", comingLine: "" },
-  {
-    id: "models",
-    label: "Models",
-    comingLine: "The models on this Mac, the ones you can download, and the servers dawg can use.",
-  },
+  { id: "models", label: "Models", comingLine: "" },
   {
     id: "permissions",
     label: "Permissions",
@@ -34,6 +31,10 @@ export interface SettingsViewProps {
   /** What the window shows right now. */
   theme: ResolvedTheme;
   toolCalls: ToolCallDisplay;
+  /** Settings → Models, connected to the store by the container. */
+  modelsPage?: ReactNode;
+  /** One-line notices (a failed request), above the pages. */
+  notices?: ReactNode;
   onSelectPage(page: SettingsPage): void;
   onSetAppearance(appearance: Appearance): void;
   onSetToolCallDisplay(value: ToolCallDisplay): void;
@@ -55,6 +56,7 @@ export function SettingsView(props: SettingsViewProps) {
           </Button>
         </span>
       </TitleBarFrame>
+      {props.notices}
       <div className={styles.body}>
         <nav className={styles.nav} aria-label="Settings pages">
           {PAGES.map((page) => (
@@ -78,6 +80,8 @@ export function SettingsView(props: SettingsViewProps) {
               onSetAppearance={props.onSetAppearance}
               onSetToolCallDisplay={props.onSetToolCallDisplay}
             />
+          ) : props.page === "models" && props.modelsPage ? (
+            props.modelsPage
           ) : (
             <>
               <h1 className={styles.h1}>{current?.label}</h1>

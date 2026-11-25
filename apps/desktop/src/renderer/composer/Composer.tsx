@@ -17,6 +17,8 @@ export interface ComposerProps {
   view: ComposerView;
   /** Every model the person can pick (`state.models`). */
   models: readonly ModelOption[];
+  /** The model loaded in the bundled runtime, so the picker can say switching reloads it. */
+  loadedModelId?: string | null;
   /** False while the engine is not ready: Enter and Send do nothing. */
   canSend: boolean;
   /** The engine connection failed for good: the whole composer is disabled. */
@@ -34,7 +36,7 @@ export interface ComposerProps {
   onCompact(): void;
   onSendQueuedNow(id: string): void;
   onRemoveQueued(id: string): void;
-  /** "Manage models and servers…": Settings → Models. */
+  /** "Manage models…": Settings → Models. */
   onManageModels(): void;
 }
 
@@ -163,6 +165,7 @@ export function Composer(props: ComposerProps) {
             <ModelMenu
               current={view.model}
               models={props.models}
+              loadedModelId={props.loadedModelId ?? null}
               disabled={props.disabled}
               onSetModel={props.onSetModel}
               onManageModels={props.onManageModels}

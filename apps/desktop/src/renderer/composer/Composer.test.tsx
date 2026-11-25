@@ -34,7 +34,14 @@ function handlers(): Handlers {
 }
 
 /** Holds the draft, as the store does. */
-function Harness(props: Handlers & { view: ComposerView; canSend: boolean; disabled?: boolean }) {
+function Harness(
+  props: Handlers & {
+    view: ComposerView;
+    canSend: boolean;
+    disabled?: boolean;
+    loadedModelId?: string | null;
+  },
+) {
   const [draft, setDraft] = useState(props.view.draft);
   return (
     <Composer
@@ -55,7 +62,12 @@ function Harness(props: Handlers & { view: ComposerView; canSend: boolean; disab
 
 function setup(
   theme: ResolvedTheme,
-  options: { view?: Partial<ComposerView>; canSend?: boolean; disabled?: boolean } = {},
+  options: {
+    view?: Partial<ComposerView>;
+    canSend?: boolean;
+    disabled?: boolean;
+    loadedModelId?: string | null;
+  } = {},
 ) {
   const on = handlers();
   renderInTheme(
@@ -64,6 +76,7 @@ function setup(
       view={sampleComposer(options.view)}
       canSend={options.canSend ?? true}
       disabled={options.disabled}
+      loadedModelId={options.loadedModelId ?? null}
     />,
     theme,
   );
@@ -355,10 +368,31 @@ describe.each(THEMES)("Composer (%s)", (theme) => {
       expect(on.onSetModel).toHaveBeenCalledWith("gpt-oss-20b-q4");
     });
 
+    it("says switching to another model on this Mac reloads it", async () => {
+      const { user } = setup(theme, { loadedModelId: "qwen3.8-27b-q8" });
+      await user.click(screen.getByRole("button", { name: "Model: Qwen3.8 27B · 8-bit" }));
+      const menu = screen.getByRole("menu");
+      // The loaded one does not; another bundled one does, once; a server's model does not.
+      expect(
+        within(menu).getByRole("menuitemradio", { name: /^Qwen3.8 27B \(8-bit\)/ }),
+      ).not.toHaveTextContent("reloads");
+      expect(
+        within(menu).getByText(
+          "Found in LM Studio’s folder · 64K context · text only · switching reloads the model",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        within(menu).getByText("Bundled runtime · 128K context · switching reloads the model"),
+      ).toBeInTheDocument();
+      expect(
+        within(menu).getByRole("menuitemradio", { name: /^Ollama · qwen3.6:35b-a3b/ }),
+      ).not.toHaveTextContent("reloads");
+    });
+
     it("links to the model settings", async () => {
       const { on, user } = setup(theme);
       await user.click(screen.getByRole("button", { name: "Model: Qwen3.8 27B · 8-bit" }));
-      await user.click(screen.getByRole("menuitem", { name: "Manage models and servers…" }));
+      await user.click(screen.getByRole("menuitem", { name: "Manage models…" }));
       expect(on.onManageModels).toHaveBeenCalledOnce();
     });
   });

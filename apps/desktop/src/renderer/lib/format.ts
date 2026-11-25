@@ -109,6 +109,39 @@ export function basename(path: string): string {
   return index === -1 ? trimmed : trimmed.slice(index + 1);
 }
 
+/**
+ * Download and disk sizes, in decimal units as Finder shows them: 950_000_000 → "950 MB",
+ * 30_000_000_000 → "30.0 GB", 1_210_000_000_000 → "1.21 TB".
+ */
+export function formatBytes(bytes: number): string {
+  const n = Math.max(0, bytes);
+  if (n < 1e6) return `${Math.round(n / 1e3)} KB`;
+  if (n < 1e9) return `${Math.round(n / 1e6)} MB`;
+  if (n < 1e11) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n < 1e12) return `${Math.round(n / 1e9)} GB`;
+  return `${(n / 1e12).toFixed(2)} TB`;
+}
+
+/**
+ * Memory, in the binary units macOS uses for it ("64 GB" for 64 GiB): 45 GiB → "45 GB",
+ * 31.5e9 bytes → "29.3 GB".
+ */
+export function formatMemory(bytes: number): string {
+  const n = Math.max(0, bytes);
+  if (n < 2 ** 30) return `${Math.round(n / 2 ** 20)} MB`;
+  return `${trimZero((n / 2 ** 30).toFixed(1))} GB`;
+}
+
+/** 86_000_000 → "86 MB/s". */
+export function formatSpeed(bytesPerSecond: number): string {
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+/** Time left on a download: 150 → "about 2 min 30 s left". */
+export function formatTimeLeft(seconds: number): string {
+  return `about ${formatDuration(Math.max(1, Math.round(seconds)) * 1000)} left`;
+}
+
 /** Shortens text to `max` characters with an ellipsis. */
 export function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`;

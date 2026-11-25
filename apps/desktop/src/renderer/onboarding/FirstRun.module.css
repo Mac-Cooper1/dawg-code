@@ -1,0 +1,270 @@
+/* First run: Welcome, Downloading, Starting (mockup FirstRun: .hw, .hwc, .rec, .word, .chip.cur). */
+
+.window {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* The steps across the title bar: "1 Choose a model", "2 Download", "3 Start". */
+.stepChips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.stepChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.stepChip[data-state="current"] {
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+
+.stepChip[data-state="done"] {
+  color: var(--ink-2);
+}
+
+.stepChip[data-state="done"] svg {
+  color: var(--green);
+}
+
+.stepNumber {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  padding: 40px 24px 72px;
+}
+
+.column {
+  width: 680px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* The app icon tile: it has its own dark background, so it reads in both themes. */
+.logo {
+  width: 80px;
+  height: 80px;
+  flex: none;
+  display: block;
+}
+
+.logoSmall {
+  width: 44px;
+  height: 44px;
+}
+
+.word {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+.h1Step {
+  font-size: 26px;
+}
+
+.lead {
+  margin: 6px 0 0;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.label {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* What was found about this Mac. */
+.machine {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.machineCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+
+.machineCell dt {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.machineCell dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.machineCell .sub {
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+/* The recommended model, and each step's main card (mockup .rec). */
+.feature {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-2xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+}
+
+.featureHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.featureName {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.featureText {
+  margin: 2px 0 0;
+  color: var(--ink-3);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.facts dt {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.facts dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.grow {
+  flex: 1;
+}
+
+.note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+/* Downloading. */
+.percentLine {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.percent {
+  font-size: 26px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.progressText {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.failureIcon {
+  margin-top: 2px;
+}
+
+@media (max-width: 720px) {
+  .machine,
+  .facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

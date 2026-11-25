@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { ResolvedTheme } from "../../shared/bridge.ts";
+import { FirstRunContainer } from "../onboarding/FirstRunContainer.tsx";
 import { SettingsContainer } from "../settings/SettingsContainer.tsx";
 import { useActions, useAppStore } from "../state/store.ts";
 import { MainWindow } from "./MainWindow.tsx";
@@ -7,12 +8,13 @@ import { useGlobalShortcuts } from "./useShortcuts.ts";
 import { useApplyTheme } from "./useTheme.ts";
 
 /**
- * The window's root: applies the theme, listens for the window-wide shortcuts, and shows either
- * the sessions view or Settings.
+ * The window's root: applies the theme, listens for the window-wide shortcuts, and shows the
+ * sessions view, Settings, or (in place of the sessions view, until a model runs) first run.
  */
 export function App() {
   const appearance = useAppStore((state) => state.settings.appearance);
   const view = useAppStore((state) => state.layout.view);
+  const firstRun = useAppStore((state) => state.onboarding !== null && state.modelsState !== null);
   const actions = useActions();
   const reportTheme = useCallback(
     (theme: ResolvedTheme) => actions.setResolvedTheme(theme),
@@ -21,5 +23,6 @@ export function App() {
   useApplyTheme(appearance, reportTheme);
   useGlobalShortcuts();
 
-  return view === "settings" ? <SettingsContainer /> : <MainWindow />;
+  if (view === "settings") return <SettingsContainer />;
+  return firstRun ? <FirstRunContainer /> : <MainWindow />;
 }

@@ -1,4 +1,5 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -11,6 +12,7 @@ import {
   makeFakeRuntime,
   waitFor,
 } from "./__fixtures__/fake.ts";
+import { twoSlotLayout } from "./args.ts";
 import { RuntimeCrashLoopError, RuntimeError } from "./errors.ts";
 import { findFreePort } from "./port.ts";
 import {
@@ -422,5 +424,41 @@ describe("RuntimeSupervisor with a fake llama-server", () => {
     const { sup } = await supervisor();
     await expect(sup.warm({ slot: 0, prompt: "x" })).rejects.toBeInstanceOf(RuntimeError);
     await expect(sup.slotKey("x")).rejects.toMatchObject({ code: "not-ready" });
+  });
+
+  test("the two-slot layout gives each slot the whole window of a shared cache", async () => {
+    const layout = twoSlotLayout(4096, 1024);
+    const { sup } = await supervisor(
+      {},
+      {
+        contextSize: layout.contextSize,
+        slots: layout.slots,
+        settings: {
+          cacheRamMiB: 256,
+          ctxCheckpoints: 4,
+          checkpointMinStep: 256,
+          ...layout.settings,
+        },
+      },
+    );
+    const endpoint = await sup.start();
+    expect(endpoint.contextWindow).toBe(4096);
+    expect(sup.serverInfo?.totalSlots).toBe(2);
+  });
+
+  test("runs the watchdog from the path it is given", async () => {
+    const script = join(fake.dir, "watchdog-copy.ts");
+    const source = await readFile(new URL("./watchdog.ts", import.meta.url), "utf8");
+    // The copy cannot import its neighbour, so the type-only import goes.
+    await writeFile(script, source.replace(/^import type .*$/m, ""));
+    const { sup } = await supervisor({}, { watchdogPath: script });
+    await sup.start();
+    const { watchdog, server } = sup.processIds;
+    expect(watchdog).toBeGreaterThan(0);
+    expect(server).toBeGreaterThan(0);
+    const command = execFileSync("ps", ["-o", "command=", "-p", String(watchdog)], {
+      encoding: "utf8",
+    });
+    expect(command).toContain(script);
   });
 });
