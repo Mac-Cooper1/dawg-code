@@ -25,6 +25,7 @@ import {
 } from "@dawg/protocol";
 import { findMockModel, MOCK_DEFAULT_MODEL_ID } from "../shared/mock-models.ts";
 import type { MockClock, MockConnection, MockEngine, MockEngineOptions } from "./api.ts";
+import { byteLength, outputPage } from "./background.ts";
 import { realClock } from "./clock.ts";
 import { contextText, helpText } from "./commands.ts";
 import { type LoadedScenario, pickBranch } from "./format.ts";
@@ -249,6 +250,9 @@ class Engine implements MockEngine {
       this.#hooks(),
     );
     session.scenario = { scenario, recordings };
+    for (const [taskId, output] of Object.entries(scenario.backgroundOutput ?? {})) {
+      session.backgroundOutput.set(taskId, output);
+    }
     for (const template of stored) {
       const event = {
         event: template.event,
@@ -418,6 +422,31 @@ class Engine implements MockEngine {
         const page = params.limit === undefined ? after : after.slice(0, params.limit);
         return { events: page, lastSeq: session.lastSeq, hasMore: page.length < after.length };
       },
+      "background.output": (params) => {
+        const session = this.#openHere(connection, params.sessionId);
+        const task = backgroundTask(session, params.taskId);
+        const output = session.backgroundOutput.get(task.taskId) ?? "";
+        const page = outputPage(output, params.offset, params.limit);
+        return { ...page, done: task.status !== "running" && page.nextOffset >= page.totalBytes };
+      },
+      "background.stop": (params) => {
+        const session = this.#openHere(connection, params.sessionId);
+        const task = backgroundTask(session, params.taskId);
+        if (task.status !== "running") return { stopped: false };
+        // As the real engine stops one: interrupted, and the shell ends by that signal.
+        const output = session.backgroundOutput.get(task.taskId) ?? "";
+        session.emit("background.updated", {
+          task: {
+            ...task,
+            status: "stopped",
+            stopReason: "requested",
+            signal: "SIGINT",
+            endedAt: Math.max(task.startedAt, this.#clock.now()),
+            outputBytes: Math.max(task.outputBytes, byteLength(output)),
+          },
+        });
+        return { stopped: true };
+      },
       "permission.respond": (params) =>
         this.#respond(connection, params, { kind: "permission", response: params.response }),
       "question.respond": (params) =>
@@ -526,6 +555,8 @@ class Engine implements MockEngine {
       { sessionId: parent.id, point },
     );
     for (const event of parent.log.slice(0, cut)) {
+      // Background commands stay with the parent, as in the real engine.
+      if (event.event === "background.updated") continue;
       for (const id of idsIn(event.payload)) child.ids.reserve(id);
       child.load(event, event.payload.time, { applySettings: false });
     }
@@ -846,6 +877,18 @@ function forkCut(parent: MockSession, point: ForkPoint): number {
   // Everything up to the next turn, so notes between turns (a title, a compaction) come along.
   const later = [...starts.values()].filter((s) => s > start);
   return later.length > 0 ? Math.min(...later) : log.length;
+}
+
+/** A background command of the session, or InvalidParams naming the unknown id. */
+function backgroundTask(session: MockSession, taskId: string) {
+  const task = session.state.background.get(taskId);
+  if (task === undefined) {
+    throw new RpcError(
+      ErrorCodes.InvalidParams,
+      `There is no background task ${taskId} in this session.`,
+    );
+  }
+  return task;
 }
 
 function isWorkingStatus(event: EngineEvent | undefined): boolean {

@@ -1,8 +1,9 @@
 /**
  * A scripted engine for the store and connection tests: the real protocol server
  * (`createServer`) over a message port, with sessions whose events the test emits by hand. It
- * keeps each session's log, status, running turn and pending requests, so `session.resume`,
- * `session.replay` and the answers behave like the engine's.
+ * keeps each session's log, status, running turn, pending requests and background commands, so
+ * `session.resume`, `session.replay`, the answers and `background.*` behave like the engine's.
+ * A background command's output is what the test gives `backgroundOutput`.
  */
 import {
   createMessagePortTransport,
@@ -55,6 +56,8 @@ export class FakeEngine {
   readonly calls: FakeEngineCall[] = [];
   /** Per-method overrides, called instead of the default handler. */
   readonly overrides: Partial<Handlers> = {};
+  /** Background command output, by `sessionId:taskId`. Append to it to simulate more output. */
+  readonly output = new Map<string, string>();
   private readonly connections = new Set<Connection>();
   private readonly options: FakeEngineOptions;
   private time = T0;
@@ -159,9 +162,26 @@ export class FakeEngine {
         session.pending = session.pending.filter((request) => requestIdOf(request) !== id);
         break;
       }
+      case "background.updated": {
+        const { task } = event.payload;
+        const list = session.snapshot.background;
+        const index = list.findIndex((candidate) => candidate.taskId === task.taskId);
+        session.snapshot = {
+          ...session.snapshot,
+          background:
+            index === -1 ? [...list, task] : list.map((old, i) => (i === index ? task : old)),
+        };
+        break;
+      }
       default:
         break;
     }
+  }
+
+  /** Appends output to a background command (the engine's log of it). */
+  backgroundOutput(sessionId: string, taskId: string, text: string): void {
+    const key = `${sessionId}:${taskId}`;
+    this.output.set(key, (this.output.get(key) ?? "") + text);
   }
 
   snapshotOf(id: string): SessionSnapshot {
@@ -378,6 +398,35 @@ export class FakeEngine {
         this.updateSettings(params.sessionId, { effort: params.effort }, "effort", open);
         return { effort: params.effort };
       },
+      "background.output": (params) => {
+        const task = this.backgroundTask(params.sessionId, params.taskId);
+        const text = this.output.get(`${params.sessionId}:${params.taskId}`) ?? "";
+        // The fake's output is ASCII, so characters and bytes agree.
+        const offset = Math.min(params.offset ?? 0, text.length);
+        const limit = params.limit ?? 256 * 1024;
+        const page = text.slice(offset, offset + limit);
+        const nextOffset = offset + page.length;
+        return {
+          text: page,
+          nextOffset,
+          totalBytes: text.length,
+          done: task.status !== "running" && nextOffset >= text.length,
+        };
+      },
+      "background.stop": (params) => {
+        const task = this.backgroundTask(params.sessionId, params.taskId);
+        if (task.status !== "running") return { stopped: false };
+        this.emit(params.sessionId, "background.updated", {
+          task: {
+            ...task,
+            status: "stopped",
+            signal: "SIGTERM",
+            stopReason: "requested",
+            endedAt: this.time + 100,
+          },
+        });
+        return { stopped: true };
+      },
       "permission.respond": (params) => this.answer(params.sessionId, params.requestId),
       "question.respond": (params) => this.answer(params.sessionId, params.requestId),
       "plan.respond": (params) => this.answer(params.sessionId, params.requestId),
@@ -419,6 +468,14 @@ export class FakeEngine {
       additionalDirectories: session.snapshot.additionalDirectories,
       changed: [field],
     });
+  }
+
+  private backgroundTask(sessionId: string, taskId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new RpcError(ErrorCodes.SessionNotFound, `No session ${sessionId}`);
+    const task = session.snapshot.background.find((candidate) => candidate.taskId === taskId);
+    if (!task) throw new RpcError(ErrorCodes.InvalidParams, `No background command ${taskId}`);
+    return task;
   }
 
   private answer(sessionId: string, requestId: string): Record<string, never> {

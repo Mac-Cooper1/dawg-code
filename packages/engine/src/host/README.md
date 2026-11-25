@@ -31,6 +31,10 @@ starts a turn returns its `turnId`, one that opens a session (`/clear`, `/resume
 new session's snapshot and that session is open on this connection from then on. An unknown
 command or a bad argument is `InvalidParams` and never reaches the model.
 
+`background.output` and `background.stop` need the session open on this connection, like the
+other session methods; they map to `readBackgroundOutput` and `stopBackground` (runtime README,
+"Background commands"). An unknown task id is `InvalidParams`.
+
 `session.delete` works whether or not the session is open, on this connection or another. Every
 connection that had it open receives `session.deleted` (after the interrupted turn's events, if
 one was running) and drops it from its open sessions; later requests on it are
@@ -51,7 +55,7 @@ with a greater `seq` misses nothing. `session.replay` works on any stored sessio
 ## Errors
 
 Runtime errors keep their protocol code (`SessionNotFound`, `SessionBusy`, `InvalidState`,
-`RequestNotFound`). A session id that is stored but not open here is `InvalidState`; an unknown
+`RequestNotFound`, `InvalidParams`). A session id that is stored but not open here is `InvalidState`; an unknown
 one is `SessionNotFound`. Model and storage failures become `InternalError` with a sentence a
 person can read; anything else becomes `InternalError` "The engine could not complete <method>",
 with the details sent to `onProblem` only. Messages keep their first line, and absolute paths

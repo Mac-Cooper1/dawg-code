@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import {
+  BackgroundTaskSchema,
   CommandInfoSchema,
   EffortSchema,
   ForkPointSchema,
@@ -94,6 +95,8 @@ export const SessionSnapshotSchema = z.object({
   activeTurnId: IdSchema.nullable(),
   /** Slash commands available in this session. */
   commands: z.array(CommandInfoSchema),
+  /** The session's background commands, running and ended, oldest first. */
+  background: z.array(BackgroundTaskSchema).default([]),
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 
@@ -265,6 +268,45 @@ export const PlanRespondParamsSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------------------------
+// Background commands
+// ---------------------------------------------------------------------------------------------
+
+export const BackgroundOutputParamsSchema = z.object({
+  sessionId: SessionIdSchema,
+  taskId: IdSchema,
+  /** Byte offset in the output to start at. 0 is the beginning. */
+  offset: z.number().int().nonnegative().default(0),
+  /** Most bytes to return; at most 1 MiB. */
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(1024 * 1024)
+    .default(256 * 1024),
+});
+
+export const BackgroundOutputResultSchema = z.object({
+  /** The output from `offset`, as plain text (terminal control sequences removed). */
+  text: z.string(),
+  /** Where the next read starts. */
+  nextOffset: z.number().int().nonnegative(),
+  /** Output written so far, in bytes. */
+  totalBytes: z.number().int().nonnegative(),
+  /** True when the command has ended and everything up to `totalBytes` was read. */
+  done: z.boolean(),
+});
+
+export const BackgroundStopParamsSchema = z.object({
+  sessionId: SessionIdSchema,
+  taskId: IdSchema,
+});
+
+export const BackgroundStopResultSchema = z.object({
+  /** False when it had already ended. */
+  stopped: z.boolean(),
+});
+
+// ---------------------------------------------------------------------------------------------
 // Replay
 // ---------------------------------------------------------------------------------------------
 
@@ -312,6 +354,11 @@ export const methods = {
   },
   "session.command": { params: SessionCommandParamsSchema, result: SessionCommandResultSchema },
   "session.replay": { params: SessionReplayParamsSchema, result: SessionReplayResultSchema },
+  "background.output": {
+    params: BackgroundOutputParamsSchema,
+    result: BackgroundOutputResultSchema,
+  },
+  "background.stop": { params: BackgroundStopParamsSchema, result: BackgroundStopResultSchema },
   "permission.respond": { params: PermissionRespondParamsSchema, result: EmptyResultSchema },
   "question.respond": { params: QuestionRespondParamsSchema, result: EmptyResultSchema },
   "plan.respond": { params: PlanRespondParamsSchema, result: EmptyResultSchema },

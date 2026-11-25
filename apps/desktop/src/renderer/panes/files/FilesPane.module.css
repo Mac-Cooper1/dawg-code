@@ -1,0 +1,300 @@
+/* The Files pane (mockup .tn, .bdg, .dbar). */
+
+.pane {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.tree {
+  width: 220px;
+  flex: none;
+  overflow: auto;
+  padding: 6px 0;
+  border-right: 1px solid var(--line);
+  background: var(--side);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding-right: 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+  /* Long folders render only what is on screen. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 26px;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row[aria-selected="true"] {
+  background: var(--active);
+  color: var(--ink);
+}
+
+.row:focus-visible {
+  outline-offset: -2px;
+}
+
+.ignored {
+  opacity: 0.55;
+}
+
+.chevron {
+  flex: none;
+  color: var(--ink-3);
+  transition: transform 120ms ease;
+}
+
+.chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
+
+.chevronSpace {
+  width: 12px;
+  flex: none;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rootName {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.link {
+  color: var(--ink-3);
+}
+
+.rowNote {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.failed {
+  color: var(--red);
+}
+
+/* dawg's marks: M edited (amber), A created (green). */
+.mark {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  flex: none;
+}
+
+.edited {
+  color: var(--amber);
+}
+
+.created {
+  color: var(--green);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  flex: none;
+}
+
+/* The open files and the editor. */
+.main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabs {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--side);
+  flex: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  flex: none;
+  max-width: 220px;
+  padding-right: 2px;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-2);
+}
+
+.tab[data-active="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--acc-edge);
+  background: var(--panel);
+}
+
+.tabButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 4px 0 10px;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabButton:focus-visible {
+  outline-offset: -2px;
+}
+
+.dirty {
+  color: var(--acc-text);
+  font-size: 9px;
+}
+
+.tabClose {
+  opacity: 0.7;
+}
+
+.tabClose:hover {
+  opacity: 1;
+}
+
+.file {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+.muted {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.conflict {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  background: var(--amber-bg);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.alert {
+  margin: 0;
+  padding: 6px 12px;
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: var(--text-sm);
+  flex: none;
+}
+
+.message {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.message p {
+  margin: 0;
+}
+
+.messageTitle {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.error {
+  color: var(--red);
+}
+
+.status {
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+/* Narrow panes put the tree above the editor. */
+@container (max-width: 600px) {
+  .split {
+    flex-direction: column;
+  }
+
+  .tree {
+    width: auto;
+    max-height: 38%;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}

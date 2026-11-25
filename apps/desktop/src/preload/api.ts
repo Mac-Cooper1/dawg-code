@@ -9,25 +9,52 @@ import type { z } from "zod";
 import {
   type AddedModelFile,
   BRIDGE_VERSION,
+  type BranchList,
+  type ChangeSet,
   ChooseFolderOptionsSchema,
   ConnectServerInputSchema,
+  CreateWorktreeInputSchema,
   type DesktopSettings,
   DesktopSettingsPatchSchema,
+  type DirEntry,
   type EngineRestartInfo,
   ExternalUrlSchema,
+  type FileContent,
+  type FileDiff,
+  FileRefSchema,
   IdleUnloadSchema,
   IPC,
   ModelIdSchema,
   type ModelOption,
   type ModelStatus,
   type ModelsState,
+  OpenTerminalInputSchema,
   type PlatformInfo,
   type PreloadApi,
+  ProjectRefSchema,
+  RevertInputSchema,
   type ServerInfo,
+  SessionRefSchema,
+  type TerminalDataEvent,
+  type TerminalExitEvent,
+  TerminalIdSchema,
+  type TerminalInfo,
+  TerminalInputSchema,
+  type TerminalReattach,
+  TerminalSizeSchema,
+  TrackSessionInputSchema,
   type Unsubscribe,
   type WindowState,
   WindowStateSchema,
+  type WorkspaceChangedEvent,
+  type WorkspaceInfo,
+  type WorktreeCleanup,
+  type WorktreeInfo,
+  WriteFileInputSchema,
 } from "../shared/bridge.ts";
+
+/** An absolute path (the contract's schema for one, taken from a schema that has it). */
+const AbsolutePathSchema = FileRefSchema.shape.path;
 
 type IpcListener = (event: unknown, ...args: unknown[]) => void;
 
@@ -68,6 +95,14 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
     return async (id: string): Promise<void> => {
       const valid = validate(ModelIdSchema, id, what);
       await ipc.invoke(channel, valid);
+    };
+  }
+
+  /** A call that takes one value: validated against `schema`, then sent. */
+  function invokeWith<S extends z.ZodType, R>(channel: string, schema: S, what: string) {
+    return async (value: z.input<S>): Promise<R> => {
+      const valid = validate(schema, value, what);
+      return (await ipc.invoke(channel, valid)) as R;
     };
   }
 
@@ -123,6 +158,97 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
       refreshServers: async () => {
         await ipc.invoke(IPC.modelsRefreshServers);
       },
+    },
+    workspace: {
+      track: invokeWith<typeof TrackSessionInputSchema, WorkspaceInfo>(
+        IPC.workspaceTrack,
+        TrackSessionInputSchema,
+        "session",
+      ),
+      untrack: invokeWith<typeof SessionRefSchema, void>(
+        IPC.workspaceUntrack,
+        SessionRefSchema,
+        "session id",
+      ),
+      changes: invokeWith<typeof SessionRefSchema, ChangeSet>(
+        IPC.workspaceChanges,
+        SessionRefSchema,
+        "session id",
+      ),
+      fileDiff: invokeWith<typeof FileRefSchema, FileDiff>(
+        IPC.workspaceFileDiff,
+        FileRefSchema,
+        "file",
+      ),
+      revert: invokeWith<typeof RevertInputSchema, void>(
+        IPC.workspaceRevert,
+        RevertInputSchema,
+        "revert",
+      ),
+      listDirectory: invokeWith<typeof FileRefSchema, DirEntry[]>(
+        IPC.workspaceListDirectory,
+        FileRefSchema,
+        "file",
+      ),
+      readFile: invokeWith<typeof FileRefSchema, FileContent>(
+        IPC.workspaceReadFile,
+        FileRefSchema,
+        "file",
+      ),
+      writeFile: invokeWith<typeof WriteFileInputSchema, { mtimeMs: number }>(
+        IPC.workspaceWriteFile,
+        WriteFileInputSchema,
+        "file",
+      ),
+      onChanged: (listener) => subscribe<WorkspaceChangedEvent>(IPC.workspaceChanged, listener),
+    },
+    worktrees: {
+      branches: async (projectDir) => {
+        const valid = validate(ProjectRefSchema, { projectDir }, "project");
+        return (await ipc.invoke(IPC.worktreesBranches, valid)) as BranchList;
+      },
+      create: invokeWith<typeof CreateWorktreeInputSchema, WorktreeInfo>(
+        IPC.worktreesCreate,
+        CreateWorktreeInputSchema,
+        "worktree",
+      ),
+      cleanup: invokeWith<typeof AbsolutePathSchema, WorktreeCleanup>(
+        IPC.worktreesCleanup,
+        AbsolutePathSchema,
+        "worktree path",
+      ),
+    },
+    terminal: {
+      open: invokeWith<typeof OpenTerminalInputSchema, TerminalInfo>(
+        IPC.terminalOpen,
+        OpenTerminalInputSchema,
+        "terminal",
+      ),
+      // One-way, like keystrokes: invalid input throws here and is never sent.
+      write: (terminalId, data) => {
+        ipc.send(
+          IPC.terminalWrite,
+          validate(TerminalIdSchema, terminalId, "terminal id"),
+          validate(TerminalInputSchema, data, "terminal input"),
+        );
+      },
+      resize: (terminalId, cols, rows) => {
+        const id = validate(TerminalIdSchema, terminalId, "terminal id");
+        const size = validate(TerminalSizeSchema, { cols, rows }, "terminal size");
+        ipc.send(IPC.terminalResize, id, size.cols, size.rows);
+      },
+      close: invokeWith<typeof TerminalIdSchema, void>(
+        IPC.terminalClose,
+        TerminalIdSchema,
+        "terminal id",
+      ),
+      list: invokeWith<typeof SessionRefSchema, TerminalReattach[]>(
+        IPC.terminalList,
+        SessionRefSchema,
+        "session id",
+      ),
+      onData: (listener) => subscribe<TerminalDataEvent>(IPC.terminalData, listener),
+      onExit: (listener) => subscribe<TerminalExitEvent>(IPC.terminalExit, listener),
     },
     dialogs: {
       chooseFolder: async (options) => {

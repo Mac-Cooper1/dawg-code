@@ -19,13 +19,17 @@ import type {
   ModelFooterView,
   NoteItem,
   PendingRef,
+  PlanItem,
+  PlanPaneView,
   QueuedMessage,
   SessionView,
   SidebarGroup,
   SidebarRow,
+  TasksPaneView,
   TitleBarView,
   TranscriptItem,
   TranscriptView,
+  WorkspaceInfo,
 } from "./types.ts";
 
 const EMPTY_ITEMS: readonly TranscriptItem[] = Object.freeze([]);
@@ -185,6 +189,7 @@ const EMPTY_TITLE: TitleBarView = {
   title: "dawg-code",
   projectName: null,
   worktreeLabel: null,
+  worktreeTitle: null,
   changes: null,
   tasks: null,
 };
@@ -204,32 +209,100 @@ function changeTotals(items: readonly TranscriptItem[]): TitleBarView["changes"]
   return files.size === 0 ? null : { files: files.size, additions, deletions };
 }
 
+/**
+ * The worktree chip: from what main reported for the session (`workspace.track`), else from the
+ * summary alone (a session runs in a worktree when its directory is not its project's).
+ */
+function worktreeChip(
+  summary: SessionView["summary"],
+  workspace: WorkspaceInfo | undefined,
+): { label: string | null; title: string | null } {
+  const worktree = workspace?.git?.worktree ?? null;
+  if (worktree) {
+    return {
+      label: `worktree · ${basename(worktree.path)}`,
+      title: `Runs in a worktree on ${worktree.branch}, made from ${worktree.base}`,
+    };
+  }
+  if (summary.cwd === summary.projectDir) return { label: null, title: null };
+  return { label: `worktree · ${basename(summary.cwd)}`, title: "Runs in a worktree" };
+}
+
 /** For the selected session. */
 export function selectTitleBar(state: AppStore): TitleBarView {
   const id = state.layout.selectedSessionId;
   const session = id ? state.sessions[id] : undefined;
   if (!id || !session) return EMPTY_TITLE;
   const items = state.transcripts[id] ?? EMPTY_ITEMS;
+  const workspace = state.workspaces[id];
   return titleMemo.get(
     "title",
-    [id, session.summary, session.tasks, items, state.projects],
+    [id, session.summary, session.tasks, items, state.projects, workspace],
     (previous) => {
       const { summary } = session;
       const changes = changeTotals(items);
       const done = session.tasks.filter((task) => task.status === "completed").length;
       const tasks = session.tasks.length > 0 ? { done, total: session.tasks.length } : null;
+      const chip = worktreeChip(summary, workspace);
       return stable(previous, {
         sessionId: id,
         title: summary.title ?? "New session",
         projectName: state.projects[summary.projectDir]?.name ?? basename(summary.projectDir),
-        worktreeLabel:
-          summary.cwd !== summary.projectDir ? `worktree · ${basename(summary.cwd)}` : null,
+        worktreeLabel: chip.label,
+        worktreeTitle: chip.title,
         changes:
           previous?.changes && shallowEqual(previous.changes, changes) ? previous.changes : changes,
         tasks: previous?.tasks && shallowEqual(previous.tasks, tasks) ? previous.tasks : tasks,
       });
     },
   );
+}
+
+// --- Panes -------------------------------------------------------------------------------------
+
+const tasksPaneMemo = createKeyedMemo<TasksPaneView>();
+
+/** The Tasks pane of a session; null when the store does not know it. */
+export function selectTasksPane(state: AppStore, sessionId: SessionId): TasksPaneView | null {
+  const session = state.sessions[sessionId];
+  if (!session) return null;
+  return tasksPaneMemo.get(
+    sessionId,
+    [session.open, session.tasks, session.background],
+    (previous) =>
+      stable(previous, {
+        sessionId,
+        open: session.open,
+        tasks: session.tasks,
+        background: session.background,
+      }),
+  );
+}
+
+const planPaneMemo = createKeyedMemo<PlanPaneView>();
+
+/** The Plan pane of a session: its latest plan. Null when the store does not know the session. */
+export function selectPlanPane(state: AppStore, sessionId: SessionId): PlanPaneView | null {
+  const session = state.sessions[sessionId];
+  if (!session) return null;
+  const items = state.transcripts[sessionId] ?? EMPTY_ITEMS;
+  return planPaneMemo.get(sessionId, [session.loaded, items, session.summary.cwd], (previous) => {
+    let plan: PlanItem | null = null;
+    let planCount = 0;
+    for (let index = items.length - 1; index >= 0; index--) {
+      const item = items[index];
+      if (item?.kind !== "plan") continue;
+      planCount += 1;
+      plan ??= item;
+    }
+    return stable(previous, {
+      sessionId,
+      loaded: session.loaded,
+      plan,
+      planCount,
+      cwd: session.summary.cwd,
+    });
+  });
 }
 
 // --- Transcript --------------------------------------------------------------------------------
@@ -331,7 +404,7 @@ function contextMeter(
       })
     : null;
   const breakdown = usage?.breakdown ?? null;
-  return stable(previous ?? undefined, {
+  return stable(previous, {
     used,
     window,
     fraction: window > 0 ? Math.min(1, used / window) : 0,

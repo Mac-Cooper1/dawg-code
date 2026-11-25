@@ -74,6 +74,8 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
     setToolCallDisplay: vi.fn(async (toolCalls) => settings({ toolCalls })),
     setResolvedTheme: vi.fn((resolvedTheme: ResolvedTheme) => set({ resolvedTheme })),
     newSession: vi.fn(async () => null),
+    answerNewSessionOffer: vi.fn(async () => set({ newSessionOffer: null })),
+    trackSession: vi.fn(async () => null),
     renameSession: vi.fn(done),
     forkSession: vi.fn(async () => null),
     archiveSession: vi.fn(done),
@@ -113,6 +115,13 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
     respondPlan: vi.fn(done),
     setItemOpen: vi.fn(),
     setShownAgain: vi.fn(),
+    readBackgroundOutput: vi.fn(async () => ({
+      text: "",
+      nextOffset: 0,
+      totalBytes: 0,
+      done: true,
+    })),
+    stopBackground: vi.fn(async () => true),
   };
 
   const base = initialAppState(HOME);
@@ -226,6 +235,7 @@ export function sampleTitleBar(overrides: Partial<TitleBarView> = {}): TitleBarV
     title: "Fix the failing split test",
     projectName: "tally",
     worktreeLabel: "worktree · split-cents",
+    worktreeTitle: "Runs in a worktree on dawg/split-cents, made from main",
     changes: { files: 3, additions: 11, deletions: 2 },
     tasks: { done: 1, total: 3 },
     ...overrides,

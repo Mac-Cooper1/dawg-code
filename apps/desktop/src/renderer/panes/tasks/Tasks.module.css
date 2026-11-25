@@ -1,0 +1,212 @@
+/* The Tasks pane (mockup .lbl, .tki, .cbx, .card, .r, .mm). */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px 16px 20px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.muted {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+/* The task list: round checkboxes, the task in progress spinning and bold. */
+
+.taskList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.task {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 3px 0;
+}
+
+.box {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--panel);
+}
+
+.task[data-status="completed"] .box {
+  background: var(--acc-text);
+  border-color: var(--acc-text);
+}
+
+.task[data-status="completed"] .taskText {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--line-2);
+}
+
+.task[data-status="in_progress"] .box {
+  border-color: var(--acc-text);
+  border-right-color: transparent;
+  animation: spin 0.9s linear infinite;
+}
+
+.task[data-status="in_progress"] .taskText {
+  font-weight: 600;
+}
+
+/* Background commands: one card, a row each. */
+
+.card {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+}
+
+.command + .command {
+  border-top: 1px solid var(--line);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.mark {
+  width: 14px;
+  height: 18px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--acc-text);
+  border-right-color: transparent;
+  animation: spin 0.9s linear infinite;
+}
+
+.mark[data-status="completed"] {
+  color: var(--green);
+}
+
+.mark[data-status="failed"] {
+  color: var(--red);
+}
+
+.mark[data-status="stopped"] {
+  color: var(--ink-3);
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.commandText {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.meta[data-status="failed"] .status {
+  color: var(--red);
+}
+
+.actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.actionButton {
+  height: 26px;
+}
+
+/* The output viewer under a row. */
+
+.output {
+  border-top: 1px solid var(--line);
+  background: var(--term-bg);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+
+.command:not(:last-child) .output {
+  border-radius: 0;
+}
+
+.outputNote {
+  margin: 0;
+  padding: 6px 14px 0;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.outputNote[data-tone="error"] {
+  color: var(--red);
+}
+
+.log {
+  margin: 0;
+  padding: 8px 14px 10px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  line-height: 1.55;
+  color: var(--term-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log:focus-visible {
+  outline-offset: -2px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

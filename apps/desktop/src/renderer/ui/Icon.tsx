@@ -189,16 +189,3 @@ export function Icon({ name, size = 16, className, strokeWidth = 1.5 }: IconProp
     </svg>
   );
 }
-
-/** The placeholder paw mark (see Open questions in the Phase 3 spec). 24-unit grid. */
-export function LogoMark({ size = 20 }: { size?: number }) {
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" fill="currentColor">
-      <ellipse cx="12" cy="15.5" rx="5" ry="4" />
-      <circle cx="6" cy="9.5" r="2" />
-      <circle cx="10" cy="6" r="2" />
-      <circle cx="14" cy="6" r="2" />
-      <circle cx="18" cy="9.5" r="2" />
-    </svg>
-  );
-}

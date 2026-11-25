@@ -479,11 +479,11 @@ describe("commands", () => {
       trigger: "manual",
       turnId: null,
       focus: "links",
-      contextUsed: 18_649,
+      contextUsed: 19_557,
     });
     const finished = first(events, "compaction.finished").payload;
-    expect(finished).toMatchObject({ outcome: "completed", contextBefore: 18_649 });
-    expect(finished.contextAfter).toBeLessThan(18_649);
+    expect(finished).toMatchObject({ outcome: "completed", contextBefore: 19_557 });
+    expect(finished.contextAfter).toBeLessThan(19_557);
     const { usage } = first(events, "usage.updated").payload;
     expect(usage.contextUsed).toBe(finished.contextAfter);
     expect(usage.compactAt).toBe(133_120);

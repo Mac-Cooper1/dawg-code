@@ -8,11 +8,14 @@ import {
   isAppUrl,
   isTrustedSender,
 } from "./app-url.ts";
-import { createInvokeHandlers, type MainServices } from "./ipc-handlers.ts";
+import { createInvokeHandlers, createSendHandlers, type MainServices } from "./ipc-handlers.ts";
 import { createMockModelService } from "./models/mock.ts";
 import type { ModelService } from "./models/service.ts";
 import type { SettingsStore, WindowStateStore } from "./stores.ts";
+import type { TerminalService } from "./terminal/service.ts";
 import { initialBounds } from "./window-geometry.ts";
+import type { WorkspaceService } from "./workspace/service.ts";
+import type { WorktreeService } from "./workspace/worktrees.ts";
 
 /** The mock service, recording every call that changes something. */
 function recordingModels(): ModelService & { calls: [string, ...unknown[]][] } {
@@ -49,11 +52,57 @@ function recordingModels(): ModelService & { calls: [string, ...unknown[]][] } {
   };
 }
 
+/** Workspace, worktree and terminal services that record what reaches them. */
+function recordingPanes() {
+  const calls: [string, ...unknown[]][] = [];
+  const record =
+    (name: string) =>
+    (...args: unknown[]): never => {
+      calls.push([name, ...args]);
+      return Promise.resolve(null) as never;
+    };
+  const workspace: WorkspaceService = {
+    track: record("track"),
+    untrack: record("untrack"),
+    releaseOwner: record("releaseOwner"),
+    changes: record("changes"),
+    fileDiff: record("fileDiff"),
+    revert: record("revert"),
+    listDirectory: record("listDirectory"),
+    readFile: record("readFile"),
+    writeFile: record("writeFile"),
+    onChanged: () => () => {},
+    resolveDirectory: record("resolveDirectory"),
+    dispose: () => {},
+  };
+  const worktrees: WorktreeService = {
+    branches: record("branches"),
+    create: record("create"),
+    cleanup: record("cleanup"),
+  };
+  const terminals: TerminalService = {
+    open: record("open"),
+    write: (...args) => {
+      calls.push(["write", ...args]);
+    },
+    resize: (...args) => {
+      calls.push(["resize", ...args]);
+    },
+    close: record("close"),
+    list: record("list"),
+    onData: () => () => {},
+    onExit: () => () => {},
+    disposeAll: () => {},
+  };
+  return { calls, workspace, worktrees, terminals };
+}
+
 function services(): MainServices<string> & {
   opened: string[];
   changed: unknown[];
   models: ReturnType<typeof recordingModels>;
   pickedFor: string[];
+  panes: ReturnType<typeof recordingPanes>;
 } {
   const opened: string[] = [];
   const changed: unknown[] = [];
@@ -63,12 +112,18 @@ function services(): MainServices<string> & {
     update: async (patch) => ({ ...DEFAULT_SETTINGS, ...(patch as object) }),
   };
   const windowState: WindowStateStore = { load: vi.fn(), save: vi.fn() };
+  const panes = recordingPanes();
   return {
     opened,
     changed,
     pickedFor,
     settings,
     windowState,
+    panes,
+    workspace: panes.workspace,
+    worktrees: panes.worktrees,
+    terminals: panes.terminals,
+    ownerOf: (sender) => `owner:${sender}`,
     models: recordingModels(),
     chooseModelFile: async (sender) => {
       pickedFor.push(sender);
@@ -212,6 +267,123 @@ describe("IPC handlers", () => {
       .filter(([name]) => name.startsWith("models") && !name.endsWith("Changed"))
       .map(([, channel]) => channel);
     for (const channel of invokeChannels) expect(handlers[channel]).toBeTypeOf("function");
+  });
+});
+
+describe("workspace, worktree and terminal IPC", () => {
+  const session = { sessionId: "s1", cwd: "/Users/me/tally", projectDir: "/Users/me/tally" };
+  const file = { sessionId: "s1", path: "/Users/me/tally/src/a.ts" };
+  const hunk = { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-a", "+b"] };
+
+  it("validates every call before it reaches the services", async () => {
+    const target = services();
+    const bad: [string, unknown[], RegExp][] = [
+      [IPC.workspaceTrack, [{ ...session, cwd: "relative/path" }], /Invalid session/],
+      [IPC.workspaceTrack, [{ ...session, evil: true }], /Invalid session/],
+      [IPC.workspaceTrack, [{ ...session, additionalDirectories: ["x"] }], /Invalid session/],
+      [IPC.workspaceUntrack, [""], /Invalid session id/],
+      [IPC.workspaceChanges, [42], /Invalid session id/],
+      [IPC.workspaceFileDiff, [{ ...file, path: "src/a.ts" }], /Invalid file/],
+      [IPC.workspaceListDirectory, [{ sessionId: "s1" }], /Invalid file/],
+      [IPC.workspaceReadFile, ["/Users/me/tally/a.ts"], /Invalid file/],
+      [IPC.workspaceRevert, [{ ...file, hunk: { ...hunk, lines: "x" } }], /Invalid revert/],
+      [IPC.workspaceWriteFile, [{ ...file, content: 7 }], /Invalid file/],
+      [IPC.workspaceWriteFile, [{ ...file, content: "x", expectedMtimeMs: -1 }], /Invalid file/],
+      [
+        IPC.workspaceWriteFile,
+        [{ ...file, content: "x".repeat(5 * 1024 * 1024 + 1) }],
+        /Invalid file/,
+      ],
+      [IPC.worktreesBranches, ["/Users/me/tally"], /Invalid project/],
+      [
+        IPC.worktreesCreate,
+        [{ projectDir: "/p", name: "Bad Name", base: "main" }],
+        /Invalid worktree/,
+      ],
+      [IPC.worktreesCreate, [{ projectDir: "/p", name: "../x", base: "main" }], /Invalid worktree/],
+      [IPC.worktreesCreate, [{ projectDir: "/p", name: "ok", base: "" }], /Invalid worktree/],
+      [IPC.worktreesCleanup, ["relative"], /Invalid worktree path/],
+      [IPC.terminalOpen, [{ sessionId: "s1", cwd: "/p", cols: 1, rows: 24 }], /Invalid terminal/],
+      [IPC.terminalOpen, [{ sessionId: "s1", cwd: "/p", cols: 80, rows: 501 }], /Invalid terminal/],
+      [IPC.terminalClose, [""], /Invalid terminal id/],
+      [IPC.terminalList, [undefined], /Invalid session id/],
+    ];
+    for (const [channel, args, message] of bad) {
+      await expect(handler(channel, target)("window-1", args)).rejects.toThrow(message);
+    }
+    expect(target.panes.calls).toEqual([]);
+  });
+
+  it("passes valid calls on, with the calling window as the owner of a tracked session", async () => {
+    const target = services();
+    const call = (channel: string, ...args: unknown[]) =>
+      handler(channel, target)("window-1", args);
+    await call(IPC.workspaceTrack, session);
+    await call(IPC.workspaceUntrack, "s1");
+    await call(IPC.workspaceChanges, "s1");
+    await call(IPC.workspaceFileDiff, file);
+    await call(IPC.workspaceRevert, { ...file, hunk });
+    await call(IPC.workspaceListDirectory, file);
+    await call(IPC.workspaceReadFile, file);
+    await call(IPC.workspaceWriteFile, { ...file, content: "x", expectedMtimeMs: 12.5 });
+    await call(IPC.worktreesBranches, { projectDir: "/Users/me/tally" });
+    await call(IPC.worktreesCreate, { projectDir: "/p", name: "fix-1", base: "main" });
+    await call(IPC.worktreesCleanup, "/p/.dawg/worktrees/fix-1");
+    await call(IPC.terminalOpen, { sessionId: "s1", cwd: "/p", cols: 80, rows: 24 });
+    await call(IPC.terminalClose, "t1");
+    await call(IPC.terminalList, "s1");
+    expect(target.panes.calls).toEqual([
+      ["track", { ...session, additionalDirectories: [] }, "owner:window-1"],
+      ["untrack", "s1", "owner:window-1"],
+      ["changes", "s1"],
+      ["fileDiff", file],
+      ["revert", { ...file, hunk }],
+      ["listDirectory", file],
+      ["readFile", file],
+      ["writeFile", { ...file, content: "x", expectedMtimeMs: 12.5 }],
+      ["branches", "/Users/me/tally"],
+      ["create", { projectDir: "/p", name: "fix-1", base: "main" }],
+      ["cleanup", "/p/.dawg/worktrees/fix-1"],
+      ["open", { sessionId: "s1", cwd: "/p", cols: 80, rows: 24 }],
+      ["close", "t1"],
+      ["list", "s1"],
+    ]);
+  });
+
+  it("drops invalid keystrokes and resizes, and passes valid ones on", () => {
+    const target = services();
+    const logs: string[] = [];
+    const send = createSendHandlers(target, (m) => logs.push(m));
+    const write = send[IPC.terminalWrite];
+    const resize = send[IPC.terminalResize];
+    if (!write || !resize) throw new Error("missing send handlers");
+    write("window-1", ["t1", "ls\r"]);
+    write("window-1", ["t1", 42]);
+    write("window-1", ["", "x"]);
+    write("window-1", ["t1", "x".repeat(1024 * 1024 + 1)]);
+    resize("window-1", ["t1", 120, 40]);
+    resize("window-1", ["t1", 1, 40]);
+    resize("window-1", ["t1", 80, 1.5]);
+    expect(target.panes.calls).toEqual([
+      ["write", "t1", "ls\r"],
+      ["resize", "t1", 120, 40],
+    ]);
+    expect(logs).toHaveLength(5);
+    expect(logs[0]).toMatch(/Dropped "dawg:terminal:write": Invalid terminal input/);
+  });
+
+  it("has a handler for every channel of the new bridge sections", () => {
+    const target = services();
+    const invoke = createInvokeHandlers(target);
+    const send = createSendHandlers(target, () => {});
+    const events = [IPC.workspaceChanged, IPC.terminalData, IPC.terminalExit];
+    const channels = Object.entries(IPC)
+      .filter(([name]) => /^(workspace|worktrees|terminal)/.test(name))
+      .map(([, channel]) => channel)
+      .filter((channel) => !(events as string[]).includes(channel));
+    for (const channel of channels) {
+      expect(invoke[channel] ?? send[channel]).toBeTypeOf("function");
+    }
   });
 });
 

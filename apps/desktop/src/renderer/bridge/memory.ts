@@ -1,8 +1,9 @@
 /**
  * The bridge outside Electron (the Vite dev server in a plain browser, previews, tests):
  * settings and window state in memory, saved to localStorage when there is one, a fake model
- * manager (downloads that progress on timers), and an engine running in the page, reached over a
- * real `MessageChannel` exactly as the app reaches the engine host.
+ * manager (downloads that progress on timers), a pretend workspace and shell (fake-workspace.ts,
+ * fake-terminal.ts), and an engine running in the page, reached over a real `MessageChannel`
+ * exactly as the app reaches the engine host.
  */
 import {
   createMessagePortTransport,
@@ -36,6 +37,12 @@ import {
   type FakeModelManager,
   type FakeModelManagerOptions,
 } from "./fake-models.ts";
+import { createFakeTerminal, type FakeTerminal } from "./fake-terminal.ts";
+import {
+  createFakeWorkspace,
+  type FakeWorkspace,
+  type FakeWorkspaceOptions,
+} from "./fake-workspace.ts";
 import { createPortHub } from "./port-hub.ts";
 import { validate } from "./validate.ts";
 
@@ -68,6 +75,8 @@ export interface MemoryBridgeOptions {
    * saved ones.
    */
   storage?: StorageLike | null;
+  /** The pretend workspace and worktrees (see fake-workspace.ts). */
+  workspace?: FakeWorkspaceOptions;
 }
 
 /** An in-memory bridge, also used by tests. */
@@ -76,6 +85,10 @@ export interface MemoryBridge extends DawgBridge {
   simulateEngineRestart(reason?: string): void;
   /** The fake model manager behind `models`, for tests to drive. */
   readonly modelManager: FakeModelManager;
+  /** The in-memory disk behind `workspace` and `worktrees`, for tests to drive. */
+  readonly fakeWorkspace: FakeWorkspace;
+  /** The pretend shells behind `terminal`. */
+  readonly fakeTerminal: FakeTerminal;
 }
 
 export const BROWSER_HOME_DIR = "/Users/you";
@@ -114,6 +127,9 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     ...options.modelTiming,
     state: options.models ? { ...modelsState, installed: options.models } : modelsState,
   });
+
+  const fakeWorkspace = createFakeWorkspace(options.workspace);
+  const fakeTerminal = createFakeTerminal();
 
   /** The engine sides of the ports handed out, closed on a simulated restart. */
   const engineEnds = new Set<Transport>();
@@ -178,6 +194,9 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
       onRestart: (listener) => subscribe(restartListeners, listener),
     },
     models: modelManager.api,
+    workspace: fakeWorkspace.workspace,
+    worktrees: fakeWorkspace.worktrees,
+    terminal: fakeTerminal.api,
     dialogs: {
       chooseFolder: async (folderOptions) => {
         validate(ChooseFolderOptionsSchema, folderOptions, "folder options");
@@ -191,6 +210,8 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
       },
     },
     modelManager,
+    fakeWorkspace,
+    fakeTerminal,
     simulateEngineRestart(reason = "The engine host restarted (simulated)") {
       for (const transport of [...engineEnds]) transport.close();
       if (!options.engine && defaultEngine) {

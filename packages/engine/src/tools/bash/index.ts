@@ -4,10 +4,13 @@ export {
   type BackgroundTaskStatus,
   BackgroundTasks,
   getBackgroundTasks,
+  type OutputPage,
+  readOutputPage,
   type StartTaskOptions,
   type StopReason,
   type TaskFinishedListener,
   type TaskOutputRead,
+  type TaskUpdatedListener,
 } from "./background.ts";
 export {
   BACKGROUND_MAX_TIMEOUT_MS,

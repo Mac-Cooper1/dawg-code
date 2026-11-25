@@ -20,6 +20,7 @@ import {
   type SettingsFileRef,
 } from "@dawg/compat";
 import {
+  type BackgroundTask,
   type ClientCapabilities,
   type ContentPart,
   type ContextBreakdown,
@@ -55,9 +56,14 @@ import type { Emit, LoopResult } from "../loop/types.ts";
 import { scheduledClient } from "../model/slots.ts";
 import { readDeniedBy } from "../permissions/index.ts";
 import type { SessionRecord, SessionWriter, StateChanges } from "../session/index.ts";
-import { type BackgroundTaskInfo, getBackgroundTasks } from "../tools/bash/index.ts";
+import {
+  type BackgroundTaskInfo,
+  getBackgroundTasks,
+  readOutputPage,
+} from "../tools/bash/index.ts";
 import { fileTracker } from "../tools/files/index.ts";
 import { NoOneToAskError, RequestDismissedError } from "../tools/interactive/index.ts";
+import { backgroundFromEvents, toBackgroundTask } from "./background.ts";
 import type { EngineContext } from "./context.ts";
 import { RuntimeError } from "./errors.ts";
 import { closeUnfinished, type EventLog, type LoggedEvent, type ReplayPage } from "./event-log.ts";
@@ -192,6 +198,10 @@ export class SessionRuntime {
   #title: string | null;
   #archived: boolean;
   #tasks: TaskItem[];
+  /** Background commands of this run and earlier ones, latest state, oldest first. */
+  #background = new Map<string, BackgroundTask>();
+  /** Output files of background commands from earlier runs, which the registry does not know. */
+  #backgroundPaths = new Map<string, string>();
   #dirs: string[];
   #forkPoint: Sidecar["forkPoint"];
 
@@ -295,6 +305,11 @@ export class SessionRuntime {
       this.#log.emit(event, fields);
     };
     this.#log.subscribe((event) => ctx.publish(event));
+    getBackgroundTasks(this.#bag).onUpdated((info) => {
+      const task = toBackgroundTask(info);
+      this.#background.set(task.taskId, task);
+      this.#emit("background.updated", { task });
+    });
   }
 
   /** Opens a runtime on a writer the engine has prepared. Repairs what a crash left behind. */
@@ -329,6 +344,10 @@ export class SessionRuntime {
       await this.#appendNote({ type: "interrupted" });
     }
     closeUnfinished(this.#log, this.#ctx.clock());
+    const stored = backgroundFromEvents(this.#log.all());
+    this.#background = stored.tasks;
+    this.#backgroundPaths = stored.outputPaths;
+    getBackgroundTasks(this.#bag).continueAfter(stored.highestNumber);
     await this.#saveSidecar();
   }
 
@@ -387,6 +406,64 @@ export class SessionRuntime {
   /** Commands started with `run_in_background` in this runtime, running or ended. */
   backgroundTasks(): BackgroundTaskInfo[] {
     return getBackgroundTasks(this.#bag).list();
+  }
+
+  /**
+   * The session's background commands as the protocol shows them, oldest first: this runtime's
+   * (a running one with its output so far) and those of earlier runs (rebuilt from the stored
+   * events, all ended).
+   */
+  background(): BackgroundTask[] {
+    const tasks = getBackgroundTasks(this.#bag);
+    return [...this.#background.values()].map((t) => {
+      const live = t.status === "running" ? tasks.get(t.taskId) : undefined;
+      return live === undefined ? { ...t } : toBackgroundTask(live);
+    });
+  }
+
+  /**
+   * A page of a background command's output (`background.output`): at most `limit` bytes from
+   * byte `offset`, never splitting a character. `done` is true once the command has ended and
+   * the page reaches the end of its output. `InvalidParams` for an unknown task.
+   */
+  async readBackgroundOutput(
+    taskId: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ text: string; nextOffset: number; totalBytes: number; done: boolean }> {
+    const live = getBackgroundTasks(this.#bag).get(taskId);
+    const file = live?.outputPath ?? this.#backgroundPaths.get(taskId);
+    const known = live !== undefined || this.#background.has(taskId);
+    if (!known) throw this.#unknownTask(taskId);
+    // The state comes first: once a task has ended its file is complete.
+    const ended = live === undefined || live.status !== "running";
+    if (file === undefined) return { text: "", nextOffset: 0, totalBytes: 0, done: ended };
+    const page = await readOutputPage(file, offset, limit);
+    return { ...page, done: ended && page.nextOffset >= page.totalBytes };
+  }
+
+  /**
+   * Stops a background command and everything it started, as the model's TaskStop does, and
+   * resolves once it has ended (`background.stop`). False when it had already ended.
+   * `InvalidParams` for an unknown task.
+   */
+  async stopBackground(taskId: string): Promise<boolean> {
+    const tasks = getBackgroundTasks(this.#bag);
+    const live = tasks.get(taskId);
+    if (live === undefined) {
+      if (this.#background.has(taskId)) return false;
+      throw this.#unknownTask(taskId);
+    }
+    if (live.status !== "running") return false;
+    await tasks.stop(taskId, "requested");
+    return true;
+  }
+
+  #unknownTask(taskId: string): RuntimeError {
+    return new RuntimeError(
+      "InvalidParams",
+      `There is no background task ${taskId} in this session.`,
+    );
   }
 
   /** The model's current view after the system message. Read-only. */
@@ -487,6 +564,7 @@ export class SessionRuntime {
       pending: [...this.#pending.values()].map((p) => p.ask),
       activeTurnId: this.activeTurnId,
       commands: [],
+      background: this.background(),
     };
   }
 

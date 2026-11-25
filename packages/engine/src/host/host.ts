@@ -278,6 +278,16 @@ export function createEngineHost(
       return { events: page.events, lastSeq: page.lastSeq, hasMore: page.hasMore };
     },
 
+    "background.output": async (params) => {
+      const runtime = await requireOpen(params.sessionId);
+      return runtime.readBackgroundOutput(params.taskId, params.offset, params.limit);
+    },
+
+    "background.stop": async (params) => {
+      const runtime = await requireOpen(params.sessionId);
+      return { stopped: await runtime.stopBackground(params.taskId) };
+    },
+
     "permission.respond": async (params) => {
       const runtime = await requireOpen(params.sessionId);
       runtime.respondPermission(params.requestId, params.response);

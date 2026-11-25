@@ -55,7 +55,8 @@ function expectNewFields(events: readonly EngineEvent[]): void {
     );
   }
   for (const { payload } of all(events, "tool.finished")) {
-    if (payload.display?.kind === "command")
+    // A command started in the background has printed nothing yet.
+    if (payload.display?.kind === "command" && payload.display.backgroundTaskId === null)
       expect(payload.display.output).toEqual(expect.any(String));
   }
   for (const { payload } of all(events, "plan.proposed")) {

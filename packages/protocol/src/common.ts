@@ -293,6 +293,32 @@ export type Timestamp = z.infer<typeof TimestampSchema>;
 export const SessionIdSchema = z.string().min(1);
 export type SessionId = z.infer<typeof SessionIdSchema>;
 
+// ---------------------------------------------------------------------------------------------
+// Background commands (Bash with run_in_background)
+// ---------------------------------------------------------------------------------------------
+
+export const BackgroundTaskSchema = z.object({
+  /** The id the model uses with TaskOutput and TaskStop. */
+  taskId: z.string().min(1),
+  command: z.string(),
+  /** The model's short description of the command, when it gave one. */
+  description: z.string().nullable(),
+  /** Directory the command started in (absolute). */
+  cwd: z.string(),
+  status: z.enum(["running", "completed", "failed", "stopped"]),
+  /** Null while it runs, and when a signal ended it. */
+  exitCode: z.number().int().nullable(),
+  /** The signal that ended it ("SIGTERM"), when one did. */
+  signal: z.string().nullable(),
+  /** Why dawg stopped it: asked to (by the person or the model), a limit, or the session ended. */
+  stopReason: z.enum(["requested", "time_limit", "output_limit", "session_end"]).nullable(),
+  startedAt: TimestampSchema,
+  endedAt: TimestampSchema.nullable(),
+  /** Output written so far, in bytes. */
+  outputBytes: z.number().int().nonnegative(),
+});
+export type BackgroundTask = z.infer<typeof BackgroundTaskSchema>;
+
 // Progress a running tool reports. Mirrors `ToolProgress` in the engine's tool contract.
 export const ToolProgressSchema = z.discriminatedUnion("kind", [
   z.object({

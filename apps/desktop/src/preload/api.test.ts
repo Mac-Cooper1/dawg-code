@@ -168,4 +168,109 @@ describe("preload API", () => {
     expect(states).toEqual(["a"]);
     expect(statuses).toEqual(["loading"]);
   });
+  it("validates workspace, worktree and terminal calls before they reach IPC", async () => {
+    const { ipc, invoked, sent } = fakeIpc();
+    const api = createPreloadApi(ipc, platform);
+    const file = { sessionId: "s1", path: "/p/a.ts" };
+    const bad = [
+      api.workspace.track({ sessionId: "s1", cwd: "p", projectDir: "/p" }),
+      // @ts-expect-error: unknown key
+      api.workspace.track({ sessionId: "s1", cwd: "/p", projectDir: "/p", extra: 1 }),
+      api.workspace.untrack(""),
+      api.workspace.changes("x".repeat(201)),
+      api.workspace.fileDiff({ ...file, path: "a.ts" }),
+      api.workspace.revert({
+        ...file,
+        hunk: { oldStart: -1, oldLines: 0, newStart: 0, newLines: 0, lines: [] },
+      }),
+      api.workspace.listDirectory({ ...file, path: "" }),
+      api.workspace.readFile({ sessionId: "", path: "/p/a.ts" }),
+      api.workspace.writeFile({ ...file, content: "x", expectedMtimeMs: -5 }),
+      api.worktrees.branches("relative"),
+      api.worktrees.create({ projectDir: "/p", name: "No Caps", base: "main" }),
+      api.worktrees.cleanup("relative"),
+      api.terminal.open({ sessionId: "s1", cwd: "/p", cols: 0, rows: 24 }),
+      api.terminal.close(""),
+      api.terminal.list(""),
+    ];
+    for (const call of bad) await expect(call).rejects.toThrow(/^Invalid /);
+    expect(() => api.terminal.write("", "x")).toThrow(/^Invalid terminal id/);
+    expect(() => api.terminal.write("t1", "x".repeat(1024 * 1024 + 1))).toThrow(
+      /^Invalid terminal input/,
+    );
+    expect(() => api.terminal.resize("t1", 80, 0)).toThrow(/^Invalid terminal size/);
+    expect(invoked).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it("sends workspace, worktree and terminal calls over their channels", async () => {
+    const { ipc, invoked } = fakeIpc();
+    const sentArgs: unknown[][] = [];
+    ipc.send = (channel, ...args) => {
+      sentArgs.push([channel, ...args]);
+    };
+    const api = createPreloadApi(ipc, platform);
+    const file = { sessionId: "s1", path: "/p/a.ts" };
+    await api.workspace.track({ sessionId: "s1", cwd: "/p", projectDir: "/p" });
+    await api.workspace.untrack("s1");
+    await api.workspace.changes("s1");
+    await api.workspace.fileDiff(file);
+    await api.workspace.revert(file);
+    await api.workspace.listDirectory(file);
+    await api.workspace.readFile(file);
+    await api.workspace.writeFile({ ...file, content: "x" });
+    await api.worktrees.branches("/p");
+    await api.worktrees.create({ projectDir: "/p", name: "w-1", base: "main" });
+    await api.worktrees.cleanup("/p/.dawg/worktrees/w-1");
+    await api.terminal.open({ sessionId: "s1", cwd: "/p", cols: 80, rows: 24 });
+    await api.terminal.close("t1");
+    await api.terminal.list("s1");
+    api.terminal.write("t1", "ls\r");
+    api.terminal.resize("t1", 100, 30);
+    expect(invoked).toEqual([
+      {
+        channel: IPC.workspaceTrack,
+        args: [{ sessionId: "s1", cwd: "/p", projectDir: "/p", additionalDirectories: [] }],
+      },
+      { channel: IPC.workspaceUntrack, args: ["s1"] },
+      { channel: IPC.workspaceChanges, args: ["s1"] },
+      { channel: IPC.workspaceFileDiff, args: [file] },
+      { channel: IPC.workspaceRevert, args: [file] },
+      { channel: IPC.workspaceListDirectory, args: [file] },
+      { channel: IPC.workspaceReadFile, args: [file] },
+      { channel: IPC.workspaceWriteFile, args: [{ ...file, content: "x" }] },
+      { channel: IPC.worktreesBranches, args: [{ projectDir: "/p" }] },
+      { channel: IPC.worktreesCreate, args: [{ projectDir: "/p", name: "w-1", base: "main" }] },
+      { channel: IPC.worktreesCleanup, args: ["/p/.dawg/worktrees/w-1"] },
+      { channel: IPC.terminalOpen, args: [{ sessionId: "s1", cwd: "/p", cols: 80, rows: 24 }] },
+      { channel: IPC.terminalClose, args: ["t1"] },
+      { channel: IPC.terminalList, args: ["s1"] },
+    ]);
+    expect(sentArgs).toEqual([
+      [IPC.terminalWrite, "t1", "ls\r"],
+      [IPC.terminalResize, "t1", 100, 30],
+    ]);
+  });
+
+  it("delivers file changes and terminal output pushed by main", () => {
+    const { ipc, emit, listeners } = fakeIpc();
+    const api = createPreloadApi(ipc, platform);
+    const seen: unknown[] = [];
+    const stops = [
+      api.workspace.onChanged((event) => seen.push(["changed", event.paths])),
+      api.terminal.onData((event) => seen.push(["data", event.data])),
+      api.terminal.onExit((event) => seen.push(["exit", event.exitCode])),
+    ];
+    emit(IPC.workspaceChanged, { sessionId: "s1", paths: ["/p/a.ts"] });
+    emit(IPC.terminalData, { terminalId: "t1", data: "hi" });
+    emit(IPC.terminalExit, { terminalId: "t1", exitCode: 0, signal: null });
+    for (const stop of stops) stop();
+    emit(IPC.terminalData, { terminalId: "t1", data: "late" });
+    expect(seen).toEqual([
+      ["changed", ["/p/a.ts"]],
+      ["data", "hi"],
+      ["exit", 0],
+    ]);
+    expect(listeners.get(IPC.terminalData)?.size).toBe(0);
+  });
 });

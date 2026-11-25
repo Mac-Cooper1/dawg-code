@@ -5,28 +5,60 @@
  */
 import {
   type AddedModelFile,
+  type BranchList,
+  type ChangeSet,
   type ChooseFolderOptions,
   ChooseFolderOptionsSchema,
   ConnectServerInputSchema,
+  CreateWorktreeInputSchema,
   type DesktopSettings,
+  type DirEntry,
   ExternalUrlSchema,
+  type FileContent,
+  type FileDiff,
+  FileRefSchema,
   IdleUnloadSchema,
   IPC,
   ModelIdSchema,
   type ModelOption,
   type ModelStatus,
   type ModelsState,
+  OpenTerminalInputSchema,
+  ProjectRefSchema,
+  RevertInputSchema,
   type ServerInfo,
+  SessionRefSchema,
+  TerminalIdSchema,
+  type TerminalInfo,
+  TerminalInputSchema,
+  type TerminalReattach,
+  TerminalSizeSchema,
+  TrackSessionInputSchema,
   type WindowState,
+  type WorkspaceInfo,
+  type WorktreeCleanup,
+  type WorktreeInfo,
+  WriteFileInputSchema,
 } from "../shared/bridge.ts";
 import type { ModelService } from "./models/service.ts";
 import type { SettingsStore, WindowStateStore } from "./stores.ts";
+import type { TerminalService } from "./terminal/service.ts";
 import { validateInput } from "./validate.ts";
+import type { WorkspaceService } from "./workspace/service.ts";
+import type { WorktreeService } from "./workspace/worktrees.ts";
+
+/** An absolute path (the contract's schema for one, taken from a schema that has it). */
+const AbsolutePathSchema = FileRefSchema.shape.path;
 
 export interface MainServices<Sender> {
   settings: SettingsStore;
   windowState: WindowStateStore;
   models: ModelService;
+  workspace: WorkspaceService;
+  worktrees: WorktreeService;
+  terminals: TerminalService;
+  /** A stable name for the sender's window: the sessions it tracks are released when it closes. */
+  ownerOf(sender: Sender): string;
   /** Which saved layout a sender uses. One window, "main", in this wave. */
   windowIdFor(sender: Sender): string;
   /** Called after every successful settings change, to apply the theme and tell every window. */
@@ -39,11 +71,16 @@ export interface MainServices<Sender> {
 
 export type InvokeHandler<Sender> = (sender: Sender, args: readonly unknown[]) => Promise<unknown>;
 
+/** A one-way message (`ipcRenderer.send`): nothing to answer, so bad input is only logged. */
+export type SendHandler<Sender> = (sender: Sender, args: readonly unknown[]) => void;
+
 export function createInvokeHandlers<Sender>(
   services: MainServices<Sender>,
 ): Record<string, InvokeHandler<Sender>> {
-  const { models } = services;
+  const { models, workspace, worktrees, terminals } = services;
   const modelId = (value: unknown) => validateInput(ModelIdSchema, value, "model id");
+  const sessionId = (value: unknown) => validateInput(SessionRefSchema, value, "session id");
+  const fileRef = (value: unknown) => validateInput(FileRefSchema, value, "file");
 
   return {
     [IPC.settingsGet]: async (): Promise<DesktopSettings> => services.settings.get(),
@@ -82,6 +119,37 @@ export function createInvokeHandlers<Sender>(
     [IPC.modelsRemoveServer]: async (_sender, [id]): Promise<void> =>
       models.removeServer(validateInput(ModelIdSchema, id, "server id")),
     [IPC.modelsRefreshServers]: async (): Promise<void> => models.refreshServers(),
+    [IPC.workspaceTrack]: async (sender, [input]): Promise<WorkspaceInfo> =>
+      workspace.track(
+        validateInput(TrackSessionInputSchema, input, "session"),
+        services.ownerOf(sender),
+      ),
+    [IPC.workspaceUntrack]: async (sender, [id]): Promise<void> =>
+      workspace.untrack(sessionId(id), services.ownerOf(sender)),
+    [IPC.workspaceChanges]: async (_sender, [id]): Promise<ChangeSet> =>
+      workspace.changes(sessionId(id)),
+    [IPC.workspaceFileDiff]: async (_sender, [ref]): Promise<FileDiff> =>
+      workspace.fileDiff(fileRef(ref)),
+    [IPC.workspaceRevert]: async (_sender, [input]): Promise<void> =>
+      workspace.revert(validateInput(RevertInputSchema, input, "revert")),
+    [IPC.workspaceListDirectory]: async (_sender, [ref]): Promise<DirEntry[]> =>
+      workspace.listDirectory(fileRef(ref)),
+    [IPC.workspaceReadFile]: async (_sender, [ref]): Promise<FileContent> =>
+      workspace.readFile(fileRef(ref)),
+    [IPC.workspaceWriteFile]: async (_sender, [input]): Promise<{ mtimeMs: number }> =>
+      workspace.writeFile(validateInput(WriteFileInputSchema, input, "file")),
+    [IPC.worktreesBranches]: async (_sender, [ref]): Promise<BranchList> =>
+      worktrees.branches(validateInput(ProjectRefSchema, ref, "project").projectDir),
+    [IPC.worktreesCreate]: async (_sender, [input]): Promise<WorktreeInfo> =>
+      worktrees.create(validateInput(CreateWorktreeInputSchema, input, "worktree")),
+    [IPC.worktreesCleanup]: async (_sender, [worktreePath]): Promise<WorktreeCleanup> =>
+      worktrees.cleanup(validateInput(AbsolutePathSchema, worktreePath, "worktree path")),
+    [IPC.terminalOpen]: async (_sender, [input]): Promise<TerminalInfo> =>
+      terminals.open(validateInput(OpenTerminalInputSchema, input, "terminal")),
+    [IPC.terminalClose]: async (_sender, [id]): Promise<void> =>
+      terminals.close(validateInput(TerminalIdSchema, id, "terminal id")),
+    [IPC.terminalList]: async (_sender, [id]): Promise<TerminalReattach[]> =>
+      terminals.list(sessionId(id)),
     [IPC.chooseFolder]: async (sender, [options]): Promise<string | null> =>
       services.chooseFolder(
         sender,
@@ -89,5 +157,37 @@ export function createInvokeHandlers<Sender>(
       ),
     [IPC.openExternal]: async (_sender, [url]): Promise<void> =>
       services.openExternal(validateInput(ExternalUrlSchema, url, "link")),
+  };
+}
+
+/**
+ * One-way messages: keystrokes and resizes, too frequent to answer. Input is validated all the
+ * same; anything invalid is dropped and logged.
+ */
+export function createSendHandlers<Sender>(
+  services: Pick<MainServices<Sender>, "terminals">,
+  log: (message: string) => void,
+): Record<string, SendHandler<Sender>> {
+  const { terminals } = services;
+  const guarded =
+    (channel: string, handle: (args: readonly unknown[]) => void): SendHandler<Sender> =>
+    (_sender, args) => {
+      try {
+        handle(args);
+      } catch (error) {
+        log(`Dropped "${channel}": ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+  return {
+    [IPC.terminalWrite]: guarded(IPC.terminalWrite, ([id, data]) => {
+      terminals.write(
+        validateInput(TerminalIdSchema, id, "terminal id"),
+        validateInput(TerminalInputSchema, data, "terminal input"),
+      );
+    }),
+    [IPC.terminalResize]: guarded(IPC.terminalResize, ([id, cols, rows]) => {
+      const size = validateInput(TerminalSizeSchema, { cols, rows }, "terminal size");
+      terminals.resize(validateInput(TerminalIdSchema, id, "terminal id"), size.cols, size.rows);
+    }),
   };
 }

@@ -3,6 +3,7 @@
  * stream that would not pass the protocol's schemas fails the test that builds it.
  */
 import {
+  type BackgroundTask,
   type EngineEvent,
   type EventName,
   type EventPayloadInput,
@@ -119,6 +120,28 @@ export function makeSnapshot(
       { name: "compact", description: "Summarise the conversation", argumentHint: "[focus]" },
       { name: "help", description: "Show help", argumentHint: null },
     ],
+    background: [],
+    ...overrides,
+  };
+}
+
+/** A background command as the engine reports it: running unless `overrides` says otherwise. */
+export function makeBackgroundTask(
+  taskId: string,
+  overrides: Partial<BackgroundTask> = {},
+): BackgroundTask {
+  return {
+    taskId,
+    command: "npm run dev",
+    description: "Start the dev server",
+    cwd: PROJECT,
+    status: "running",
+    exitCode: null,
+    signal: null,
+    stopReason: null,
+    startedAt: T0,
+    endedAt: null,
+    outputBytes: 0,
     ...overrides,
   };
 }

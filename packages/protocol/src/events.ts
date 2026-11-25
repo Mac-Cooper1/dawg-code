@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import {
+  BackgroundTaskSchema,
   ContentPartSchema,
   EffortSchema,
   ErrorInfoSchema,
@@ -252,6 +253,14 @@ export const TasksUpdatedEventSchema = EventBaseSchema.extend({
   tasks: z.array(TaskItemSchema),
 });
 
+/**
+ * Added: a background command started or ended (or was stopped). Carries the whole task, so the
+ * latest event for a `taskId` is its state. Output is read with `background.output`.
+ */
+export const BackgroundUpdatedEventSchema = EventBaseSchema.extend({
+  task: BackgroundTaskSchema,
+});
+
 export const UsageUpdatedEventSchema = EventBaseSchema.extend({
   usage: UsageSchema,
 });
@@ -318,6 +327,7 @@ export const events = {
   "plan.proposed": PlanProposedEventSchema,
   "request.resolved": RequestResolvedEventSchema,
   "tasks.updated": TasksUpdatedEventSchema,
+  "background.updated": BackgroundUpdatedEventSchema,
   "usage.updated": UsageUpdatedEventSchema,
   "prompt.progress": PromptProgressEventSchema,
   "compaction.started": CompactionStartedEventSchema,

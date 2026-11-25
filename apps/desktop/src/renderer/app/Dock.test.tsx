@@ -1,6 +1,25 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+
+// Each pane is tested in its own folder; here a stand-in shows which one the dock rendered.
+vi.mock("../panes/index.ts", () => {
+  const stand = (pane: string) => (props: { sessionId: string }) => (
+    <p>
+      {pane} pane for {props.sessionId}
+    </p>
+  );
+  return {
+    PANE_COMPONENTS: {
+      changes: stand("changes"),
+      files: stand("files"),
+      terminal: stand("terminal"),
+      plan: stand("plan"),
+      tasks: stand("tasks"),
+    },
+  };
+});
+
 import type { Pane } from "../../shared/bridge.ts";
 import { renderInTheme, THEMES } from "../test/render.tsx";
 import { Dock } from "./Dock.tsx";
@@ -33,35 +52,10 @@ describe.each(THEMES)("Dock (%s)", (theme) => {
     expect(screen.getByRole("tab", { name: /^Changes/ })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("shows the selected pane's empty state", () => {
+  it("shows the selected pane's own component, for the selected session", () => {
     setup(theme, "terminal");
     const panel = screen.getByRole("tabpanel");
-    expect(panel).toHaveTextContent("Terminal");
-    expect(panel).toHaveTextContent(
-      "Your own shell in the session’s folder. dawg never types here. It arrives in a later build.",
-    );
-  });
-
-  it("describes every pane", () => {
-    for (const [pane, line] of [
-      ["changes", "Every file this session changed, as a diff you can comment on."],
-      ["files", "The project’s files and an editor"],
-      ["plan", "The plan you approved, read-only."],
-      ["tasks", "dawg’s task list and background commands"],
-    ] as const) {
-      const { unmount } = renderInTheme(
-        <Dock
-          pane={pane}
-          view={sampleTitleBar()}
-          width={560}
-          onSelectPane={vi.fn()}
-          onClose={vi.fn()}
-        />,
-        theme,
-      );
-      expect(screen.getByRole("tabpanel")).toHaveTextContent(line);
-      unmount();
-    }
+    expect(panel).toHaveTextContent("terminal pane for fix");
   });
 
   it("switches panes by click and by arrow keys", async () => {

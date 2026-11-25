@@ -483,6 +483,91 @@ describe("commands through the protocol", () => {
   });
 });
 
+describe("background commands", () => {
+  it("sends their updates, serves their output and stops them", async () => {
+    s = await setup({
+      script: [
+        toolCall("Bash", {
+          command: "echo listening on 3000; sleep 30",
+          description: "Start the dev server",
+          run_in_background: true,
+        }),
+        text("started"),
+      ],
+    });
+    const c = await s.connect();
+    const other = await s.connect();
+    const snap = await c.client.request("session.create", {
+      cwd: s.project,
+      mode: "bypassPermissions",
+    });
+    const sessionId = snap.session.id;
+    expect(snap.background).toEqual([]);
+    const { turnId } = await c.client.request("session.prompt", {
+      sessionId,
+      prompt: ask("start the server"),
+    });
+    await c.waitFor(finished(sessionId, turnId));
+    const started = await c.waitFor((e) => e.event === "background.updated");
+    expect(started.payload).toMatchObject({
+      sessionId,
+      task: { taskId: "bash-1", status: "running", description: "Start the dev server" },
+    });
+
+    const deadline = Date.now() + 10_000;
+    let page = await c.client.request("background.output", { sessionId, taskId: "bash-1" });
+    while (page.text === "" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+      page = await c.client.request("background.output", { sessionId, taskId: "bash-1" });
+    }
+    expect(page).toEqual({
+      text: "listening on 3000\n",
+      nextOffset: 18,
+      totalBytes: 18,
+      done: false,
+    });
+    const tail = await c.client.request("background.output", {
+      sessionId,
+      taskId: "bash-1",
+      offset: 13,
+      limit: 2,
+    });
+    expect(tail).toMatchObject({ text: "30", nextOffset: 15 });
+
+    const unknown = await rpcError(
+      c.client.request("background.stop", { sessionId, taskId: "bash-7" }),
+    );
+    expect(unknown.code).toBe(ErrorCodes.InvalidParams);
+    expect(unknown.message).toBe("There is no background task bash-7 in this session.");
+    const notHere = await rpcError(
+      other.client.request("background.output", { sessionId, taskId: "bash-1" }),
+    );
+    expect(notHere.code).toBe(ErrorCodes.InvalidState);
+
+    expect(await c.client.request("background.stop", { sessionId, taskId: "bash-1" })).toEqual({
+      stopped: true,
+    });
+    const stopped = await c.waitFor(
+      (e) => e.event === "background.updated" && e.payload.task.status !== "running",
+    );
+    expect(stopped.payload).toMatchObject({
+      task: { taskId: "bash-1", status: "stopped", stopReason: "requested" },
+    });
+    expect(await c.client.request("background.stop", { sessionId, taskId: "bash-1" })).toEqual({
+      stopped: false,
+    });
+    expect(
+      await c.client.request("background.output", { sessionId, taskId: "bash-1" }),
+    ).toMatchObject({ done: true });
+
+    const resumed = await other.client.request("session.resume", { sessionId });
+    expect(resumed.background).toEqual([
+      expect.objectContaining({ taskId: "bash-1", status: "stopped" }),
+    ]);
+    expect(c.problems).toEqual([]);
+  });
+});
+
 describe("errors", () => {
   it("maps runtime errors to protocol codes", async () => {
     s = await setup();

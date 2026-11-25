@@ -38,7 +38,7 @@ export function TitleBar(props: TitleBarProps) {
           </Chip>
         )}
         {view.worktreeLabel && (
-          <Chip icon="branch" mono title="Runs in a worktree">
+          <Chip icon="branch" mono title={view.worktreeTitle ?? "Runs in a worktree"}>
             {view.worktreeLabel}
           </Chip>
         )}

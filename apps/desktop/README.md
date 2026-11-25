@@ -31,7 +31,7 @@ Run from this folder (pnpm runs through corepack: `corepack pnpm …`).
 | `corepack pnpm start` | Runs the built app |
 | `corepack pnpm typecheck` | `tsc` over the Node side and the web side |
 | `corepack pnpm test` | Vitest: `*.test.ts` in Node, `*.test.tsx` components in jsdom |
-| `corepack pnpm e2e` | Builds, then drives the app with Playwright: the shell checks (`e2e/app.spec.ts`) and a tour of every screen, decision card and the delete dialog that saves screenshots in both themes to `e2e/screenshots/tour/` (`e2e/tour.spec.ts`), both on the mock engine; and the real engine against the fake model server from `packages/mock-model`, through a relaunch (`e2e/real-engine.spec.ts`) |
+| `corepack pnpm e2e` | Builds, then drives the app with Playwright: the shell checks (`e2e/app.spec.ts`) and a tour of every screen, decision card and the delete dialog that saves screenshots in both themes to `e2e/screenshots/tour/` (`e2e/tour.spec.ts`), both on the mock engine; the real engine against the fake model server from `packages/mock-model`, through a relaunch (`e2e/real-engine.spec.ts`); and the side panes and a worktree session against a real git repository (`e2e/panes.spec.ts`) |
 
 Lint runs from the repo root: `pnpm lint` (Biome).
 
@@ -56,7 +56,9 @@ starts with nothing installed, so the welcome screen shows, and `?models=small` 
 
 The model manager (`src/main/models`) keeps what it installs in `<data root>/models.json`, and
 remote servers' keys encrypted with the Keychain (Electron's `safeStorage`) in
-`<data root>/server-keys.json`. Downloads go to the shared Hugging Face cache.
+`<data root>/server-keys.json`. Downloads go to the shared Hugging Face cache. The workspace
+service keeps each session's base commit (what the Changes pane compares with) in
+`<data root>/workspace.json`.
 
 ## Processes
 
@@ -88,6 +90,8 @@ Renderer (React, sandboxed) ──typed preload API──▶ Main ──▶ sett
 | `src/shared` | Contracts used on both sides: the bridge API and schemas, the main ⇄ engine host messages, mock model data |
 | `src/main`, `src/preload`, `src/engine-host` | The Electron side |
 | `src/main/models` | The model manager: state, downloads, the bundled runtime, servers and their keys |
+| `src/main/workspace` | Git and files for the panes (changes, diffs, reverts, listing, saving, watching), limited to a session's directories, and worktrees |
+| `src/main/terminal` | The person's shells (`node-pty`), batched to windows, with a backlog for reloads |
 | `src/engine-host` | The engine switch (`engine.ts`), the real engine (`real-engine.ts`) and its model provider |
 | `src/mock-engine` | The mock engine, its recorded sessions (`fixtures/`) and the recording format |
 | `src/renderer/bridge` | `getBridge()` and the in-memory bridge |
@@ -95,9 +99,19 @@ Renderer (React, sandboxed) ──typed preload API──▶ Main ──▶ sett
 | `src/renderer/app` | Window layout: title bar, panes dock, notices, theme |
 | `src/renderer/sidebar`, `composer`, `settings` | Those parts of the window (Settings → Models is `settings/ModelsPage.tsx`) |
 | `src/renderer/onboarding`, `models` | The first run (welcome, download, start) and the model pieces it shares with Settings |
+| `src/renderer/panes` | The side panes, one folder each (`changes`, `files`, `terminal`, `plan`, `tasks`), registered in `panes/index.ts` |
+| `src/renderer/code` | Monaco, loaded on first use, with its worker, themes and the editor and diff components the panes share |
 | `src/renderer/transcript`, `cards`, `markdown` | Transcript items, decision cards, streaming Markdown |
 | `src/renderer/ui`, `styles`, `lib` | Shared primitives, design tokens, formatting helpers |
 | `e2e` | Playwright tests that drive the built app |
+
+## Native modules
+
+`node-pty` is the only one. It ships prebuilt binaries for macOS on arm64 and x64, built against
+Node-API, so Electron loads them as they are and its install scripts stay off
+(`allowBuilds` in `pnpm-workspace.yaml`). Version 1.1.0 ships its `spawn-helper` without the
+executable bit; the terminal service sets it before the first shell starts. A packaged build
+(Phase 5) must keep `node-pty` outside the asar archive.
 
 ## Conventions
 

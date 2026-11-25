@@ -1,0 +1,55 @@
+/* The code views: the box Monaco fills, its loading line, and the marks it draws in the margin. */
+
+.host {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+/* The "+" beside the hovered line (mockup .addc). */
+.addGlyph {
+  cursor: pointer;
+}
+
+.addGlyph::before {
+  content: "+";
+  display: block;
+  width: 15px;
+  height: 15px;
+  margin: 2px auto 0;
+  border-radius: 4px;
+  background: var(--acc);
+  color: var(--acc-ink);
+  font: 700 12px / 15px var(--sans);
+  text-align: center;
+}
+
+/* Lines with a comment waiting to be sent (mockup .cmt-s). */
+.commentedLine {
+  background: var(--sel);
+}
+
+.commentGlyph::before {
+  content: "";
+  display: block;
+  width: 9px;
+  height: 9px;
+  margin: 5px auto 0;
+  border-radius: 50% 50% 50% 0;
+  background: var(--acc-text);
+}

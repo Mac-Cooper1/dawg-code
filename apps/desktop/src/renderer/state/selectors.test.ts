@@ -444,6 +444,7 @@ describe("selectTitleBar", () => {
       title: "New session",
       projectName: "tally",
       worktreeLabel: "worktree · split-cents",
+      worktreeTitle: "Runs in a worktree",
       changes: { files: 2, additions: 12, deletions: 3 },
       tasks: { done: 1, total: 3 },
     });

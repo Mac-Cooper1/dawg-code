@@ -159,7 +159,9 @@ describe.each(BUILT_IN_SCENARIOS.map((s) => [s.scenario.id, s] as const))(
             ).toBe(usage.contextUsed);
           }
           if (event === "tool.finished" && payload.display?.kind === "command") {
-            expect(payload.display.output, where).toEqual(expect.any(String));
+            // A command started in the background has printed nothing yet: output is null.
+            const output = payload.display.backgroundTaskId === null ? expect.any(String) : null;
+            expect(payload.display.output, where).toEqual(output);
             expect(payload.display.notes, where).toEqual(expect.any(Array));
           }
         }

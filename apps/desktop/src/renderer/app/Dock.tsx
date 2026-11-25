@@ -1,7 +1,8 @@
 import { Tabs } from "radix-ui";
 import type { Pane } from "../../shared/bridge.ts";
+import { PANE_COMPONENTS } from "../panes/index.ts";
 import type { TitleBarView } from "../state/types.ts";
-import { Icon, IconButton } from "../ui/index.ts";
+import { IconButton } from "../ui/index.ts";
 import styles from "./Dock.module.css";
 import { PANES, paneCount } from "./panes.ts";
 
@@ -19,8 +20,8 @@ function isPane(value: string): value is Pane {
 }
 
 /**
- * The pane dock at the right of the window: a tab per pane and a close button. The panes arrive
- * in later builds; each shows what it will hold.
+ * The pane dock at the right of the window: a tab per pane and a close button. Each pane is its
+ * own component (`src/renderer/panes/<pane>/`), shown for the selected session.
  */
 export function Dock(props: DockProps) {
   return (
@@ -54,15 +55,15 @@ export function Dock(props: DockProps) {
           <span className={styles.grow} />
           <IconButton icon="close" label="Close the panes" onClick={props.onClose} />
         </div>
-        {PANES.map((pane) => (
-          <Tabs.Content key={pane.id} value={pane.id} className={styles.body}>
-            <div className={styles.empty}>
-              <Icon name={pane.icon} size={20} />
-              <h2 className={styles.emptyTitle}>{pane.label}</h2>
-              <p className={styles.emptyText}>{pane.description} It arrives in a later build.</p>
-            </div>
-          </Tabs.Content>
-        ))}
+        {PANES.map((pane) => {
+          const Body = PANE_COMPONENTS[pane.id];
+          const sessionId = props.view.sessionId;
+          return (
+            <Tabs.Content key={pane.id} value={pane.id} className={styles.body}>
+              {sessionId !== null && <Body sessionId={sessionId} />}
+            </Tabs.Content>
+          );
+        })}
       </Tabs.Root>
     </aside>
   );

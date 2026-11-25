@@ -82,25 +82,3 @@
 .body:focus-visible {
   outline-offset: -2px;
 }
-
-.empty {
-  padding: 48px 32px;
-  text-align: center;
-  color: var(--ink-3);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.emptyTitle {
-  margin: 0;
-  font-size: var(--text);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.emptyText {
-  margin: 0;
-  max-width: 340px;
-}

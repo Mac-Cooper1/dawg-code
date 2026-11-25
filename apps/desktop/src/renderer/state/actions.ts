@@ -14,11 +14,16 @@ import {
 } from "@dawg/protocol";
 import type { StoreApi } from "zustand";
 import type {
+  BranchList,
   DawgBridge,
   DesktopSettingsPatch,
   ModelStatus,
   ModelsState,
+  TrackSessionInput,
+  WorkspaceInfo,
+  WorktreeInfo,
 } from "../../shared/bridge.ts";
+import { basename } from "../lib/format.ts";
 import { nextMode } from "../lib/modes.ts";
 import type { FrameScheduler } from "./batcher.ts";
 import { createEngineConnection, type EngineConnection, type SyncInfo } from "./connection.ts";
@@ -40,9 +45,11 @@ import type {
   AppStore,
   EngineSlice,
   Layout,
+  NewSessionOffer,
   Notice,
   OnboardingState,
   ReducerInput,
+  SessionView,
   UiState,
 } from "./types.ts";
 import {
@@ -52,6 +59,7 @@ import {
   createWindowStateSaver,
   windowStateOf,
 } from "./window-state.ts";
+import { orderBranches, suggestWorktreeName } from "./worktree-names.ts";
 
 export interface RuntimeDeps {
   bridge: DawgBridge;
@@ -96,6 +104,23 @@ function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T
   return rest;
 }
 
+/** What `workspace.track` is told about a session: its directories. */
+function trackInputOf(
+  session: Pick<SessionView, "id" | "summary" | "additionalDirectories">,
+): TrackSessionInput {
+  return {
+    sessionId: session.id,
+    cwd: session.summary.cwd,
+    projectDir: session.summary.projectDir,
+    additionalDirectories: session.additionalDirectories,
+  };
+}
+
+/** Tracking again is needed only when the directories change. */
+function trackKeyOf(input: TrackSessionInput): string {
+  return [input.cwd, input.projectDir, ...(input.additionalDirectories ?? [])].join("\n");
+}
+
 export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Runtime {
   const { bridge } = deps;
   const get = store.getState;
@@ -113,6 +138,12 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
   /** Requests waiting on the engine while it may be loading a model (see connection.ts). */
   let modelWaits = 0;
   let loadingNoticeShown = false;
+  /** Settles the `newSession` call waiting on the new-session dialog. */
+  let offerResolve: ((id: SessionId | null) => void) | null = null;
+  /** The last session started from the dialog went into a worktree: the box starts checked. */
+  let lastChoseWorktree = false;
+  /** The latest `workspace.track` per session, with the directories it sent. */
+  const tracking = new Map<SessionId, { key: string; promise: Promise<WorkspaceInfo | null> }>();
 
   // --- State helpers -------------------------------------------------------------------------
 
@@ -156,6 +187,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     if (slice === before) return;
     const { ui, ended, removed } = followUps(prev, slice);
     store.setState({ ...slice, ui });
+    for (const id of removed) void forgetWorkspace(id);
     const selected = prev.layout.selectedSessionId;
     if (selected !== null && removed.includes(selected)) {
       // Its neighbour in the sidebar as it was, among the sessions that are still there.
@@ -239,6 +271,164 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     } catch (error) {
       notice(`Could not load “${snapshot.session.title ?? "New session"}”: ${errorText(error)}.`);
     }
+  }
+
+  // --- Workspaces, worktrees and terminals -------------------------------------------------------
+
+  /**
+   * Registers a session's directories with main (see `trackSession`). `input` is for a session
+   * the store does not hold yet (one just created).
+   */
+  function track(sessionId: SessionId, input?: TrackSessionInput): Promise<WorkspaceInfo | null> {
+    const session = get().sessions[sessionId];
+    const request = input ?? (session ? trackInputOf(session) : null);
+    if (request === null) return Promise.resolve(null);
+    const key = trackKeyOf(request);
+    const current = tracking.get(sessionId);
+    if (current?.key === key) return current.promise;
+    const promise: Promise<WorkspaceInfo | null> = Promise.resolve()
+      .then(() => bridge.workspace.track(request))
+      .then(
+        (info) => {
+          if (tracking.get(sessionId)?.promise === promise) {
+            store.setState({ workspaces: { ...get().workspaces, [sessionId]: info } });
+          }
+          return info;
+        },
+        () => {
+          // Main could not track it (a folder that is gone): the panes say so when asked.
+          if (tracking.get(sessionId)?.promise === promise) tracking.delete(sessionId);
+          return null;
+        },
+      );
+    tracking.set(sessionId, { key, promise });
+    return promise;
+  }
+
+  /** The session is gone from this window: main stops watching its files. */
+  async function forgetWorkspace(sessionId: SessionId): Promise<void> {
+    const known = tracking.delete(sessionId);
+    const workspaces = withoutKey(get().workspaces, sessionId);
+    if (workspaces !== get().workspaces) store.setState({ workspaces });
+    if (!known) return;
+    try {
+      await bridge.workspace.untrack(sessionId);
+    } catch {
+      // Nothing to undo: main forgets sessions with the window anyway.
+    }
+  }
+
+  /** Ends the session's terminals: they live only while the session is open. */
+  async function closeTerminals(sessionId: SessionId): Promise<void> {
+    try {
+      const open = await bridge.terminal.list(sessionId);
+      await Promise.all(
+        open.map((terminal) => bridge.terminal.close(terminal.terminalId).catch(() => {})),
+      );
+    } catch {
+      // No terminals, or main has already closed them.
+    }
+  }
+
+  /** The worktree a session runs in, if it does. */
+  function worktreePathOf(sessionId: SessionId): string | null {
+    const worktree = get().workspaces[sessionId]?.git?.worktree;
+    if (worktree) return worktree.path;
+    const summary = get().sessions[sessionId]?.summary;
+    return summary && summary.cwd !== summary.projectDir ? summary.cwd : null;
+  }
+
+  /** Removes a finished session's worktree if it is clean and merged, saying what happened. */
+  async function cleanUpWorktree(worktreePath: string): Promise<void> {
+    try {
+      const outcome = await bridge.worktrees.cleanup(worktreePath);
+      notice(
+        outcome.removed
+          ? "Removed the worktree."
+          : `Kept the worktree: ${outcome.reason ?? "it could not be removed."}`,
+        "neutral",
+      );
+    } catch (error) {
+      notice(`Could not clean up the worktree: ${errorText(error)}.`);
+    }
+  }
+
+  async function branchesOf(projectDir: string): Promise<BranchList | null> {
+    try {
+      return await bridge.worktrees.branches(projectDir);
+    } catch {
+      // Without an answer the session starts in the folder, as for any other folder.
+      return null;
+    }
+  }
+
+  function patchOffer(patch: Partial<NewSessionOffer>): void {
+    const offer = get().newSessionOffer;
+    if (offer) store.setState({ newSessionOffer: { ...offer, ...patch } });
+  }
+
+  /** Opens the new-session dialog; settles once the person has answered it. */
+  function offerNewSession(projectDir: string, list: BranchList): Promise<SessionId | null> {
+    // A dialog already open gives way to the new one.
+    offerResolve?.(null);
+    const branches = orderBranches(list.current, list.branches);
+    const offer: NewSessionOffer = {
+      projectDir,
+      projectName: get().projects[projectDir]?.name ?? basename(projectDir),
+      branches,
+      current: list.current,
+      suggestedName: suggestWorktreeName(branches),
+      worktree: lastChoseWorktree,
+      busy: false,
+      error: null,
+    };
+    store.setState({ newSessionOffer: offer });
+    return new Promise((resolve) => {
+      offerResolve = resolve;
+    });
+  }
+
+  /** Closes the dialog and hands its answer to the waiting `newSession`. */
+  function settleOffer(id: SessionId | null): void {
+    const resolve = offerResolve;
+    offerResolve = null;
+    if (get().newSessionOffer !== null) store.setState({ newSessionOffer: null });
+    resolve?.(id);
+  }
+
+  /**
+   * `session.create` in the project folder, or in a worktree made for it. The session is
+   * tracked at once, so the commit its changes are compared with is where it started.
+   */
+  async function createSession(
+    projectDir: string,
+    worktree: WorktreeInfo | null,
+  ): Promise<SessionId | null> {
+    const cwd = worktree?.path ?? projectDir;
+    // Sessions store the model they use, so it is always one the picker knows.
+    const model = get().modelsState?.defaultModelId ?? null;
+    const snapshot = await request("Could not start a session", () =>
+      connection.request("session.create", {
+        cwd,
+        ...(worktree ? { projectDir } : {}),
+        ...(model === null ? {} : { model }),
+      }),
+    );
+    if (!snapshot) {
+      // The worktree was made for this session only.
+      if (worktree) void bridge.worktrees.cleanup(worktree.path).catch(() => {});
+      return null;
+    }
+    void track(
+      snapshot.session.id,
+      trackInputOf({
+        id: snapshot.session.id,
+        summary: snapshot.session,
+        additionalDirectories: snapshot.additionalDirectories,
+      }),
+    );
+    await adoptAndSelect(snapshot);
+    return snapshot.session.id;
   }
 
   // --- Sending ---------------------------------------------------------------------------------
@@ -526,6 +716,22 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     );
     unsubscribe.push(() => saver.flush());
 
+    // The session the window shows is tracked, and tracked again when its directories change.
+    let shownKey = "";
+    unsubscribe.push(
+      store.subscribe((state) => {
+        const id = state.layout.selectedSessionId;
+        const session = id === null ? undefined : state.sessions[id];
+        const key =
+          session && !session.summary.archived
+            ? `${session.id}\n${trackKeyOf(trackInputOf(session))}`
+            : "";
+        if (key === shownKey) return;
+        shownKey = key;
+        if (session && key !== "") void track(session.id);
+      }),
+    );
+
     await connection.start();
   }
 
@@ -558,6 +764,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     stop() {
       if (stopped) return;
       stopped = true;
+      settleOffer(null);
       connection.stop();
       for (const stop of unsubscribe.splice(0)) stop();
     },
@@ -594,16 +801,49 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         }
       }
       if (dir === null) return null;
-      const cwd = dir;
-      // Sessions store the model they use, so it is always one the picker knows.
-      const model = get().modelsState?.defaultModelId ?? null;
-      const snapshot = await request("Could not start a session", () =>
-        connection.request("session.create", model === null ? { cwd } : { cwd, model }),
+      const projectDir = dir;
+      const choice = options?.worktree;
+      if (choice === undefined) {
+        const list = await branchesOf(projectDir);
+        if (list?.isRepo) return offerNewSession(projectDir, list);
+        return createSession(projectDir, null);
+      }
+      if (choice === false) return createSession(projectDir, null);
+      const made = await request("Could not make the worktree", () =>
+        bridge.worktrees.create({ projectDir, name: choice.name, base: choice.base }),
       );
-      if (!snapshot) return null;
-      await adoptAndSelect(snapshot);
-      return snapshot.session.id;
+      return made ? createSession(projectDir, made) : null;
     },
+    async answerNewSessionOffer(answer) {
+      const offer = get().newSessionOffer;
+      if (!offer || offer.busy) return;
+      if (answer === null) {
+        settleOffer(null);
+        return;
+      }
+      lastChoseWorktree = answer.worktree !== null;
+      let made: WorktreeInfo | null = null;
+      if (answer.worktree !== null) {
+        patchOffer({ busy: true, error: null });
+        try {
+          made = await bridge.worktrees.create({
+            projectDir: offer.projectDir,
+            name: answer.worktree.name,
+            base: answer.worktree.base,
+          });
+        } catch (error) {
+          // The dialog stays open, so another name or base can be tried.
+          patchOffer({ busy: false, error: sentence(error) });
+          return;
+        }
+      }
+      const resolve = offerResolve;
+      offerResolve = null;
+      store.setState({ newSessionOffer: null });
+      const id = await createSession(offer.projectDir, made);
+      resolve?.(id);
+    },
+    trackSession: (id) => track(id),
     async renameSession(id, title) {
       const trimmed = title.trim();
       if (trimmed === "") return;
@@ -621,13 +861,20 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       return snapshot.session.id;
     },
     async archiveSession(id, archived = true) {
+      const worktree = worktreePathOf(id);
       const result = await request(
         archived ? "Could not archive the session" : "Could not unarchive the session",
         () => connection.request("session.archive", { sessionId: id, archived }),
       );
-      if (result) applyResult([{ type: "summaries", sessions: [result.session] }]);
+      if (!result) return;
+      applyResult([{ type: "summaries", sessions: [result.session] }]);
+      if (!archived) return;
+      await closeTerminals(id);
+      await forgetWorkspace(id);
+      if (worktree !== null) await cleanUpWorktree(worktree);
     },
     async deleteSession(id) {
+      const worktree = worktreePathOf(id);
       try {
         await connection.request("session.delete", { sessionId: id });
       } catch (error) {
@@ -639,6 +886,9 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       }
       connection.forgetSession(id);
       applyResult([{ type: "deleted", sessionId: id }]);
+      await closeTerminals(id);
+      await forgetWorkspace(id);
+      if (worktree !== null) await cleanUpWorktree(worktree);
     },
     markUnread(id) {
       setUi((ui) =>
@@ -865,6 +1115,20 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       await request("Could not send your answer", () =>
         connection.request("plan.respond", { sessionId, requestId, response }),
       );
+    },
+
+    async readBackgroundOutput(sessionId, taskId, offset) {
+      try {
+        return await connection.request("background.output", { sessionId, taskId, offset });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async stopBackground(sessionId, taskId) {
+      const result = await request("Could not stop the command", () =>
+        connection.request("background.stop", { sessionId, taskId }),
+      );
+      return result !== null;
     },
 
     setItemOpen(sessionId, itemId, open) {

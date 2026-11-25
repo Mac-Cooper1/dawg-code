@@ -3,3 +3,8 @@ packages:
   - "packages/*"
   - "evals/runner"
   - "evals/proxy"
+
+# Dependencies whose install scripts may run. node-pty's are not needed on macOS: it ships
+# prebuilt binaries for arm64 and x64 built against Node-API, which Electron loads as they are.
+allowBuilds:
+  node-pty: false

@@ -4,6 +4,7 @@
  * the state and sends it to those connections, in that order.
  */
 import type {
+  BackgroundTask,
   CommandInfo,
   EngineEvent,
   EventName,
@@ -16,6 +17,7 @@ import type {
 } from "@dawg/protocol";
 import { findMockModel } from "../shared/mock-models.ts";
 import type { MockClock } from "./api.ts";
+import { withOutput } from "./background.ts";
 import type { LoadedScenario } from "./format.ts";
 import { IdScope } from "./ids.ts";
 import type { Player } from "./player.ts";
@@ -112,6 +114,8 @@ export class MockSession {
   readonly origins = new Map<string, { recordedId: string; scope: IdScope }>();
   /** Requests answered while the recording that raised them still plays. */
   readonly answeredEarly = new Set<string>();
+  /** What each background command printed, by task id (the scenario's `backgroundOutput`). */
+  readonly backgroundOutput = new Map<string, string>();
   readonly #hooks: SessionHooks;
   #seq = 0;
   #turnEnding = false;
@@ -181,6 +185,16 @@ export class MockSession {
     if (event.event === "session.updated" && options.applySettings) {
       this.#takeSettings(event.payload, event.payload.changed);
     }
+    if (event.event === "background.updated") {
+      // The task's times move with the event's.
+      const shift = time - event.payload.time;
+      const task = event.payload.task;
+      (fields as { task: BackgroundTask }).task = {
+        ...task,
+        startedAt: task.startedAt + shift,
+        endedAt: task.endedAt === null ? null : task.endedAt + shift,
+      };
+    }
     this.#append(event.event, fields as Fields<EventName>, time, true);
   }
 
@@ -227,6 +241,18 @@ export class MockSession {
       case "request.resolved": {
         const requestId = String(fields.requestId);
         if (this.answeredEarly.delete(requestId) || !this.state.pending.has(requestId)) return;
+        break;
+      }
+      case "background.updated": {
+        // A task starts when its event is played; it ends now, keeping the start it had.
+        const task = fields.task as BackgroundTask;
+        const now = this.#hooks.clock.now();
+        const startedAt = this.state.background.get(task.taskId)?.startedAt ?? now;
+        fields.task = {
+          ...task,
+          startedAt,
+          endedAt: task.endedAt === null ? null : Math.max(startedAt, now),
+        };
         break;
       }
       case "tool.finished":
@@ -357,6 +383,9 @@ export class MockSession {
       pending: [...this.state.pending.values()],
       activeTurnId: this.state.turn?.turnId ?? null,
       commands: COMMANDS.map((c) => ({ ...c })),
+      background: [...this.state.background.values()].map((task) =>
+        withOutput(task, this.backgroundOutput.get(task.taskId)),
+      ),
     };
   }
 }

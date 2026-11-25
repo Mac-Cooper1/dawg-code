@@ -81,6 +81,9 @@ filled in.
 | `rename(title)`, `setArchived(archived)` | | |
 | `compact(focus?) => Promise<CompactionOutcome>` | `/compact` | Not during a turn |
 | `contextUsage()` | `/context` | `{ contextWindow, contextUsed, measured, compactAt, breakdown }`: after a request the same numbers as `usage`, before one an estimate |
+| `background() => BackgroundTask[]` | snapshot `background` | The session's background commands, oldest first; see "Background commands" |
+| `readBackgroundOutput(taskId, offset, limit)` | `background.output` | `{ text, nextOffset, totalBytes, done }` |
+| `stopBackground(taskId) => Promise<boolean>` | `background.stop` | Resolves once the command has ended; false when it had ended already |
 | `snapshot() => SessionSnapshot` | create/resume/fork result | `commands` is left empty for the command registry |
 | `summary() => SessionSummary` | | |
 | `subscribe(listener)`, `eventsAfter(afterSeq, limit?)`, `lastSeq` | events, `session.replay` | |
@@ -88,8 +91,9 @@ filled in.
 | `close()` | | Interrupts a running turn, stops background commands, flushes and releases the transcript |
 | `id`, `cwd`, `projectDir`, `mode`, `status`, `busy`, `closed`, `activeTurnId`, `modelSetting`, `effort`, `additionalDirectories`, `tasks`, `view`, `prefix`, `requestMessages()`, `modelInfo()`, `pending()`, `backgroundTasks()`, `capabilities` | | Read-only views |
 
-Errors are `RuntimeError` with `code` `SessionNotFound`, `SessionBusy`, `InvalidState` or
-`RequestNotFound`, named after the protocol errors they map to.
+Errors are `RuntimeError` with `code` `SessionNotFound`, `SessionBusy`, `InvalidState`,
+`RequestNotFound` or `InvalidParams` (an unknown background task), named after the protocol
+errors they map to.
 
 ## Events and their numbers
 
@@ -111,11 +115,39 @@ gap across an ordinary restart; after a crash it continues above every number th
 been used, leaving a gap, which replays allow.
 
 On reopening, anything the crash left open (a turn, a message, a tool call, a request, a
-compaction) is closed with the events a client expects (`request.resolved` cancelled,
-`tool.finished` interrupted, `turn.finished` interrupted, `session.status` idle). A session with
+compaction, a background command) is closed with the events a client expects
+(`request.resolved` cancelled, `tool.finished` interrupted, `turn.finished` interrupted,
+`background.updated` stopped with reason `session_end`, `session.status` idle). A session with
 no event log (a fork, or a transcript written by another tool) gets events rebuilt from its
 transcript, numbered from 1. `<session dir>/runtime.json` caches mode, model, effort, last `seq`
 and whether the last turn failed, so listing never replays transcripts.
+
+## Background commands
+
+Bash with `run_in_background` starts a command in the session's registry
+(`../tools/bash/background.ts`), which lives in memory for one run of the session. The runtime
+turns it into events: `background.updated` with the whole task (`BackgroundTask`) when a command
+starts, and again when it ends, whether it exited, was stopped (by `background.stop`, the model's
+TaskStop, a time or output limit) or went with the session on close. The events are stored like
+other non-streaming events, so a replay rebuilds the list; the latest event for a `taskId` is its
+state.
+
+- `background()` (the snapshot's `background`) lists this run's commands, a running one with its
+  output so far, and those of earlier runs, rebuilt from the stored events. Those have all ended:
+  closing a session stops its commands. Oldest first.
+- Task ids (`bash-<n>`) continue across resumes and forks, after the highest id the stored events
+  name, so the model and clients never see one id used for two commands.
+- `readBackgroundOutput(taskId, offset, limit)` reads the command's output file: at most `limit`
+  bytes from byte `offset`, as plain text (control sequences were removed as it was written),
+  never splitting a UTF-8 character. A page ends before a character cut off at the limit, an
+  offset inside a character moves on to the next one, and a page holds at least one whole
+  character, so paging by `nextOffset` always moves on. `totalBytes` is the file's size; `done`
+  is true once the command has ended and the page reaches the end. Commands of earlier runs are
+  read from the output file the Bash call's result named.
+- `stopBackground(taskId)` stops the command and everything it started, as TaskStop does (reason
+  `requested`), and resolves once it has ended. False when it had ended already. The model hears
+  of it through the usual note at the next safe point.
+- An unknown task id is `InvalidParams`.
 
 ## Turns, history and persistence
 

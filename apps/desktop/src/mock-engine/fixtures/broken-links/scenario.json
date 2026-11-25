@@ -13,5 +13,8 @@
   "live": null,
   "queuedBehind": null,
   "branches": {},
-  "turns": []
+  "turns": [],
+  "backgroundOutput": {
+    "bash-1": "\n> dawg-site@0.4.0 dev ~/code/dawg-site\n> astro dev\n\n09:00:13 [types] Generated 231ms\n09:00:13 [content] Syncing content\n09:00:13 [content] Synced content\n\n astro  v5.13.2 ready in 604 ms\n\n┃ Local    http://localhost:4321/\n┃ Network  use --host to expose\n\n09:00:13 watching for file changes...\n09:00:15 [200] /guide/models 38ms\n09:00:15 [200] /guide/worktrees 11ms\n"
+  }
 }

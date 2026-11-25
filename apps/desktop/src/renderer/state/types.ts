@@ -16,6 +16,7 @@
  * This file is a contract. Add fields freely; rename or remove only deliberately.
  */
 import type {
+  BackgroundTask,
   CommandInfo,
   ContentPart,
   ContextBreakdown,
@@ -52,6 +53,7 @@ import type {
   ServerInfo,
   ToolCallDisplay,
   WindowState,
+  WorkspaceInfo,
 } from "../../shared/bridge.ts";
 import type { SessionInternals } from "./internals.ts";
 
@@ -68,6 +70,7 @@ export type {
   ServerInfo,
   ToolCallDisplay,
   WindowState,
+  WorkspaceInfo,
 };
 
 // =============================================================================================
@@ -301,6 +304,11 @@ export interface SessionView {
   modelInfo: ModelInfo | null;
   additionalDirectories: string[];
   tasks: TaskItem[];
+  /**
+   * The session's background commands, oldest first, each as its latest `background.updated`
+   * (or the snapshot) says.
+   */
+  background: BackgroundTask[];
   usage: Usage | null;
   commands: CommandInfo[];
   activeTurnId: string | null;
@@ -345,6 +353,36 @@ export interface Notice {
   /** One line: "The engine restarted. Sessions were resumed from their transcripts." */
   text: string;
   tone: "neutral" | "error";
+}
+
+/** Where a new session in a git project runs: a new worktree from `base`, named `name`. */
+export interface WorktreeChoice {
+  /** Lowercase letters, digits and dashes: the worktree is `.dawg/worktrees/<name>`. */
+  name: string;
+  /** The branch (or ref) it starts from. */
+  base: string;
+}
+
+/**
+ * The new-session dialog, shown while a new session in a git project waits for the person to
+ * say where it runs: in the project folder, or in a new worktree.
+ */
+export interface NewSessionOffer {
+  projectDir: string;
+  /** Folder name: "tally". */
+  projectName: string;
+  /** Local branches, the current one first. */
+  branches: string[];
+  /** The checked-out branch; null when HEAD is detached. */
+  current: string | null;
+  /** A worktree name no branch uses yet. */
+  suggestedName: string;
+  /** "Run in a worktree" starts checked: the last session started in one. */
+  worktree: boolean;
+  /** The worktree or the session is being made. */
+  busy: boolean;
+  /** Why the last try failed, as a sentence; null otherwise. */
+  error: string | null;
 }
 
 export type ConnectionState =
@@ -422,6 +460,25 @@ export interface AppState {
    */
   onboarding: OnboardingState | null;
   notices: Notice[];
+  /**
+   * What `workspace.track` answered for the sessions this window tracked: their git state and
+   * worktree. A session is tracked when it is created and whenever the window shows it.
+   */
+  workspaces: Record<SessionId, WorkspaceInfo>;
+  /** The new-session dialog, while it is open. */
+  newSessionOffer: NewSessionOffer | null;
+}
+
+/** One read of a background command's output (`background.output`). */
+export interface BackgroundOutput {
+  /** Plain text from the offset asked for. */
+  text: string;
+  /** Where the next read starts. */
+  nextOffset: number;
+  /** Output written so far, in bytes. */
+  totalBytes: number;
+  /** The command has ended and everything was read. */
+  done: boolean;
 }
 
 export interface PendingRef {
@@ -482,6 +539,8 @@ export interface TitleBarView {
   projectName: string | null;
   /** "worktree · split-cents" when the session runs in a worktree. */
   worktreeLabel: string | null;
+  /** The label's tooltip: "Runs in a worktree on dawg/split-cents, made from main". */
+  worktreeTitle?: string | null;
   /** Totals of the diffs this session's edits made. Null when there are none. */
   changes: { files: number; additions: number; deletions: number } | null;
   /** Null when the session has no task list. */
@@ -570,6 +629,29 @@ export interface ComposerView {
   canAttachImages: boolean;
 }
 
+/** The Tasks pane: the agent's task list and its background commands. */
+export interface TasksPaneView {
+  sessionId: SessionId;
+  /** False until the session has been opened here (its background commands are not known yet). */
+  open: boolean;
+  tasks: readonly TaskItem[];
+  /** Oldest first. */
+  background: readonly BackgroundTask[];
+}
+
+/** The Plan pane: the session's latest plan, if it has one. */
+export interface PlanPaneView {
+  sessionId: SessionId;
+  /** False until the session's history has been replayed. */
+  loaded: boolean;
+  /** The latest plan item; null when the session has no plan. */
+  plan: PlanItem | null;
+  /** How many plans the session has proposed. */
+  planCount: number;
+  /** The session's working directory, to show the plan file's path relative to it. */
+  cwd: string;
+}
+
 export interface AppChromeView {
   theme: ResolvedTheme;
   appearance: Appearance;
@@ -621,10 +703,36 @@ export interface AppActions {
   setResolvedTheme(theme: ResolvedTheme): void;
 
   // --- Sessions --------------------------------------------------------------------------------
-  /** Without a project, asks for a folder first. Selects the new session. Null when cancelled. */
-  newSession(options?: { projectDir?: string }): Promise<SessionId | null>;
+  /**
+   * Without a project, asks for a folder first. Selects the new session. Null when cancelled.
+   *
+   * `worktree` says where it runs: a new worktree of the project (`worktrees.create`, then the
+   * session with the worktree as `cwd` and the project as `projectDir`), or `false` for the
+   * project folder. Left out, a git project opens the new-session dialog (`newSessionOffer`) and
+   * the promise settles once the person has answered it; any other folder starts at once.
+   * The new session is tracked (`workspace.track`) right after it is created.
+   */
+  newSession(options?: {
+    projectDir?: string;
+    worktree?: WorktreeChoice | false;
+  }): Promise<SessionId | null>;
+  /**
+   * Answers the new-session dialog: `{ worktree }` starts the session there (null: the project
+   * folder), null cancels. When the worktree cannot be made, the dialog stays open with `error`.
+   */
+  answerNewSessionOffer(answer: { worktree: WorktreeChoice | null } | null): Promise<void>;
+  /**
+   * Registers the session's directories with main (`workspace.track`) and keeps the answer in
+   * `workspaces`. Repeated calls with unchanged directories share one request. Null when main
+   * could not track it.
+   */
+  trackSession(id: SessionId): Promise<WorkspaceInfo | null>;
   renameSession(id: SessionId, title: string): Promise<void>;
   forkSession(id: SessionId): Promise<SessionId | null>;
+  /**
+   * Archiving also closes the session's terminals and, for a worktree session, asks main to
+   * remove the worktree (`worktrees.cleanup`), with a notice saying whether it was removed.
+   */
   archiveSession(id: SessionId, archived?: boolean): Promise<void>;
   /**
    * Deletes the session for good (`session.delete`; the engine stops a running turn first). The
@@ -710,6 +818,19 @@ export interface AppActions {
     response: QuestionResponse,
   ): Promise<void>;
   respondPlan(sessionId: SessionId, requestId: string, response: PlanResponse): Promise<void>;
+
+  // --- Background commands (the Tasks pane) ----------------------------------------------------
+  /**
+   * Reads a background command's output from `offset` (`background.output`). Never throws: a
+   * failure comes back as `{ error }`, a sentence, for the pane to show.
+   */
+  readBackgroundOutput(
+    sessionId: SessionId,
+    taskId: string,
+    offset: number,
+  ): Promise<BackgroundOutput | { error: string }>;
+  /** Stops a running background command (`background.stop`). False when it failed. */
+  stopBackground(sessionId: SessionId, taskId: string): Promise<boolean>;
 
   // --- Transcript UI ---------------------------------------------------------------------------
   setItemOpen(sessionId: SessionId, itemId: string, open: boolean): void;

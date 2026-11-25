@@ -77,6 +77,12 @@ export const ScenarioSchema = z.strictObject({
    * answers prompts with a generic reply.
    */
   turns: z.array(RecordingNameSchema),
+  /**
+   * What the background commands the recordings start have printed, by task id: the text
+   * `background.output` serves. A recording holds events only; the real engine keeps this in a
+   * file. Left out when no recording starts one.
+   */
+  backgroundOutput: z.record(z.string(), z.string()).optional(),
 });
 export type Scenario = z.infer<typeof ScenarioSchema>;
 

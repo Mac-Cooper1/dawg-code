@@ -10,7 +10,9 @@ export type RuntimeErrorCode =
   /** Not allowed now: the session is closed, a mode is refused, a fork point does not exist. */
   | "InvalidState"
   /** A permission, question or plan request is unknown or already answered. */
-  | "RequestNotFound";
+  | "RequestNotFound"
+  /** An argument names something the session does not have (a background task id). */
+  | "InvalidParams";
 
 export class RuntimeError extends Error {
   override name = "RuntimeError";

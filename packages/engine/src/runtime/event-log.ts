@@ -35,7 +35,7 @@ import {
   writeSync,
 } from "node:fs";
 import path from "node:path";
-import type { EventName } from "@dawg/protocol";
+import type { BackgroundTask, EventName } from "@dawg/protocol";
 import type { EventFields } from "../loop/types.ts";
 
 /** An event as stored and replayed: `{ event, payload }`, the payload carrying its `seq`. */
@@ -314,6 +314,8 @@ export interface Unfinished {
   tools: { turnId: string; toolCallId: string; toolName: string }[];
   requests: { kind: "permission" | "question" | "plan"; turnId: string; requestId: string }[];
   compaction: { compactionId: string; contextUsed: number } | null;
+  /** Background commands last reported running. */
+  background: BackgroundTask[];
   /** The last status reported. */
   status: string | null;
 }
@@ -327,6 +329,7 @@ export function findUnfinished(events: readonly LoggedEvent[]): Unfinished {
     { kind: Unfinished["requests"][number]["kind"]; turnId: string }
   >();
   let compaction: Unfinished["compaction"] = null;
+  const background = new Map<string, BackgroundTask>();
   let status: string | null = null;
   for (const { event, payload: p } of events) {
     switch (event) {
@@ -368,6 +371,12 @@ export function findUnfinished(events: readonly LoggedEvent[]): Unfinished {
       case "compaction.finished":
         compaction = null;
         break;
+      case "background.updated": {
+        const task = p.task as BackgroundTask;
+        if (task.status === "running") background.set(task.taskId, task);
+        else background.delete(task.taskId);
+        break;
+      }
       case "session.status":
         status = String(p.status);
         break;
@@ -381,6 +390,7 @@ export function findUnfinished(events: readonly LoggedEvent[]): Unfinished {
     tools: [...tools].map(([toolCallId, t]) => ({ toolCallId, ...t })),
     requests: [...requests].map(([requestId, r]) => ({ requestId, ...r })),
     compaction,
+    background: [...background.values()],
     status,
   };
 }
@@ -439,6 +449,17 @@ export function closeUnfinished(log: EventLog, now: number): void {
       finalText: null,
       error: null,
       durationMs: Math.max(0, now - open.turn.startedAt),
+    });
+  }
+  // The engine that watched them is gone; to clients they ended with the session.
+  for (const task of open.background) {
+    log.emit("background.updated", {
+      task: {
+        ...task,
+        status: "stopped",
+        stopReason: "session_end",
+        endedAt: Math.max(now, task.startedAt),
+      },
     });
   }
   if (open.status !== null && open.status !== "idle" && open.status !== "error") {

@@ -81,6 +81,17 @@ interface TaskRecord {
 }
 
 export type TaskFinishedListener = (info: BackgroundTaskInfo) => void;
+export type TaskUpdatedListener = (info: BackgroundTaskInfo) => void;
+
+/** A page of a task's output file, from `background.output`. */
+export interface OutputPage {
+  /** The bytes read, decoded; never ends or starts in the middle of a character. */
+  text: string;
+  /** Where the next page starts. */
+  nextOffset: number;
+  /** The file's size when it was read. */
+  totalBytes: number;
+}
 
 export const BACKGROUND_TASKS_KEY = "bash.backgroundTasks";
 
@@ -92,6 +103,7 @@ export function getBackgroundTasks(state: SessionStateBag): BackgroundTasks {
 export class BackgroundTasks {
   private readonly tasks = new Map<string, TaskRecord>();
   private readonly listeners = new Set<TaskFinishedListener>();
+  private readonly updatedListeners = new Set<TaskUpdatedListener>();
   private unreported: string[] = [];
   /**
    * Process groups left behind by foreground commands (`nohup x &`), stopped with the rest.
@@ -168,13 +180,8 @@ export class BackgroundTasks {
       if (timer) clearTimeout(timer);
       if (started.pid !== undefined) untrackGroup(started.pid);
       this.unreported.push(id);
-      for (const listener of this.listeners) {
-        try {
-          listener({ ...info });
-        } catch {
-          // A failing listener must not affect the task or the other listeners.
-        }
-      }
+      notify(this.updatedListeners, info);
+      notify(this.listeners, info);
     })();
 
     record = {
@@ -191,7 +198,16 @@ export class BackgroundTasks {
       timer = setTimeout(() => void this.stopRecord(current, "time_limit"), options.timeLimitMs);
       timer.unref();
     }
+    notify(this.updatedListeners, info);
     return { ...info };
+  }
+
+  /**
+   * Makes new ids continue after `bash-<n>`, so a resumed session never reuses the id of a task
+   * an earlier run started (the model and the client both know those ids).
+   */
+  continueAfter(n: number): void {
+    if (Number.isInteger(n) && n > this.counter) this.counter = n;
   }
 
   /** The last characters a task printed, for a short notice when it finishes. */
@@ -321,6 +337,15 @@ export class BackgroundTasks {
     this.leftoverGroups.set(pgid, graceMs);
   }
 
+  /**
+   * Calls `listener` when a task starts and when it ends (or is stopped), with its state then.
+   * Returns a function that removes it.
+   */
+  onUpdated(listener: TaskUpdatedListener): () => void {
+    this.updatedListeners.add(listener);
+    return () => this.updatedListeners.delete(listener);
+  }
+
   /** Calls `listener` whenever a task ends. Returns a function that removes it. */
   onFinished(listener: TaskFinishedListener): () => void {
     this.listeners.add(listener);
@@ -347,6 +372,63 @@ export class BackgroundTasks {
     }
     await record.done;
   }
+}
+
+function notify(listeners: ReadonlySet<TaskUpdatedListener>, info: BackgroundTaskInfo): void {
+  for (const listener of listeners) {
+    try {
+      listener({ ...info });
+    } catch {
+      // A failing listener must not affect the task or the other listeners.
+    }
+  }
+}
+
+/**
+ * Reads at most `limit` bytes of a task's output file from `offset`. The file holds plain text
+ * (control sequences were removed as it was written). A page never splits a UTF-8 character: it
+ * ends before a character cut off at the limit, and an offset inside a character moves on to the
+ * next one. A page holds at least one whole character when there is one, even past `limit`, so
+ * paging always moves forward. A missing file reads as empty.
+ */
+export async function readOutputPage(
+  file: string,
+  offset: number,
+  limit: number,
+): Promise<OutputPage> {
+  const handle = await open(file, "r").catch(() => null);
+  if (!handle) return { text: "", nextOffset: 0, totalBytes: 0 };
+  try {
+    const size = (await handle.stat()).size;
+    let start = Math.min(Math.max(0, Math.floor(offset)), size);
+    // A few bytes more: to skip continuation bytes at the start and to finish a character.
+    const bytes = await readRange(handle, start, Math.min(size - start, Math.max(1, limit) + 6));
+    let skip = 0;
+    while (skip < 3 && skip < bytes.length && ((bytes[skip] ?? 0) & 0xc0) === 0x80) skip += 1;
+    start += skip;
+    const rest = bytes.subarray(skip);
+    let end = completeUtf8Length(rest.subarray(0, Math.min(rest.length, limit)));
+    if (end === 0 && rest.length > 0) {
+      // The limit is smaller than the first character: return it whole once it is all written.
+      const whole = utf8Length(rest[0] ?? 0);
+      if (rest.length >= whole) end = whole;
+    }
+    return {
+      text: rest.subarray(0, end).toString("utf8"),
+      nextOffset: start + end,
+      totalBytes: size,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** The length of the UTF-8 sequence that `lead` starts; 1 for a byte that starts none. */
+function utf8Length(lead: number): number {
+  if ((lead & 0xe0) === 0xc0) return 2;
+  if ((lead & 0xf0) === 0xe0) return 3;
+  if ((lead & 0xf8) === 0xf0) return 4;
+  return 1;
 }
 
 /** How long to wait for output pipes to close after the shell exits. */

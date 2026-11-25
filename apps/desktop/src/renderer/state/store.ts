@@ -70,6 +70,8 @@ export function initialAppState(
     modelsState: null,
     onboarding: null,
     notices: [],
+    workspaces: {},
+    newSessionOffer: null,
   };
 }
 

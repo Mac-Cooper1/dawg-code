@@ -87,6 +87,77 @@ function spreadOutput(output: string, durationMs: number): ToolProgressStep[] {
   return steps;
 }
 
+/** A Bash call with `run_in_background`: a server or watcher left running. */
+export function callBashInBackground(
+  m: MessageRecorder,
+  command: string,
+  description: string,
+): ToolCall {
+  return m.call("Bash", { command, description, run_in_background: true });
+}
+
+/**
+ * Where the engine writes a background command's output: the session's tool-results folder. The
+ * project folder's name is the engine's key for the project path, shortened here.
+ */
+export function backgroundOutputPath(rec: Recorder, projectKey: string): string {
+  return `~/.dawg/projects/${projectKey}/sessions/${rec.sessionId}/tool-results/bash-background.txt`;
+}
+
+/**
+ * Starts a Bash call in the background, as the real tool does: `background.updated` with the
+ * task running, then a result that names the task and its output file. The task is left
+ * running; what it prints goes in the scenario's `backgroundOutput` under `taskId`, since a
+ * recording holds events only.
+ */
+export function startInBackground(
+  rec: Recorder,
+  call: ToolCall,
+  run: { taskId: string; outputPath: string },
+): void {
+  const command = String(call.input.command);
+  rec.startTool(call);
+  rec.pause(3, 9);
+  rec.emit("background.updated", {
+    task: {
+      taskId: run.taskId,
+      command,
+      description: String(call.input.description ?? "") || null,
+      cwd: rec.cwd,
+      status: "running",
+      exitCode: null,
+      signal: null,
+      stopReason: null,
+      startedAt: rec.time,
+      endedAt: null,
+      outputBytes: 0,
+    },
+  });
+  const content = [
+    `Started in the background as task ${run.taskId}.`,
+    `Its output is being written to ${run.outputPath}. Read that file to check on it.`,
+    `Stop it with TaskStop (task_id "${run.taskId}") when it is no longer needed.`,
+  ].join("\n");
+  rec.runTool(call, {
+    start: false,
+    durationMs: rec.random.int(8, 20),
+    content,
+    display: {
+      kind: "command",
+      command,
+      cwd: rec.cwd,
+      exitCode: null,
+      durationMs: null,
+      timedOut: false,
+      interrupted: false,
+      backgroundTaskId: run.taskId,
+      outputPath: run.outputPath,
+      output: null,
+      notes: [],
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Files
 // ---------------------------------------------------------------------------------------------

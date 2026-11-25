@@ -33,6 +33,9 @@ export function createElectronBridge(preload: PreloadApi, target: PortWindow): D
       onRestart: (listener) => preload.engine.onRestart(listener),
     },
     models: preload.models,
+    workspace: preload.workspace,
+    worktrees: preload.worktrees,
+    terminal: preload.terminal,
     dialogs: preload.dialogs,
     shell: preload.shell,
   };

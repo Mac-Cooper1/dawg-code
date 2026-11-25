@@ -72,14 +72,16 @@ or forked on this connection; a connection receives events for the sessions it h
 | `session.setEffort` | Change the reasoning effort | `sessionId`, `effort` (null = model default) | `effort` |
 | `session.command` | Run a slash command | `sessionId`, `name` (no slash), `args` (default "") | `output` (Markdown or null), `turnId` (if it started a turn), `openedSession` (if it opened another session, e.g. `/clear`) |
 | `session.replay` | Events after a sequence number, for reconnecting or rebuilding a view | `sessionId`, `afterSeq` (0 = all), `limit?` | `events: {event, payload}[]`, `lastSeq`, `hasMore` |
+| `background.output` | Read a background command's output | `sessionId`, `taskId`, `offset?` (bytes, default 0), `limit?` (bytes, default 256 KiB, at most 1 MiB) | `text` (plain text), `nextOffset`, `totalBytes`, `done` |
+| `background.stop` | Stop a background command | `sessionId`, `taskId` | `stopped` (false if it had ended) |
 | `permission.respond` | Answer a permission request | `sessionId`, `requestId`, `response` (`allow {scope: once/always, rules?}` or `deny {message?}`) | `{}` |
 | `question.respond` | Answer an ask-the-user question | `sessionId`, `requestId`, `response` (`answered {answers: QuestionAnswer[]}` or `dismissed {message?}`) | `{}` |
 | `plan.respond` | Approve or reject a proposed plan | `sessionId`, `requestId`, `response` (`approve {mode?}` or `reject {message?}`) | `{}` |
 
 `SessionSnapshot` is `session: SessionSummary`, `modelInfo`, `additionalDirectories`, `tasks`,
 `usage` (null before the first request), `pending` (unanswered permission/question/plan requests,
-oldest first), `activeTurnId`, and `commands` (`{name, description, argumentHint}` for the `/`
-menu).
+oldest first), `activeTurnId`, `commands` (`{name, description, argumentHint}` for the `/`
+menu), and `background` (the session's background commands, oldest first).
 
 `SessionSummary` is `id`, `title` (null until generated), `cwd`, `projectDir`, `createdAt`,
 `lastActivityAt`, `status`, `queuePosition` (see `session.status`), `mode`, `model`, `effort`,
@@ -135,6 +137,7 @@ table; each exists because a client cannot otherwise rebuild the view from event
 | `plan.proposed` | A plan awaits approval | `turnId`, `requestId`, `toolCallId`, `plan` (Markdown), `planPath`, `modeBeforePlan` (the mode approving returns to unless the answer names one) |
 | `request.resolved` *added* | A pending request is no longer pending. Needed so every client (and a replay) can close the card, including when the turn ended without an answer. | `kind` (permission/question/plan), `turnId`, `requestId`, `outcome` (answered/cancelled), `response` (the answer, or null) |
 | `tasks.updated` | The whole task list | `tasks: TaskItem[]` |
+| `background.updated` *added* | A background command started, ended or was stopped. Without it a client never learns that a command the model left running has finished. | `task: BackgroundTask` (`taskId`, `command`, `description`, `cwd`, `status` running/completed/failed/stopped, `exitCode`, `signal`, `stopReason`, `startedAt`, `endedAt`, `outputBytes`) |
 | `usage.updated` | Context and token counts | `usage: Usage` |
 | `prompt.progress` | How much of the prompt the model has read | `turnId`, `total`, `cached`, `processed` |
 | `compaction.started` | Context is being summarised | `compactionId`, `trigger` (auto/manual), `turnId` or null, `contextUsed`, `contextWindow`, `focus` |

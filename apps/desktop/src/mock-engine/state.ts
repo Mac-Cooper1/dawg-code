@@ -1,9 +1,16 @@
 /**
- * What a session's events add up to: its status, task list, usage, pending requests, and the turn,
- * messages, tool calls and compaction still open. The engine folds every event it emits into
+ * What a session's events add up to: its status, task list, background commands, usage, pending
+ * requests, and the turn, messages, tool calls and compaction still open. The engine folds every event it emits into
  * this, so snapshots, interrupts and decisions read the same facts a client would rebuild.
  */
-import type { EngineEvent, PendingRequest, SessionStatus, TaskItem, Usage } from "@dawg/protocol";
+import type {
+  BackgroundTask,
+  EngineEvent,
+  PendingRequest,
+  SessionStatus,
+  TaskItem,
+  Usage,
+} from "@dawg/protocol";
 
 export interface OpenTurn {
   turnId: string;
@@ -38,6 +45,8 @@ export class SessionState {
   /** Set while the turn waits for a model busy with other sessions (1 = next). */
   queuePosition: number | null = null;
   tasks: TaskItem[] = [];
+  /** Background commands by task id, latest state, oldest first. */
+  readonly background = new Map<string, BackgroundTask>();
   usage: Usage | null = null;
   /** Oldest first. */
   readonly pending = new Map<string, PendingRequest>();
@@ -61,6 +70,9 @@ export class SessionState {
       }
       case "tasks.updated":
         this.tasks = event.payload.tasks.map((t) => ({ ...t }));
+        return;
+      case "background.updated":
+        this.background.set(event.payload.task.taskId, { ...event.payload.task });
         return;
       case "usage.updated":
         this.usage = event.payload.usage;

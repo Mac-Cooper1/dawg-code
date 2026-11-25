@@ -3,6 +3,7 @@
  * adding a method or event without samples fails the type-check.
  */
 import type {
+  BackgroundTask,
   ModelInfo,
   PermissionRequest,
   SessionSummary,
@@ -64,6 +65,20 @@ export const usage: Usage = {
 
 const tasks: TaskItem[] = [{ content: "Run the tests", status: "in_progress", activeForm: "Running the tests" }];
 
+export const backgroundTask: BackgroundTask = {
+  taskId: "bg1",
+  command: "npm run dev",
+  description: "Start the dev server",
+  cwd,
+  status: "running",
+  exitCode: null,
+  signal: null,
+  stopReason: null,
+  startedAt: 1_700_000_000_000,
+  endedAt: null,
+  outputBytes: 19,
+};
+
 export const permissionRequest: PermissionRequest = {
   requestId: "p1",
   toolCallId: "c1",
@@ -83,6 +98,7 @@ export const snapshot: SessionSnapshot = {
   pending: [{ kind: "permission", turnId: "t1", request: permissionRequest }],
   activeTurnId: "t1",
   commands: [{ name: "compact", description: "Summarise the conversation", argumentHint: "[focus]" }],
+  background: [backgroundTask],
 };
 
 type MethodSamples = {
@@ -217,6 +233,18 @@ export const methodSamples: MethodSamples = {
       lastSeq: 1,
       hasMore: false,
     },
+  },
+  "background.output": {
+    params: { sessionId: "s1", taskId: "bg1" },
+    result: { text: "listening on :3000\n", nextOffset: 19, totalBytes: 19, done: false },
+    badParams: { sessionId: "s1", taskId: "bg1", limit: 0 },
+    badResult: { text: 1, nextOffset: 0, totalBytes: 0, done: false },
+  },
+  "background.stop": {
+    params: { sessionId: "s1", taskId: "bg1" },
+    result: { stopped: true },
+    badParams: { sessionId: "s1" },
+    badResult: {},
   },
   "permission.respond": {
     params: {
@@ -430,6 +458,10 @@ export const eventSamples: EventSamples = {
   "tasks.updated": {
     payload: { ...base, tasks },
     bad: { ...base, tasks: [{ content: "x", status: "blocked" }] },
+  },
+  "background.updated": {
+    payload: { ...base, task: backgroundTask },
+    bad: { ...base, task: { ...backgroundTask, status: "paused" } },
   },
   "usage.updated": {
     payload: { ...base, usage },

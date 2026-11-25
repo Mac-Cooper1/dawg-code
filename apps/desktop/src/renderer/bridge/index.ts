@@ -16,6 +16,14 @@ export {
   type FakeModelManager,
   type FakeModelManagerOptions,
 } from "./fake-models.ts";
+export { createFakeTerminal, type FakeTerminal } from "./fake-terminal.ts";
+export {
+  BROWSER_NON_GIT_PROJECT,
+  createFakeWorkspace,
+  FAKE_BASE_COMMIT,
+  type FakeWorkspace,
+  type FakeWorkspaceOptions,
+} from "./fake-workspace.ts";
 export {
   BROWSER_CHOSEN_FOLDER,
   BROWSER_HOME_DIR,

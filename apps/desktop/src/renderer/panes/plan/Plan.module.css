@@ -1,0 +1,70 @@
+/* The Plan pane: a status line over the plan, rendered as Markdown. */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.grow {
+  flex: 1;
+}
+
+.count {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.path {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  padding: 10px 16px 0;
+}
+
+.detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.feedback {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+}
+
+.body {
+  padding: 4px 16px 20px;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 16px;
+  color: var(--ink-3);
+}

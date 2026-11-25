@@ -9,6 +9,7 @@
  * snapshot and replay are in (the protocol does not order a response against its events).
  */
 import type {
+  BackgroundTask,
   EngineEvent,
   PendingRequest,
   SessionId,
@@ -107,6 +108,7 @@ function newSession(summary: SessionSummary, open: boolean): MutableSession {
     modelInfo: null,
     additionalDirectories: [],
     tasks: [],
+    background: [],
     usage: null,
     commands: [],
     activeTurnId: null,
@@ -205,6 +207,7 @@ function applySnapshot(draft: Draft, snapshot: SessionSnapshot): void {
   session.modelInfo = snapshot.modelInfo;
   session.additionalDirectories = snapshot.additionalDirectories;
   session.tasks = snapshot.tasks;
+  session.background = snapshot.background;
   session.usage = snapshot.usage;
   session.commands = snapshot.commands;
   session.activeTurnId = snapshot.activeTurnId;
@@ -367,6 +370,9 @@ function applyEvent(draft: Draft, event: EngineEvent, live: boolean): void {
       session.tasks = event.payload.tasks;
       items.tasksUpdated(draft, session, event.payload);
       return;
+    case "background.updated":
+      session.background = withBackgroundTask(session.background, event.payload.task);
+      return;
     case "usage.updated": {
       const { usage } = event.payload;
       session.usage = usage;
@@ -395,6 +401,16 @@ function applyEvent(draft: Draft, event: EngineEvent, live: boolean): void {
       items.errorRaised(draft, session, event.payload);
       return;
   }
+}
+
+/**
+ * The list with `task` in it: replacing the command with the same id where it is, or added last
+ * (the list is oldest first). The latest event for a command is its state.
+ */
+function withBackgroundTask(list: BackgroundTask[], task: BackgroundTask): BackgroundTask[] {
+  const index = list.findIndex((candidate) => candidate.taskId === task.taskId);
+  if (index === -1) return [...list, task];
+  return list.map((candidate, i) => (i === index ? task : candidate));
 }
 
 function clearPromptProgress(session: MutableSession): void {

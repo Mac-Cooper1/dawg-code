@@ -3,9 +3,13 @@
  * README, "Ordering guarantees", rules 1 to 8). Written for the mock engine's recordings and
  * output, and reusable for the real engine's: it only reads `{ event, payload }` objects.
  *
+ * Background commands (`background.updated`) belong to no turn and may outlive the turn that
+ * started them. Each update carries the whole task, so the checks are on how one task's updates
+ * follow each other: it starts running, ends once, and its state agrees with itself.
+ *
  * It returns violations instead of throwing, so a test can print all of them at once.
  */
-import type { EngineEvent, SessionStatus } from "@dawg/protocol";
+import type { BackgroundTask, EngineEvent, SessionStatus } from "@dawg/protocol";
 
 export interface ConformanceOptions {
   /**
@@ -92,6 +96,8 @@ class Checker {
   #expectWaiting = false;
   /** `session.deleted` arrived: nothing may follow it. */
   #deleted = false;
+  /** The latest update of each background command. */
+  readonly #background = new Map<string, BackgroundTask>();
 
   constructor(options: ConformanceOptions) {
     this.#options = options;
@@ -202,6 +208,9 @@ class Checker {
         return;
       case "error":
         if (event.payload.turnId !== null) this.#requireTurn(event.payload.turnId);
+        return;
+      case "background.updated":
+        this.#onBackground(event.payload.task);
         return;
       case "session.updated":
       case "tasks.updated":
@@ -512,6 +521,56 @@ class Checker {
   }
 
   // -------------------------------------------------------------------------------------------
+  // Background commands
+  // -------------------------------------------------------------------------------------------
+
+  #onBackground(task: BackgroundTask): void {
+    const id = task.taskId;
+    const running = task.status === "running";
+    if (running && (task.endedAt !== null || task.exitCode !== null || task.signal !== null)) {
+      this.#fail(`background task ${id} is running but has an end (time, exit code or signal)`);
+    }
+    if (!running && task.endedAt === null)
+      this.#fail(`background task ${id} ended with no endedAt`);
+    if (task.endedAt !== null && task.endedAt < task.startedAt) {
+      this.#fail(`background task ${id} ends before it starts`);
+    }
+    if ((task.status === "stopped") !== (task.stopReason !== null)) {
+      this.#fail(`background task ${id} is ${task.status} with stopReason ${task.stopReason}`);
+    }
+    if (task.status === "completed" && task.exitCode !== 0) {
+      this.#fail(`background task ${id} completed with exit code ${task.exitCode}, not 0`);
+    }
+    if (task.status === "failed" && task.exitCode === 0) {
+      this.#fail(`background task ${id} failed with exit code 0`);
+    }
+    const before = this.#background.get(id);
+    this.#background.set(id, task);
+    if (before === undefined) {
+      if (!running && !this.#options.midSession) {
+        this.#fail(`background task ${id} is first reported ${task.status}, not running`);
+      }
+      return;
+    }
+    if (before.status !== "running") {
+      this.#fail(`background task ${id} is updated after it ended (${before.status})`);
+      return;
+    }
+    if (running) this.#fail(`background task ${id} is reported running twice`);
+    if (
+      before.command !== task.command ||
+      before.cwd !== task.cwd ||
+      before.description !== task.description ||
+      before.startedAt !== task.startedAt
+    ) {
+      this.#fail(`background task ${id} changed its command, cwd, description or start`);
+    }
+    if (task.outputBytes < before.outputBytes) {
+      this.#fail(`background task ${id} has less output than before`);
+    }
+  }
+
+  // -------------------------------------------------------------------------------------------
   // Rule 8: deletion
   // -------------------------------------------------------------------------------------------
 
@@ -570,6 +629,7 @@ function turnIdOf(event: EngineEvent): string | null {
     case "session.updated":
     case "session.deleted":
     case "tasks.updated":
+    case "background.updated":
     case "usage.updated":
     case "compaction.finished":
       return null;

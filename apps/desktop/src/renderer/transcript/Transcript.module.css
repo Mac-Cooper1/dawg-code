@@ -11,7 +11,10 @@
   flex-direction: column;
 }
 
+/* Positioned, so absolutely placed descendants (screen-reader text in diffs) scroll and clip with
+   the transcript instead of making the whole window scrollable. */
 .scroller {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;

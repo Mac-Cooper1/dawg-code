@@ -275,6 +275,9 @@ describe("electron bridge", () => {
     const bridge = createElectronBridge(preload, fakeWindow());
     expect(bridge.platform).toBe(preload.platform);
     expect(bridge.settings).toBe(preload.settings);
+    expect(bridge.workspace).toBe(preload.workspace);
+    expect(bridge.worktrees).toBe(preload.worktrees);
+    expect(bridge.terminal).toBe(preload.terminal);
   });
 });
 

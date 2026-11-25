@@ -27,3 +27,8 @@ export function settingsFile(dataRoot: string): string {
 export function stateFile(dataRoot: string): string {
   return path.join(dataRoot, "state.json");
 }
+
+/** Base commits and worktrees the panes compare with (see `workspace/store.ts`). */
+export function workspaceFile(dataRoot: string): string {
+  return path.join(dataRoot, "workspace.json");
+}

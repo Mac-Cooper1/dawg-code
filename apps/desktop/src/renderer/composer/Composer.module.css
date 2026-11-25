@@ -84,16 +84,24 @@
   line-height: 1.5;
 }
 
+/* Wraps when the main column is narrow (the panes open beside it) instead of running under them. */
 .bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+  row-gap: 4px;
   padding: 4px 8px 8px;
 }
 
 .grow {
   flex: 1;
   min-width: 4px;
+}
+
+/* What follows the spacer (the context meter and send) stays right-aligned on a wrapped line. */
+.grow + * {
+  margin-left: auto;
 }
 
 .separator {

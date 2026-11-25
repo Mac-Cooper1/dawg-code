@@ -5,6 +5,7 @@ import { useActions, useAppStore } from "../state/store.ts";
 import styles from "./App.module.css";
 import { Dock } from "./Dock.tsx";
 import { EmptyMain } from "./EmptyMain.tsx";
+import { NewSessionDialogContainer } from "./NewSessionDialog.tsx";
 import { Notices } from "./Notices.tsx";
 import { ResizeHandle } from "./ResizeHandle.tsx";
 import { run } from "./run.ts";
@@ -85,6 +86,7 @@ export function MainWindow() {
           </>
         )}
       </div>
+      <NewSessionDialogContainer />
     </div>
   );
 }

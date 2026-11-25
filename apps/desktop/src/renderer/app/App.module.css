@@ -51,16 +51,11 @@
   text-align: center;
 }
 
+/* The app icon: a graphite tile with its own margins and shadow, so it reads in both themes. */
 .logo {
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--acc-edge);
-  background: var(--acc);
-  color: var(--acc-ink);
+  width: 64px;
+  height: 64px;
+  display: block;
 }
 
 .emptyTitle {

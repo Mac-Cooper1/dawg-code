@@ -18,6 +18,7 @@ const RUNTIME_CODES: Record<RuntimeError["code"], number> = {
   SessionBusy: ErrorCodes.SessionBusy,
   InvalidState: ErrorCodes.InvalidState,
   RequestNotFound: ErrorCodes.RequestNotFound,
+  InvalidParams: ErrorCodes.InvalidParams,
 };
 
 /**

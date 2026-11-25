@@ -275,6 +275,262 @@ export interface AddedModelFile {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Workspace: a session's files and what changed (the Changes and Files panes)
+//
+// A window registers each session it shows with `workspace.track`; main then answers for that
+// session id and allows paths only inside the session's directories (its working directory and
+// additional directories), after resolving symlinks. Paths cross the bridge absolute.
+// ---------------------------------------------------------------------------------------------
+
+const AbsolutePathSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine((value) => value.startsWith("/"), "Must be an absolute path");
+
+export const SessionRefSchema = z.string().min(1).max(200);
+
+export const TrackSessionInputSchema = z.strictObject({
+  sessionId: SessionRefSchema,
+  /** The session's working directory: its worktree for a worktree session. */
+  cwd: AbsolutePathSchema,
+  /** The project the session belongs to (equals `cwd` unless it runs in a worktree). */
+  projectDir: AbsolutePathSchema,
+  additionalDirectories: z.array(AbsolutePathSchema).max(64).default([]),
+});
+export type TrackSessionInput = z.input<typeof TrackSessionInputSchema>;
+
+/** A git worktree a session runs in (see "Worktree per session" in the Phase 3 spec). */
+export const WorktreeInfoSchema = z.object({
+  /** `<project>/.dawg/worktrees/<name>`. */
+  path: z.string(),
+  /** `dawg/<name>`. */
+  branch: z.string(),
+  /** The ref it was made from, as chosen ("main"). */
+  base: z.string(),
+  /** The commit `base` pointed at then. */
+  baseCommit: z.string(),
+});
+export type WorktreeInfo = z.infer<typeof WorktreeInfoSchema>;
+
+export const WorkspaceInfoSchema = z.object({
+  sessionId: z.string(),
+  cwd: z.string(),
+  /** Null when the working directory is not in a git repository. */
+  git: z
+    .object({
+      /** The repository's top level (absolute). */
+      root: z.string(),
+      /** Null when HEAD is detached. */
+      branch: z.string().nullable(),
+      /**
+       * What the Changes pane compares with: for a worktree session, where its branch left its
+       * base; otherwise the commit HEAD was on when the session was first tracked, so commits the
+       * agent made during the session still show.
+       */
+      baseCommit: z.string(),
+      /** For people: "main" or "where the session started (a1b2c3d)". */
+      baseLabel: z.string(),
+      worktree: WorktreeInfoSchema.nullable(),
+    })
+    .nullable(),
+});
+export type WorkspaceInfo = z.infer<typeof WorkspaceInfoSchema>;
+
+/** One file that differs from the base. */
+export const ChangedFileSchema = z.object({
+  /** Absolute. */
+  path: z.string(),
+  /** The path before a rename (absolute); else null. */
+  oldPath: z.string().nullable(),
+  status: z.enum(["added", "modified", "deleted", "renamed", "untracked"]),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  binary: z.boolean(),
+});
+export type ChangedFile = z.infer<typeof ChangedFileSchema>;
+
+export const ChangeSetSchema = z.object({
+  /** Null when the session is not in a git repository: the pane then shows the session's edits. */
+  baseCommit: z.string().nullable(),
+  files: z.array(ChangedFileSchema),
+  /** True when there were more changed files than main lists (it lists the first 2,000). */
+  truncated: z.boolean(),
+});
+export type ChangeSet = z.infer<typeof ChangeSetSchema>;
+
+/** A unified-diff hunk: the same shape as the protocol's `DiffHunk`. */
+export const HunkSchema = z.object({
+  oldStart: z.number().int().nonnegative(),
+  oldLines: z.number().int().nonnegative(),
+  newStart: z.number().int().nonnegative(),
+  newLines: z.number().int().nonnegative(),
+  /** Each starts with " ", "+" or "-". */
+  lines: z.array(z.string()),
+});
+export type Hunk = z.infer<typeof HunkSchema>;
+
+/** Both sides of one changed file, for a diff view. */
+export const FileDiffSchema = z.object({
+  path: z.string(),
+  /** The base version; null when the file is new. */
+  original: z.string().nullable(),
+  /** The working-tree version; null when the file was deleted. */
+  modified: z.string().nullable(),
+  /** Set (and both sides null) when either side is binary. */
+  binary: z.boolean(),
+  /** Set (and both sides null) when either side is over 5 MB. */
+  tooLarge: z.boolean(),
+  /** The changes, for reverting one hunk at a time. */
+  hunks: z.array(HunkSchema),
+});
+export type FileDiff = z.infer<typeof FileDiffSchema>;
+
+export const FileRefSchema = z.strictObject({
+  sessionId: SessionRefSchema,
+  path: AbsolutePathSchema,
+});
+export type FileRef = z.infer<typeof FileRefSchema>;
+
+export const RevertInputSchema = z.strictObject({
+  sessionId: SessionRefSchema,
+  path: AbsolutePathSchema,
+  /**
+   * One hunk, as `fileDiff` gave it; omitted reverts the whole file to its base version (a new
+   * file is deleted). Main refuses a hunk that no longer matches the file.
+   */
+  hunk: HunkSchema.optional(),
+});
+export type RevertInput = z.infer<typeof RevertInputSchema>;
+
+export const DirEntrySchema = z.object({
+  name: z.string(),
+  /** Absolute. */
+  path: z.string(),
+  kind: z.enum(["file", "directory", "symlink"]),
+  /** Ignored by git (shown dimmed, listed last). */
+  ignored: z.boolean(),
+  /** Bytes, for files. */
+  size: z.number().int().nonnegative().nullable(),
+});
+export type DirEntry = z.infer<typeof DirEntrySchema>;
+
+export const FileContentSchema = z.object({
+  path: z.string(),
+  /** UTF-8 text; null when the file is binary or over 5 MB. */
+  content: z.string().nullable(),
+  binary: z.boolean(),
+  tooLarge: z.boolean(),
+  size: z.number().int().nonnegative(),
+  /** For saving without overwriting someone else's change. */
+  mtimeMs: z.number().nonnegative(),
+});
+export type FileContent = z.infer<typeof FileContentSchema>;
+
+export const WriteFileInputSchema = z.strictObject({
+  sessionId: SessionRefSchema,
+  path: AbsolutePathSchema,
+  content: z.string().max(5 * 1024 * 1024),
+  /** The `mtimeMs` the editor loaded. Main refuses the save when the file changed since. */
+  expectedMtimeMs: z.number().nonnegative().optional(),
+});
+export type WriteFileInput = z.infer<typeof WriteFileInputSchema>;
+
+/** Files changed on disk under a tracked session's directories (debounced). */
+export interface WorkspaceChangedEvent {
+  sessionId: string;
+  /** Absolute paths; empty when main only knows that something changed. */
+  paths: string[];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Worktrees (a git worktree per session, chosen when the session is created)
+// ---------------------------------------------------------------------------------------------
+
+export const ProjectRefSchema = z.strictObject({ projectDir: AbsolutePathSchema });
+
+export interface BranchList {
+  /** False when the folder is not in a git repository (no worktree can be made). */
+  isRepo: boolean;
+  /** The checked-out branch, or null when detached. */
+  current: string | null;
+  /** Local branches, the current one first. */
+  branches: string[];
+}
+
+/** A worktree name: lowercase letters, digits and dashes. */
+export const WorktreeNameSchema = z
+  .string()
+  .min(1)
+  .max(60)
+  .regex(/^[a-z0-9][a-z0-9-]*$/, "Use lowercase letters, digits and dashes");
+
+export const CreateWorktreeInputSchema = z.strictObject({
+  projectDir: AbsolutePathSchema,
+  name: WorktreeNameSchema,
+  /** A local branch (or any ref) to start from. */
+  base: z.string().min(1).max(200),
+});
+export type CreateWorktreeInput = z.infer<typeof CreateWorktreeInputSchema>;
+
+export interface WorktreeCleanup {
+  removed: boolean;
+  /** Why it was kept, as a sentence ("It has changes that are not committed."); null if removed. */
+  reason: string | null;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Terminal (the person's own shells; the agent never types here)
+// ---------------------------------------------------------------------------------------------
+
+export const TerminalSizeSchema = z.strictObject({
+  cols: z.number().int().min(2).max(1000),
+  rows: z.number().int().min(1).max(500),
+});
+
+export const OpenTerminalInputSchema = z.strictObject({
+  sessionId: SessionRefSchema,
+  /** Where the shell starts: the session's directory (main checks it is one of them). */
+  cwd: AbsolutePathSchema,
+  cols: TerminalSizeSchema.shape.cols,
+  rows: TerminalSizeSchema.shape.rows,
+});
+export type OpenTerminalInput = z.infer<typeof OpenTerminalInputSchema>;
+
+export const TerminalIdSchema = z.string().min(1).max(100);
+
+/** What `terminal.write` sends: keystrokes or a paste, up to 1 MB at a time. */
+export const TerminalInputSchema = z.string().max(1024 * 1024);
+
+export interface TerminalInfo {
+  terminalId: string;
+  sessionId: string;
+  cwd: string;
+  /** The shell's name for a tab ("zsh"). */
+  title: string;
+  /** Still running. */
+  alive: boolean;
+}
+
+/** A terminal still open in main, with its recent output so a reloaded window can redraw it. */
+export interface TerminalReattach extends TerminalInfo {
+  /** The last output (up to about 256 KB), with escape sequences, as the shell wrote it. */
+  backlog: string;
+}
+
+export interface TerminalDataEvent {
+  terminalId: string;
+  /** Output, with escape sequences, as the shell wrote it. */
+  data: string;
+}
+
+export interface TerminalExitEvent {
+  terminalId: string;
+  exitCode: number | null;
+  signal: number | null;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Platform
 // ---------------------------------------------------------------------------------------------
 
@@ -401,6 +657,58 @@ export interface DawgBridge {
     refreshServers(): Promise<void>;
   };
 
+  /** A session's files and changes. Every call but `track` needs the session tracked first. */
+  readonly workspace: {
+    /**
+     * Registers a session's directories, records its base commit the first time, and watches
+     * its files. Call whenever a window shows a session; calling again is harmless.
+     */
+    track(input: TrackSessionInput): Promise<WorkspaceInfo>;
+    /** Stops watching a session's files (no window shows it any more). */
+    untrack(sessionId: string): Promise<void>;
+    /** Every file that differs from the base: committed since, staged, unstaged or untracked. */
+    changes(sessionId: string): Promise<ChangeSet>;
+    fileDiff(ref: FileRef): Promise<FileDiff>;
+    /** Reverts a file, or one hunk of it, to the base version. */
+    revert(input: RevertInput): Promise<void>;
+    /** One directory's entries: directories first, then files, git-ignored ones last. */
+    listDirectory(ref: FileRef): Promise<DirEntry[]>;
+    readFile(ref: FileRef): Promise<FileContent>;
+    /** Saves a file. Rejects, naming the reason, when it changed on disk since it was read. */
+    writeFile(input: WriteFileInput): Promise<{ mtimeMs: number }>;
+    /** Files changed on disk under a tracked session's directories. */
+    onChanged(listener: (event: WorkspaceChangedEvent) => void): Unsubscribe;
+  };
+
+  readonly worktrees: {
+    branches(projectDir: string): Promise<BranchList>;
+    /**
+     * Makes `<project>/.dawg/worktrees/<name>` on a new branch `dawg/<name>` from `base`, copies
+     * the files `.worktreeinclude` lists, and keeps `.dawg/` out of git. Rejects with a sentence
+     * when it cannot (not a repository, the name or branch is taken).
+     */
+    create(input: CreateWorktreeInput): Promise<WorktreeInfo>;
+    /**
+     * For an archived session: removes its worktree (and branch) when it is clean and merged into
+     * its base; otherwise keeps it and says why.
+     */
+    cleanup(worktreePath: string): Promise<WorktreeCleanup>;
+  };
+
+  /** The person's own shells. Opened only by an explicit action; the agent never types here. */
+  readonly terminal: {
+    open(input: OpenTerminalInput): Promise<TerminalInfo>;
+    /** Keystrokes and pastes. */
+    write(terminalId: string, data: string): void;
+    resize(terminalId: string, cols: number, rows: number): void;
+    /** Ends the shell and forgets the terminal. */
+    close(terminalId: string): Promise<void>;
+    /** Terminals still open for a session, with recent output, to redraw after a reload. */
+    list(sessionId: string): Promise<TerminalReattach[]>;
+    onData(listener: (event: TerminalDataEvent) => void): Unsubscribe;
+    onExit(listener: (event: TerminalExitEvent) => void): Unsubscribe;
+  };
+
   readonly dialogs: {
     /** The native folder picker. Resolves to an absolute path, or null when cancelled. */
     chooseFolder(options?: ChooseFolderOptions): Promise<string | null>;
@@ -444,6 +752,25 @@ export const IPC = {
   modelsConnectServer: "dawg:models:connect-server",
   modelsRemoveServer: "dawg:models:remove-server",
   modelsRefreshServers: "dawg:models:refresh-servers",
+  workspaceTrack: "dawg:workspace:track",
+  workspaceUntrack: "dawg:workspace:untrack",
+  workspaceChanges: "dawg:workspace:changes",
+  workspaceFileDiff: "dawg:workspace:file-diff",
+  workspaceRevert: "dawg:workspace:revert",
+  workspaceListDirectory: "dawg:workspace:list-directory",
+  workspaceReadFile: "dawg:workspace:read-file",
+  workspaceWriteFile: "dawg:workspace:write-file",
+  workspaceChanged: "dawg:workspace:changed",
+  worktreesBranches: "dawg:worktrees:branches",
+  worktreesCreate: "dawg:worktrees:create",
+  worktreesCleanup: "dawg:worktrees:cleanup",
+  terminalOpen: "dawg:terminal:open",
+  terminalWrite: "dawg:terminal:write",
+  terminalResize: "dawg:terminal:resize",
+  terminalClose: "dawg:terminal:close",
+  terminalList: "dawg:terminal:list",
+  terminalData: "dawg:terminal:data",
+  terminalExit: "dawg:terminal:exit",
   chooseFolder: "dawg:dialogs:choose-folder",
   openExternal: "dawg:shell:open-external",
   platform: "dawg:platform",

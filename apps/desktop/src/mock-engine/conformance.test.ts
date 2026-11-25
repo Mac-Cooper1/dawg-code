@@ -1,4 +1,4 @@
-import { type EngineEvent, type EventName, parseEvent } from "@dawg/protocol";
+import { type BackgroundTask, type EngineEvent, type EventName, parseEvent } from "@dawg/protocol";
 import { describe, expect, it } from "vitest";
 import { checkConformance } from "./conformance.ts";
 import { Recorder } from "./record/recorder.ts";
@@ -344,6 +344,59 @@ describe("checkConformance", () => {
     expect(checkConformance(slice, { midSession: true })).toEqual([]);
   });
 
+  it("accepts background commands that start, outlive their turn and end once", () => {
+    const s = stream();
+    s.add("background.updated", { task: task() });
+    s.add("background.updated", { task: task({ taskId: "bash-2" }) });
+    s.add("background.updated", {
+      task: task({ taskId: "bash-2", status: "completed", exitCode: 0, endedAt: 3_000 }),
+    });
+    s.add("background.updated", {
+      task: task({
+        status: "stopped",
+        stopReason: "requested",
+        signal: "SIGINT",
+        endedAt: 9_000,
+        outputBytes: 400,
+      }),
+    });
+    expect(checkConformance(s.out, { requireClosed: true })).toEqual([]);
+  });
+
+  it("finds background commands that are inconsistent or updated after they ended", () => {
+    const s = stream();
+    s.add("background.updated", {
+      task: task({ status: "completed", exitCode: 0, endedAt: 2_000 }),
+    });
+    s.add("background.updated", { task: task({ taskId: "bash-2" }) });
+    s.add("background.updated", { task: task({ taskId: "bash-2" }) });
+    s.add("background.updated", {
+      task: task({ taskId: "bash-2", status: "stopped", endedAt: 3_000, command: "other" }),
+    });
+    s.add("background.updated", {
+      task: task({ taskId: "bash-2", status: "failed", exitCode: 1, endedAt: 4_000 }),
+    });
+    s.add("background.updated", { task: task({ taskId: "bash-3", endedAt: 5_000 }) });
+    s.add("background.updated", {
+      task: task({ taskId: "bash-3", status: "completed", exitCode: 2, endedAt: 500 }),
+    });
+    const violations = checkConformance(s.out).join("\n");
+    expect(violations).toMatch(/bash-1 is first reported completed, not running/);
+    expect(violations).toMatch(/bash-2 is reported running twice/);
+    expect(violations).toMatch(/bash-2 is stopped with stopReason null/);
+    expect(violations).toMatch(/bash-2 changed its command/);
+    expect(violations).toMatch(/bash-2 is updated after it ended \(stopped\)/);
+    expect(violations).toMatch(/bash-3 is running but has an end/);
+    expect(violations).toMatch(/bash-3 completed with exit code 2, not 0/);
+    expect(violations).toMatch(/bash-3 ends before it starts/);
+    // A slice may begin after a task started.
+    const ended = stream(10);
+    ended.add("background.updated", {
+      task: task({ status: "completed", exitCode: 0, endedAt: 2_000 }),
+    });
+    expect(checkConformance(ended.out, { midSession: true })).toEqual([]);
+  });
+
   it("reports what is left open only with requireClosed", () => {
     const events = goodStream();
     const cut = events.slice(0, events.findIndex((e) => e.event === "permission.requested") + 2);
@@ -353,3 +406,21 @@ describe("checkConformance", () => {
     expect(open).toMatch(/r1 never resolved/);
   });
 });
+
+/** A background command, running unless `changes` say otherwise. */
+function task(changes: Partial<BackgroundTask> = {}): BackgroundTask {
+  return {
+    taskId: "bash-1",
+    command: "pnpm dev",
+    description: "Start the dev server",
+    cwd: "/p",
+    status: "running",
+    exitCode: null,
+    signal: null,
+    stopReason: null,
+    startedAt: 1_000,
+    endedAt: null,
+    outputBytes: 0,
+    ...changes,
+  };
+}

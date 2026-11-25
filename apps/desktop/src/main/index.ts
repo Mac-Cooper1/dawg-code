@@ -23,8 +23,6 @@ import {
   type DesktopSettings,
   type EngineRestartInfo,
   IPC,
-  type ModelStatus,
-  type ModelsState,
   type PlatformInfo,
   PlatformInfoSchema,
 } from "../shared/bridge.ts";
@@ -32,19 +30,24 @@ import type { MainToHost } from "../shared/engine-host-messages.ts";
 import { appLocation, appUrl, describeRefusedSender, isTrustedSender } from "./app-url.ts";
 import { spawnEngineHost } from "./engine-host-process.ts";
 import { createEngineSupervisor, type EngineSupervisor } from "./engine-supervisor.ts";
-import { createInvokeHandlers } from "./ipc-handlers.ts";
+import { createInvokeHandlers, createSendHandlers } from "./ipc-handlers.ts";
 import { menuTemplate } from "./menu.ts";
 import { createModelService, engineMode, resolveResourcesDir } from "./models/index.ts";
 import { answerHostMessage } from "./models/service.ts";
-import { homeDirFrom, resolveDataRoot, settingsFile, stateFile } from "./paths.ts";
+import { homeDirFrom, resolveDataRoot, settingsFile, stateFile, workspaceFile } from "./paths.ts";
 import { installSecurity } from "./security.ts";
 import { createSettingsStore, createWindowStateStore } from "./stores.ts";
+import { createNodePtySpawner } from "./terminal/node-pty.ts";
+import { createTerminalService } from "./terminal/service.ts";
 import {
   initialBounds,
   MIN_WINDOW_SIZE,
   TRAFFIC_LIGHT_POSITION,
   WINDOW_BACKGROUND,
 } from "./window-geometry.ts";
+import { createWorkspaceService } from "./workspace/service.ts";
+import { createWorkspaceStore } from "./workspace/store.ts";
+import { createWorktreeService } from "./workspace/worktrees.ts";
 
 const APP_NAME = "dawg-code";
 const launchedAt = Date.now();
@@ -75,6 +78,23 @@ const models = createModelService({
   mainDir: here,
   log: (message) => log(`[models] ${message}`),
 });
+// The panes' files, git and shells (Changes, Files, Terminal), each limited to a session's folders.
+const workspaceStore = createWorkspaceStore(workspaceFile(dataRoot), (message) =>
+  log(`[workspace] ${message}`),
+);
+const workspace = createWorkspaceService({
+  store: workspaceStore,
+  log: (message) => log(`[workspace] ${message}`),
+});
+const worktrees = createWorktreeService({
+  store: workspaceStore,
+  log: (message) => log(`[worktrees] ${message}`),
+});
+const terminals = createTerminalService({
+  spawn: createNodePtySpawner((message) => log(`[terminal] ${message}`)),
+  resolveDirectory: (sessionId, dir) => workspace.resolveDirectory(sessionId, dir),
+  log: (message) => log(`[terminal] ${message}`),
+});
 
 app.setName(APP_NAME);
 // Chromium's profile: separate for dev so a dev build and the built app can run side by side,
@@ -104,6 +124,9 @@ async function start(): Promise<void> {
 
   models.onState((state) => broadcast(IPC.modelsStateChanged, state));
   models.onStatus((status) => broadcast(IPC.modelsStatusChanged, status));
+  workspace.onChanged((event) => broadcast(IPC.workspaceChanged, event));
+  terminals.onData((event) => broadcast(IPC.terminalData, event));
+  terminals.onExit((event) => broadcast(IPC.terminalExit, event));
   models.onModelsChanged(() => {
     const message: MainToHost = { type: "models-changed" };
     supervisor?.post(message);
@@ -174,7 +197,7 @@ function showDockIcon(): void {
 }
 
 /** Sends to every window's page. */
-function broadcast(channel: string, value: ModelsState | ModelStatus): void {
+function broadcast(channel: string, value: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.webContents.isDestroyed()) window.webContents.send(channel, value);
   }
@@ -229,6 +252,7 @@ function createMainWindow(): void {
   window.webContents.once("destroyed", () => {
     ownWebContents.delete(contentsId);
     supervisor?.removeClient(String(contentsId));
+    workspace.releaseOwner(String(contentsId));
   });
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
@@ -280,6 +304,10 @@ function registerIpc(): void {
     settings,
     windowState,
     models,
+    workspace,
+    worktrees,
+    terminals,
+    ownerOf: (sender) => String(sender.id),
     windowIdFor: () => "main",
     settingsChanged: (value) => {
       applyAppearance(value);
@@ -320,6 +348,15 @@ function registerIpc(): void {
       if (!trusted(event, channel))
         throw new Error("This call is only allowed from the app's own page");
       return handler(event.sender, args);
+    });
+  }
+
+  const sendHandlers = createSendHandlers<WebContents>({ terminals }, (message) =>
+    log(`[ipc] ${message}`),
+  );
+  for (const [channel, handler] of Object.entries(sendHandlers)) {
+    ipcMain.on(channel, (event, ...args: unknown[]) => {
+      if (trusted(event, channel)) handler(event.sender, args);
     });
   }
 
@@ -387,6 +424,9 @@ app.on("before-quit", (event) => {
 
 app.on("will-quit", () => {
   supervisor?.stop();
+  // No shell outlives the app.
+  terminals.disposeAll();
+  workspace.dispose();
 });
 
 // On macOS the app stays open with no windows; the Dock icon brings one back ("activate").
