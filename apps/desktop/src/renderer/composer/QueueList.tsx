@@ -2,6 +2,20 @@ import type { QueuedMessage } from "../state/types.ts";
 import { Button, Icon } from "../ui/index.ts";
 import styles from "./Composer.module.css";
 
+function count(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "2 images, 1 file": what goes with a waiting message besides its text. */
+function extras(message: QueuedMessage): string | null {
+  const parts: string[] = [];
+  const images = message.images?.length ?? 0;
+  const files = message.mentions?.length ?? 0;
+  if (images > 0) parts.push(count(images, "image", "images"));
+  if (files > 0) parts.push(count(files, "file", "files"));
+  return parts.length === 0 ? null : parts.join(", ");
+}
+
 /**
  * Messages typed while dawg works wait here, above the composer. Queued ones send when the turn
  * ends; held ones stay because the person stopped the turn, until sent or removed.
@@ -16,12 +30,14 @@ export function QueueList(props: {
     <ul className={styles.queue} aria-label="Waiting messages">
       {props.queue.map((message) => {
         const held = message.state === "held";
+        const attached = extras(message);
         return (
           <li key={message.id} className={styles.queued}>
             <Icon name="clock" size={14} />
             <span className={styles.queuedText}>
               {held ? "Held: " : "Queued: "}
-              <b>{message.text}</b>
+              <b>{message.text === "" ? attached : message.text}</b>
+              {message.text !== "" && attached !== null && ` (with ${attached})`}
               {held ? " · not sent, because you stopped the turn" : " · sends when this turn ends"}
             </span>
             {held && (

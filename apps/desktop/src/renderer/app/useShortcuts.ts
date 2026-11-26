@@ -1,100 +1,49 @@
 /**
- * Window-wide keyboard shortcuts: ⌘B sidebar, ⌘N new session, ⌘, Settings, ⌘K sidebar search,
- * Esc interrupts the selected session while dawg works.
+ * The window's keyboard shortcuts, run through the action registry (app/commands): ⌘K the
+ * command palette, ⌘N new session, ⌘B the sidebar, ⌘, Settings, Esc stops a working session, and
+ * the rest listed in commands/shortcuts.ts.
  *
  * The listener sits on `window` in the bubble phase, so anything that handles a key first (a Radix
- * menu or popover closing on Esc, the command menu, a rename field, a decision card) can call
- * `preventDefault` or `stopPropagation` and the shortcut stays out of its way.
+ * menu or popover closing on Esc, the command menu, a rename field, a decision card, the code
+ * editor) can call `preventDefault` or `stopPropagation` and the shortcut stays out of its way.
+ * Keys an IME is composing with are left alone, and so is everything while a dialog or menu has
+ * focus.
  */
 import { useEffect } from "react";
-import { SIDEBAR_SEARCH_ID } from "../sidebar/Sidebar.tsx";
-import { selectComposer } from "../state/selectors.ts";
 import { type AppStoreApi, useAppStoreApi } from "../state/store.ts";
-import { type PlatformOs, usePlatformOs, usesCommandKey } from "./platform.tsx";
-import { run } from "./run.ts";
+import { commandContext, findWindowCommand, isInOverlay } from "./commands/dispatch.ts";
+import { isComposing, isTypingTarget } from "./commands/keys.ts";
+import { usePlatformOs } from "./platform.tsx";
 
-function hasCommandModifier(event: KeyboardEvent, os: PlatformOs): boolean {
-  if (event.altKey || event.shiftKey) return false;
-  return usesCommandKey(os) ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-}
-
-function isEditable(element: Element | null): boolean {
-  if (!(element instanceof HTMLElement)) return false;
-  return (
-    element instanceof HTMLInputElement ||
-    element instanceof HTMLTextAreaElement ||
-    element.isContentEditable
-  );
-}
-
-function focusSidebarSearch(): boolean {
-  const input = document.getElementById(SIDEBAR_SEARCH_ID);
-  if (!(input instanceof HTMLInputElement)) return false;
-  input.focus();
-  input.select();
+/** Esc with text selected in the transcript clears the selection instead of stopping dawg. */
+function clearSelection(event: KeyboardEvent): boolean {
+  if (event.key !== "Escape" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+    return false;
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || isTypingTarget(document.activeElement)) return false;
+  selection.removeAllRanges();
   return true;
 }
 
-/** Esc: first clears a text selection in the transcript, else stops a working session. */
-function onEscape(event: KeyboardEvent, store: AppStoreApi): void {
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && !isEditable(document.activeElement)) {
-    selection.removeAllRanges();
+function onKeyDown(event: KeyboardEvent, store: AppStoreApi, os: ReturnType<typeof usePlatformOs>) {
+  if (event.defaultPrevented || isComposing(event) || isInOverlay(event.target)) return;
+  if (clearSelection(event)) {
     event.preventDefault();
     return;
   }
-  const state = store.getState();
-  const id = state.layout.selectedSessionId;
-  if (state.layout.view !== "sessions" || id === null) return;
-  if (selectComposer(state, id)?.working) {
-    event.preventDefault();
-    run(state.actions.interrupt(id));
-  }
-}
-
-function onCommand(key: string, store: AppStoreApi): boolean {
-  const { actions, layout, onboarding } = store.getState();
-  // First run has no sessions yet: only Settings opens.
-  if (onboarding !== null && key !== ",") return key === "b" || key === "n" || key === "k";
-  switch (key) {
-    case "b":
-      if (layout.view === "sessions") actions.setSidebarOpen(!layout.sidebarOpen);
-      return true;
-    case "n":
-      if (layout.view !== "sessions") actions.setView("sessions");
-      run(actions.newSession());
-      return true;
-    case ",":
-      actions.setView("settings");
-      return true;
-    case "k":
-      if (layout.view !== "sessions") actions.setView("sessions");
-      if (!layout.sidebarOpen) actions.setSidebarOpen(true);
-      // The field may only appear after React renders the change.
-      if (!focusSidebarSearch()) setTimeout(focusSidebarSearch, 0);
-      return true;
-    default:
-      return false;
-  }
+  const command = findWindowCommand(event, event.target, store.getState(), os);
+  if (!command?.run) return;
+  event.preventDefault();
+  command.run(commandContext(store, os));
 }
 
 export function useGlobalShortcuts(): void {
   const store = useAppStoreApi();
   const os = usePlatformOs();
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing) return;
-      if (event.key === "Escape") {
-        if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-          onEscape(event, store);
-        }
-        return;
-      }
-      if (hasCommandModifier(event, os) && onCommand(event.key.toLowerCase(), store)) {
-        event.preventDefault();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    const listener = (event: KeyboardEvent) => onKeyDown(event, store, os);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
   }, [store, os]);
 }

@@ -592,7 +592,9 @@ describe("downloadEntry", () => {
   });
 
   test("progress is throttled while transferring", async () => {
-    const model = hub.add("m.gguf", pattern(20_000_000, 25));
+    // 2 MB arrives in dozens of socket reads, plenty to show they are not reported one by one,
+    // and hashes quickly on slow CI machines (20 MB once took over 6 s on an Intel runner).
+    const model = hub.add("m.gguf", pattern(2_000_000, 25));
     const events: DownloadProgress[] = [];
     await downloadEntry(
       entryFor(model),

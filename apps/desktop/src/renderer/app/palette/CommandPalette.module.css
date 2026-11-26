@@ -1,0 +1,192 @@
+/*
+ * The command palette: a panel near the top of the window over a scrim, with the search field,
+ * then the grouped list. It follows the theme through the tokens on :root.
+ */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: var(--scrim);
+}
+
+.palette {
+  position: fixed;
+  top: max(56px, 12vh);
+  left: 50%;
+  z-index: 71;
+  transform: translateX(-50%);
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - 96px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+  color: var(--ink);
+  overflow: hidden;
+  outline: none;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.searchIcon {
+  color: var(--ink-3);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 46px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--ink-3);
+}
+
+/* The field is the palette's focus; the panel's edge shows it for the keyboard. */
+.palette:has(.input:focus-visible) {
+  border-color: var(--focus);
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px 8px;
+  overscroll-behavior: contain;
+}
+
+.section + .section {
+  margin-top: 4px;
+}
+
+.heading {
+  padding: 8px 9px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 5px 9px;
+  border-radius: var(--radius);
+  cursor: default;
+  user-select: none;
+}
+
+/* The keyboard's place in the list: a fill, and an accent edge so it shows without colour too. */
+.row[data-active="true"] {
+  background: var(--active);
+  box-shadow: inset 2px 0 0 var(--acc-text);
+}
+
+.check {
+  width: 14px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--acc-text);
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.kbd {
+  flex: none;
+}
+
+.title + .kbd {
+  margin-left: auto;
+}
+
+/* An action that cannot run now, listed for a search with the reason. */
+.row[data-disabled="true"] .title,
+.row[data-disabled="true"] .kbd {
+  opacity: 0.55;
+}
+
+.empty {
+  margin: 0;
+  padding: 22px 16px 26px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+/* Rename */
+
+.renameForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px 14px;
+}
+
+.stepTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.renameInput {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.renameInput:focus-visible {
+  border-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+.stepHint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+@media (prefers-contrast: more) {
+  .row[data-active="true"] {
+    outline: 1px solid var(--ink);
+  }
+}

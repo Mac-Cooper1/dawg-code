@@ -48,6 +48,7 @@ import type {
   ModelOption,
   ModelStatus,
   ModelsState,
+  NewSessionWorktree,
   Pane,
   ResolvedTheme,
   ServerInfo,
@@ -65,6 +66,7 @@ export type {
   ModelOption,
   ModelStatus,
   ModelsState,
+  NewSessionWorktree,
   Pane,
   ResolvedTheme,
   ServerInfo,
@@ -344,6 +346,23 @@ export interface QueuedMessage {
    * stopped the turn (or it failed): shown with Send now and Remove.
    */
   state: "queued" | "held";
+  /** Images attached when it was queued. */
+  images?: ImageAttachment[];
+  /** Files its text mentions (`@path`). */
+  mentions?: FileMention[];
+}
+
+/** An image attached in the composer, ready to send (downscaled and encoded by the composer). */
+export interface ImageAttachment {
+  id: string;
+  /** The file's name, or "Pasted image". */
+  name: string;
+  /** "image/png", "image/jpeg" or "image/gif". */
+  mediaType: string;
+  /** Base64, without a data-URL prefix. */
+  data: string;
+  width: number;
+  height: number;
 }
 
 export type SettingsPage = "general" | "models" | "permissions" | "shortcuts";
@@ -418,6 +437,13 @@ export interface Layout {
 export interface UiState {
   /** Composer text per session. */
   drafts: Record<SessionId, string>;
+  /** Images attached in the composer per session, until sent. */
+  attachments: Record<SessionId, ImageAttachment[]>;
+  /**
+   * Paths the composer's `@` menu inserted per session ("src/a.ts", a folder ending with "/"),
+   * until the draft is sent: an `@path` in the text that names one becomes a mention.
+   */
+  mentionPaths: Record<SessionId, string[]>;
   /** The client-side message queue per session. */
   queues: Record<SessionId, QueuedMessage[]>;
   /** Tool cards and reasoning blocks the person opened or closed by hand: itemId → open. */
@@ -467,6 +493,12 @@ export interface AppState {
   workspaces: Record<SessionId, WorkspaceInfo>;
   /** The new-session dialog, while it is open. */
   newSessionOffer: NewSessionOffer | null;
+  /**
+   * Per session, how many batches of live events have changed it in this window. Snapshots,
+   * replays and session lists leave it alone, so a watcher can tell what happened just now from
+   * what the window caught up on: notifications (attention.ts) fire only for the former.
+   */
+  liveBatches: Record<SessionId, number>;
 }
 
 /** One read of a background command's output (`background.output`). */
@@ -699,6 +731,12 @@ export interface AppActions {
   // --- Settings (saved through the bridge) -----------------------------------------------------
   setAppearance(appearance: Appearance): Promise<void>;
   setToolCallDisplay(value: ToolCallDisplay): Promise<void>;
+  /** Settings → General → Notifications: a notification when a session needs the person or ends. */
+  setNotifications(on: boolean): Promise<void>;
+  /** Settings → General → Notifications: the count of sessions that need the person on the Dock. */
+  setDockBadge(on: boolean): Promise<void>;
+  /** Settings → General → New sessions: where a new session in a git project runs. */
+  setNewSessionWorktree(value: NewSessionWorktree): Promise<void>;
   /** Reports the theme the window resolved, so `selectChrome` can expose it. */
   setResolvedTheme(theme: ResolvedTheme): void;
 
@@ -708,13 +746,22 @@ export interface AppActions {
    *
    * `worktree` says where it runs: a new worktree of the project (`worktrees.create`, then the
    * session with the worktree as `cwd` and the project as `projectDir`), or `false` for the
-   * project folder. Left out, a git project opens the new-session dialog (`newSessionOffer`) and
-   * the promise settles once the person has answered it; any other folder starts at once.
+   * project folder. Left out, a git project follows Settings → General → New sessions
+   * (`settings.newSessionWorktree`):
+   * - "ask" opens the new-session dialog (`newSessionOffer`); the promise settles once the person
+   *   has answered it.
+   * - "folder" starts in the project folder.
+   * - "worktree" makes a worktree with the name the dialog would suggest, from the current
+   *   branch. When it cannot (the name is taken, HEAD is detached), the dialog opens saying why.
+   * `ask` opens the dialog whatever the setting says ("New session in a worktree…" in the command
+   * palette); `ask: "worktree"` opens it with "Run in a worktree" checked. Any other folder starts
+   * at once in the folder.
    * The new session is tracked (`workspace.track`) right after it is created.
    */
   newSession(options?: {
     projectDir?: string;
     worktree?: WorktreeChoice | false;
+    ask?: boolean | "worktree";
   }): Promise<SessionId | null>;
   /**
    * Answers the new-session dialog: `{ worktree }` starts the session there (null: the project
@@ -752,10 +799,17 @@ export interface AppActions {
    *    feedback).
    * 2. A turn is running: the text is queued.
    * 3. Text starting with "/name" where `name` is one of the session's commands: `session.command`.
-   * 4. Otherwise `session.prompt`.
-   * Clears the draft once accepted.
+   * 4. Otherwise `session.prompt`, with the session's attached images and `mentions` (the files
+   *    the text mentions, found by the composer). Images alone, without text, are sent too.
+   * Clears the draft once accepted, and the attached images once they went with a prompt (queued
+   * or sent); an answer or a command leaves them attached.
    */
-  submit(sessionId: SessionId, text: string): Promise<void>;
+  submit(sessionId: SessionId, text: string, mentions?: FileMention[]): Promise<void>;
+  /** Attaches images to the session's composer (the composer keeps a message to ten). */
+  addAttachments(sessionId: SessionId, images: ImageAttachment[]): void;
+  removeAttachment(sessionId: SessionId, imageId: string): void;
+  /** The `@` menu inserted this path into the session's draft. */
+  rememberMention(sessionId: SessionId, relativePath: string): void;
   /** Stop / Esc. Queued messages of the session become held. */
   interrupt(sessionId: SessionId): Promise<void>;
   /** Sends a held message now (as a new turn). */

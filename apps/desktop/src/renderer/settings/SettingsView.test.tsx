@@ -37,6 +37,13 @@ function Harness(
       system={props.system}
       theme={props.theme}
       toolCalls={toolCalls}
+      // Settings → General's notification and new-session controls: GeneralPage.test.tsx.
+      notifications
+      dockBadge
+      newSessionWorktree="ask"
+      onSetNotifications={() => {}}
+      onSetDockBadge={() => {}}
+      onSetNewSessionWorktree={() => {}}
       onSelectPage={(next) => {
         setPage(next);
         props.on.onSelectPage(next);
@@ -112,21 +119,29 @@ describe.each(THEMES)("SettingsView (%s)", (theme) => {
     );
   });
 
-  it.each([
-    ["permissions", "Permissions", "The default permission mode"],
-    ["shortcuts", "Shortcuts", "Every keyboard shortcut in dawg-code"],
-  ] as const)("says the %s page is not in this build yet", (page, title, line) => {
-    setup(theme, { page });
+  it.each([["permissions", "Permissions", "The default permission mode"]] as const)(
+    "says the %s page is not in this build yet",
+    (page, title, line) => {
+      setup(theme, { page });
+      const main = screen.getByRole("main");
+      expect(within(main).getByRole("heading", { level: 1, name: title })).toBeInTheDocument();
+      expect(main).toHaveTextContent("Not in this build yet");
+      expect(main).toHaveTextContent(line);
+    },
+  );
+
+  it("shows the keymap on Shortcuts", () => {
+    setup(theme, { page: "shortcuts" });
     const main = screen.getByRole("main");
-    expect(within(main).getByRole("heading", { level: 1, name: title })).toBeInTheDocument();
-    expect(main).toHaveTextContent("Not in this build yet");
-    expect(main).toHaveTextContent(line);
+    expect(within(main).getByRole("heading", { level: 1, name: "Shortcuts" })).toBeInTheDocument();
+    expect(within(main).getByRole("searchbox", { name: "Filter shortcuts" })).toBeInTheDocument();
+    expect(main).not.toHaveTextContent("Not in this build yet");
   });
 
   it("shows General: how dawg looks", () => {
     setup(theme);
     expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeInTheDocument();
-    expect(screen.getByText("How dawg looks.")).toBeInTheDocument();
+    expect(screen.getByText(/^How dawg looks/)).toBeInTheDocument();
     expect(screen.getByText(/moon and sun button in each window’s title bar/)).toBeInTheDocument();
   });
 

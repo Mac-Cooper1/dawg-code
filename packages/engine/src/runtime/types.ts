@@ -116,7 +116,12 @@ export interface OpenSessionOptions {
 export interface NewSessionOptions extends OpenSessionOptions {
   /** Working directory (absolute). */
   cwd: string;
-  /** Accepted for the protocol; sessions are currently filed under `cwd`. */
+  /**
+   * The project the session belongs to (absolute), when `cwd` is a worktree of it; default
+   * `cwd`. It is the summary's `projectDir`, and where personal settings
+   * (`settings.local.json`) are read and "always allow" saves, so they outlive the worktree.
+   * Sessions are still filed under `cwd`.
+   */
   projectDir?: string;
   title?: string;
   /** Defaults to the mode from settings, else "default". */

@@ -54,3 +54,30 @@ jobs:
         run: pnpm -r --no-bail --if-present --workspace-concurrency=1 test
       - name: Validate eval tasks (fixture fails, reference solution passes)
         run: pnpm eval:validate
+
+  e2e:
+    name: End-to-end (macOS arm64)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The engine's search tools and the composer's `@` file search use the bundled ripgrep.
+      # No model runtime is needed: the tests use the mock engine or the scripted model server.
+      - name: Fetch the pinned ripgrep
+        run: pnpm fetch-ripgrep
+      - name: Build the app and run the end-to-end tests
+        run: pnpm --filter @dawg/desktop e2e
+      - name: Keep the test output of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-test-results
+          path: apps/desktop/test-results
+          retention-days: 7
+          if-no-files-found: ignore

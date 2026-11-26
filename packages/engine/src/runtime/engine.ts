@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { open as openFile, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { loadInstructions, loadSettings } from "@dawg/compat";
+import { loadInstructions, type Settings } from "@dawg/compat";
 import type {
   ClientCapabilities,
   ForkPoint,
@@ -29,6 +29,7 @@ import { gatherEnvironment } from "./environment.ts";
 import { RuntimeError } from "./errors.ts";
 import { EventLog, type LoggedEvent, type ReplayPage } from "./event-log.ts";
 import { SessionRuntime } from "./session.ts";
+import { loadSessionSettings } from "./settings-reload.ts";
 import { readSidecar, type Sidecar, writeSidecar } from "./sidecar.ts";
 import { eventsFromRecords, promptSeqOf, promptSeqs } from "./transcript.ts";
 import {
@@ -139,8 +140,12 @@ export class Engine {
     const ctx = this.#ctx;
     const cwd = path.resolve(options.cwd);
     await assertDirectory(cwd);
-    const settings = await loadSettings({
+    // A worktree session belongs to its main project: personal settings come from there.
+    const projectDir = options.projectDir === undefined ? cwd : path.resolve(options.projectDir);
+    if (projectDir !== cwd) await assertDirectory(projectDir);
+    const { settings, stamp: settingsStamp } = await loadSessionSettings({
       projectDir: cwd,
+      localDir: projectDir,
       homeDir: ctx.homeDir,
       ...(ctx.settingsFlags === undefined ? {} : { flags: ctx.settingsFlags }),
     });
@@ -187,13 +192,14 @@ export class Engine {
     });
     return this.#start(writer, cwd, {
       settings,
+      settingsStamp,
       instructions,
       connection,
       capabilities: options.capabilities,
       sidecar: {
         v: 1,
         lastSeq: 0,
-        projectDir: cwd,
+        projectDir,
         mode,
         model: options.model ?? null,
         effort,
@@ -238,7 +244,12 @@ export class Engine {
     const parentTitle = parent.snapshot.state.title;
     const title = options.title ?? (parentTitle === null ? null : `${parentTitle} (fork)`);
     const id = await this.store.fork(cwd, sessionId, { atSeq, title });
-    return this.#openStored(cwd, id, options, point);
+    // A fork belongs to its parent's project.
+    const parentProject =
+      live?.projectDir ??
+      (await readSidecar((await this.store.paths(cwd, sessionId)).dir))?.projectDir ??
+      cwd;
+    return this.#openStored(cwd, id, options, point, parentProject);
   }
 
   /** Stored sessions, newest activity first. */
@@ -373,6 +384,7 @@ export class Engine {
     const effort = old.effort;
     const options: NewSessionOptions = {
       cwd: old.cwd,
+      projectDir: old.projectDir,
       mode: old.mode,
       additionalDirectories: old.additionalDirectories,
       capabilities: old.capabilities,
@@ -395,13 +407,19 @@ export class Engine {
     sessionId: string,
     options: OpenSessionOptions,
     forkPoint: ForkPoint | null,
+    /** The project when the session's side folder does not say (a new fork). */
+    projectFallback: string = cwd,
   ): Promise<SessionRuntime> {
     this.#assertNotDeleting(sessionId);
     const ctx = this.#ctx;
     const writer = await this.#withStoreErrors(() => this.store.open(cwd, sessionId));
     try {
-      const settings = await loadSettings({
+      const paths = await this.store.paths(cwd, sessionId);
+      const stored = await readSidecar(paths.dir);
+      const projectDir = stored?.projectDir ?? projectFallback;
+      const { settings, stamp: settingsStamp } = await loadSessionSettings({
         projectDir: cwd,
+        localDir: projectDir,
         homeDir: ctx.homeDir,
         ...(ctx.settingsFlags === undefined ? {} : { flags: ctx.settingsFlags }),
       });
@@ -412,13 +430,11 @@ export class Engine {
         externalImports: ctx.externalImports,
       });
       const connection = await ctx.models.connect(writer.snapshot.state.model);
-      const paths = await this.store.paths(cwd, sessionId);
-      const stored = await readSidecar(paths.dir);
       const state = writer.snapshot.state;
       const sidecar: Sidecar = {
         v: 1,
         lastSeq: stored?.lastSeq ?? 0,
-        projectDir: stored?.projectDir ?? cwd,
+        projectDir,
         mode: state.mode,
         model: state.model,
         effort: state.effort,
@@ -427,6 +443,7 @@ export class Engine {
       };
       return await this.#start(writer, cwd, {
         settings,
+        settingsStamp,
         instructions,
         connection,
         capabilities: options.capabilities,
@@ -442,7 +459,8 @@ export class Engine {
     writer: SessionWriter,
     cwd: string,
     init: {
-      settings: Awaited<ReturnType<typeof loadSettings>>;
+      settings: Settings;
+      settingsStamp: string;
       instructions: Awaited<ReturnType<typeof loadInstructions>>;
       connection: Awaited<ReturnType<EngineContext["models"]["connect"]>>;
       capabilities: Partial<ClientCapabilities> | undefined;
@@ -467,6 +485,7 @@ export class Engine {
         records,
         log,
         settings: init.settings,
+        settingsStamp: init.settingsStamp,
         instructions: init.instructions,
         connection: init.connection,
         capabilities: { ...ctx.capabilities, ...init.capabilities },

@@ -19,6 +19,12 @@ type Handlers = Omit<ComposerProps, "view" | "models" | "canSend" | "disabled">;
 
 function handlers(): Handlers {
   return {
+    attachments: [],
+    mentionPaths: [],
+    onFindFiles: vi.fn(async () => ({ matches: [], truncated: false })),
+    onAddAttachments: vi.fn(),
+    onRemoveAttachment: vi.fn(),
+    onRememberMention: vi.fn(),
     onDraftChange: vi.fn(),
     onSubmit: vi.fn(),
     onInterrupt: vi.fn(),
@@ -554,14 +560,28 @@ describe.each(THEMES)("Composer (%s)", (theme) => {
   });
 
   describe("attaching images", () => {
-    it("is not available yet, and says why on focus", async () => {
+    it("says how to attach, on keyboard focus", async () => {
       const { user, textbox } = setup(theme);
-      const attach = screen.getByRole("button", { name: "Attach an image" });
+      const attach = screen.getByRole("button", { name: "Attach images" });
+      expect(attach).not.toHaveAttribute("aria-disabled");
+      await user.click(textbox);
+      await user.tab();
+      expect(attach).toHaveFocus();
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        "Attach images, or paste or drop them",
+      );
+    });
+
+    it("says why when the model cannot view images", async () => {
+      const { user, textbox } = setup(theme, { view: { canAttachImages: false } });
+      const attach = screen.getByRole("button", { name: "Attach images" });
       expect(attach).toHaveAttribute("aria-disabled", "true");
       await user.click(textbox);
       await user.tab();
       expect(attach).toHaveFocus();
-      expect(await screen.findByRole("tooltip")).toHaveTextContent("Images come in a later build");
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        "Qwen3.8 27B · 8-bit can't view images",
+      );
     });
   });
 });

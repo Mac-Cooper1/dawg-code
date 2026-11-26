@@ -13,6 +13,7 @@ import {
   Menu,
   MessageChannelMain,
   type MessagePortMain,
+  Notification,
   nativeTheme,
   type OpenDialogOptions,
   screen,
@@ -34,7 +35,9 @@ import { createInvokeHandlers, createSendHandlers } from "./ipc-handlers.ts";
 import { menuTemplate } from "./menu.ts";
 import { createModelService, engineMode, resolveResourcesDir } from "./models/index.ts";
 import { answerHostMessage } from "./models/service.ts";
+import { createNotificationService } from "./notifications.ts";
 import { homeDirFrom, resolveDataRoot, settingsFile, stateFile, workspaceFile } from "./paths.ts";
+import { createPermissionSettingsService } from "./permissions.ts";
 import { installSecurity } from "./security.ts";
 import { createSettingsStore, createWindowStateStore } from "./stores.ts";
 import { createNodePtySpawner } from "./terminal/node-pty.ts";
@@ -85,6 +88,8 @@ const workspaceStore = createWorkspaceStore(workspaceFile(dataRoot), (message) =
 const workspace = createWorkspaceService({
   store: workspaceStore,
   log: (message) => log(`[workspace] ${message}`),
+  // Lists files for `@` mentions outside git (fetched by `pnpm fetch-ripgrep` in a checkout).
+  ripgrepPath: path.join(resourcesDir, "bin", `${process.platform}-${process.arch}`, "rg"),
 });
 const worktrees = createWorktreeService({
   store: workspaceStore,
@@ -94,6 +99,33 @@ const terminals = createTerminalService({
   spawn: createNodePtySpawner((message) => log(`[terminal] ${message}`)),
   resolveDirectory: (sessionId, dir) => workspace.resolveDirectory(sessionId, dir),
   log: (message) => log(`[terminal] ${message}`),
+});
+// macOS notifications and the Dock badge. Windows decide when to ask; see notifications.ts.
+const notifications = createNotificationService<WebContents>({
+  getSettings: () => settings.get(),
+  isAnyWindowFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  isSupported: () => Notification.isSupported(),
+  createNotification: (options) => {
+    const notification = new Notification(options);
+    return {
+      show: () => notification.show(),
+      close: () => notification.close(),
+      onClick: (listener) => notification.on("click", listener),
+      onClose: (listener) => notification.on("close", listener),
+    };
+  },
+  setDockBadge: (text) => app.dock?.setBadge(text),
+  windowKeyOf: (sender) => String(sender.id),
+  openInWindow: (sender, sessionId) => {
+    if (sender.isDestroyed()) return false;
+    const window = BrowserWindow.fromWebContents(sender);
+    if (!window || window.isDestroyed()) return false;
+    bringForward(window);
+    sendWhenLoaded(sender, IPC.notificationsOpenSession, sessionId);
+    return true;
+  },
+  openInMainWindow: (sessionId) => void openSessionInMainWindow(sessionId),
+  log: (message) => log(`[notifications] ${message}`),
 });
 
 app.setName(APP_NAME);
@@ -253,6 +285,7 @@ function createMainWindow(): void {
     ownWebContents.delete(contentsId);
     supervisor?.removeClient(String(contentsId));
     workspace.releaseOwner(String(contentsId));
+    notifications.windowClosed(String(contentsId));
   });
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
@@ -264,10 +297,47 @@ function createMainWindow(): void {
 }
 
 function focusMainWindow(): void {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  if (mainWindow) bringForward(mainWindow);
+}
+
+function bringForward(window: BrowserWindow): void {
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+/** Sends to a page, after it has loaded when it is still loading (a window just made). */
+function sendWhenLoaded(contents: WebContents, channel: string, value: unknown): void {
+  if (contents.isDestroyed()) return;
+  if (!contents.isLoading()) {
+    contents.send(channel, value);
+    return;
+  }
+  contents.once("did-finish-load", () => {
+    if (!contents.isDestroyed()) contents.send(channel, value);
+  });
+}
+
+/**
+ * A notification was clicked after the window that asked closed. With no window open, the new one
+ * starts on the session: it is saved as the window's selection before the page loads, so the
+ * page cannot miss it.
+ */
+async function openSessionInMainWindow(sessionId: string): Promise<void> {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    bringForward(mainWindow);
+    sendWhenLoaded(mainWindow.webContents, IPC.notificationsOpenSession, sessionId);
+    return;
+  }
+  try {
+    const saved = await windowState.load("main");
+    await windowState.save("main", { ...saved, selectedSessionId: sessionId });
+  } catch (error) {
+    log(
+      `Could not select the session for the new window: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!mainWindow) createMainWindow();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -307,10 +377,14 @@ function registerIpc(): void {
     workspace,
     worktrees,
     terminals,
+    notifications,
+    // The same home the engine host is given as HOME, so the page edits the files sessions read.
+    permissions: createPermissionSettingsService({ homeDir }),
     ownerOf: (sender) => String(sender.id),
     windowIdFor: () => "main",
     settingsChanged: (value) => {
       applyAppearance(value);
+      notifications.settingsChanged(value);
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send(IPC.settingsChanged, value);
       }
@@ -427,6 +501,8 @@ app.on("will-quit", () => {
   // No shell outlives the app.
   terminals.disposeAll();
   workspace.dispose();
+  // A notification clicked after quitting would reach nothing.
+  notifications.closeAll();
 });
 
 // On macOS the app stays open with no windows; the Dock icon brings one back ("activate").

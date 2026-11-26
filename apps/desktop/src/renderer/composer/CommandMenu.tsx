@@ -11,6 +11,8 @@ export interface CommandMenuProps {
   /** The id of option `index`, for aria-activedescendant. */
   optionId(index: number): string;
   onChoose(command: CommandInfo): void;
+  /** The pointer moved over an option. */
+  onHover?(index: number): void;
 }
 
 /**
@@ -37,6 +39,9 @@ export function CommandMenu(props: CommandMenuProps) {
             tabIndex={-1}
             className={menu.item}
             data-highlighted={index === props.active ? "" : undefined}
+            onMouseMove={() => {
+              if (index !== props.active) props.onHover?.(index);
+            }}
             // Mouse down, not click: choosing must not take focus from the textarea.
             onMouseDown={(event) => {
               event.preventDefault();

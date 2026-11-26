@@ -103,17 +103,29 @@ describe.each(THEMES)("App (%s)", (theme) => {
     expect(actions.setSidebarOpen).toHaveBeenLastCalledWith(false);
   });
 
-  it("starts a new session with ⌘N and focuses the search with ⌘K", async () => {
+  it("starts a new session with ⌘N and focuses the search with ⌥⌘F", async () => {
     const { user, actions } = setup(theme);
     await user.keyboard("{Meta>}n{/Meta}");
     expect(actions.newSession).toHaveBeenCalledOnce();
 
     await user.keyboard("{Meta>}b{/Meta}");
-    await user.keyboard("{Meta>}k{/Meta}");
+    await user.keyboard("{Meta>}{Alt>}f{/Alt}{/Meta}");
     expect(actions.setSidebarOpen).toHaveBeenLastCalledWith(true);
     await waitFor(() =>
       expect(screen.getByRole("searchbox", { name: "Search sessions" })).toHaveFocus(),
     );
+  });
+
+  it("opens the command palette with ⌘K and gives focus back when it closes", async () => {
+    const { user } = setup(theme);
+    const field = screen.getByRole("textbox", { name: "Message to dawg" });
+    await user.click(field);
+    await user.keyboard("{Meta>}k{/Meta}");
+    expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Search actions and sessions" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+    await waitFor(() => expect(field).toHaveFocus());
   });
 
   it("opens Settings with ⌘, and comes back", async () => {

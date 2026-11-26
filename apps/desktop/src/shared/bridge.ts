@@ -40,15 +40,35 @@ export type ResolvedTheme = "dark" | "light";
 export const ToolCallDisplaySchema = z.enum(["smart", "closed", "open"]);
 export type ToolCallDisplay = z.infer<typeof ToolCallDisplaySchema>;
 
+/**
+ * Settings → General → New sessions: where a new session in a git project runs.
+ * - ask: the new-session dialog asks each time (the default).
+ * - folder: in the project folder, without asking.
+ * - worktree: in a new worktree, with the name and base the dialog would suggest, without asking.
+ */
+export const NewSessionWorktreeSchema = z.enum(["ask", "folder", "worktree"]);
+export type NewSessionWorktree = z.infer<typeof NewSessionWorktreeSchema>;
+
 export const DesktopSettingsSchema = z.object({
   appearance: AppearanceSchema.default("system"),
   toolCalls: ToolCallDisplaySchema.default("smart"),
+  /**
+   * Settings → General → Notifications: a macOS notification when a session needs the person,
+   * finishes or fails while no dawg window is focused.
+   */
+  notifications: z.boolean().default(true),
+  /** Settings → General → Notifications: the Dock icon counts the sessions that need the person. */
+  dockBadge: z.boolean().default(true),
+  newSessionWorktree: NewSessionWorktreeSchema.default("ask"),
 });
 export type DesktopSettings = z.infer<typeof DesktopSettingsSchema>;
 
 export const DesktopSettingsPatchSchema = z.strictObject({
   appearance: AppearanceSchema.optional(),
   toolCalls: ToolCallDisplaySchema.optional(),
+  notifications: z.boolean().optional(),
+  dockBadge: z.boolean().optional(),
+  newSessionWorktree: NewSessionWorktreeSchema.optional(),
 });
 export type DesktopSettingsPatch = z.infer<typeof DesktopSettingsPatchSchema>;
 
@@ -436,6 +456,41 @@ export const WriteFileInputSchema = z.strictObject({
 });
 export type WriteFileInput = z.infer<typeof WriteFileInputSchema>;
 
+/**
+ * `@` in the composer: files and directories under a session's working directory that match
+ * what the person typed.
+ */
+export const FindFilesInputSchema = z.strictObject({
+  sessionId: SessionRefSchema,
+  /**
+   * What follows "@", matched fuzzily against paths relative to the working directory. Empty
+   * asks for a starting list: files changed recently first, then the top level.
+   */
+  query: z.string().max(1000),
+  limit: z.number().int().min(1).max(200).default(50),
+});
+export type FindFilesInput = z.input<typeof FindFilesInputSchema>;
+
+export interface FileMatch {
+  /** Absolute. */
+  path: string;
+  /**
+   * Relative to the session's working directory, "/"-separated; a directory ends with "/".
+   * What the composer inserts after "@".
+   */
+  relativePath: string;
+  kind: "file" | "directory";
+  /** Indexes into `relativePath` of the characters that matched the query, for highlighting. */
+  highlights: number[];
+}
+
+export interface FindFilesResult {
+  /** Best match first, at most `limit`. */
+  matches: FileMatch[];
+  /** The working directory holds more files than main indexes, so some could not be matched. */
+  truncated: boolean;
+}
+
 /** Files changed on disk under a tracked session's directories (debounced). */
 export interface WorkspaceChangedEvent {
   sessionId: string;
@@ -529,6 +584,110 @@ export interface TerminalExitEvent {
   exitCode: number | null;
   signal: number | null;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Notifications and the Dock badge
+// ---------------------------------------------------------------------------------------------
+
+/** Why a session wants the person: a decision waits, its turn finished, or its turn failed. */
+export const AttentionReasonSchema = z.enum(["needs-you", "finished", "failed"]);
+export type AttentionReason = z.infer<typeof AttentionReasonSchema>;
+
+export const NotifyInputSchema = z.strictObject({
+  sessionId: SessionRefSchema,
+  reason: AttentionReasonSchema,
+  /** The session's title ("Fix the flaky test"). */
+  title: z.string().min(1).max(200),
+  /**
+   * One line saying what happened: "Needs you: run a command", "Finished", "The turn failed".
+   * Never the model's output: notifications can show on a locked screen.
+   */
+  body: z.string().max(500),
+});
+export type NotifyInput = z.infer<typeof NotifyInputSchema>;
+
+/** Sessions that need the person, for the Dock badge. */
+export const BadgeCountSchema = z.number().int().min(0).max(9999);
+
+// ---------------------------------------------------------------------------------------------
+// Permissions (Settings → Permissions: the default mode and rules in the settings files)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The values of `permissions.defaultMode` in a settings file: the protocol's permission modes
+ * (kept here so the preload does not bundle the protocol; a test checks they match).
+ */
+export const DefaultModeSchema = z.enum([
+  "default",
+  "acceptEdits",
+  "plan",
+  "dontAsk",
+  "bypassPermissions",
+]);
+export type DefaultMode = z.infer<typeof DefaultModeSchema>;
+
+/**
+ * Which settings file:
+ * - user: the person's own, `~/.dawg/settings.json`.
+ * - project: the project's shared file, `<project>/.dawg/settings.json`, meant for git.
+ * - local: the project's personal file, `<project>/.dawg/settings.local.json`, kept out of git.
+ *   "Always allow" writes here.
+ */
+export const PermissionScopeSchema = z.enum(["user", "project", "local"]);
+export type PermissionScope = z.infer<typeof PermissionScopeSchema>;
+
+/** One rule as written in a settings file: `Bash(npm run test *)`, `Read(./secrets/**)`, `WebFetch`. */
+export const PermissionRuleTextSchema = z.string().trim().min(1).max(1000);
+
+export interface PermissionSettingsFile {
+  scope: PermissionScope;
+  /**
+   * "dawg" files are edited in Settings; "claude" files (Claude Code's own, read for
+   * compatibility) are shown and never written.
+   */
+  origin: "dawg" | "claude";
+  /** Absolute. */
+  path: string;
+  exists: boolean;
+  /** False for Claude Code's files, and for a dawg file that cannot be parsed (fixed by hand). */
+  writable: boolean;
+  defaultMode: DefaultMode | null;
+  allow: string[];
+  ask: string[];
+  deny: string[];
+  /** What is wrong with the file or one of its rules, as sentences. */
+  problems: string[];
+}
+
+export interface PermissionSettingsState {
+  /** The project whose files are listed; null lists only the person's own files. */
+  projectDir: string | null;
+  /**
+   * Every settings file that applies, highest precedence first (local, project, user; within
+   * a level dawg's file before Claude Code's), whether or not it exists.
+   */
+  files: PermissionSettingsFile[];
+  /** The mode new sessions start in, with every file merged ("default" when none sets one). */
+  defaultMode: DefaultMode;
+  /** A file turns the bypass mode off (`permissions.disableBypassPermissionsMode`). */
+  bypassDisabled: boolean;
+}
+
+/** `permissions.read`: a project folder, or null for only the person's own files. */
+export const PermissionsProjectSchema = AbsolutePathSchema.nullable();
+
+export const PermissionsWriteInputSchema = z.strictObject({
+  scope: PermissionScopeSchema,
+  /** Required for "project" and "local"; ignored for "user". */
+  projectDir: AbsolutePathSchema.nullable(),
+  /** Null removes the key; left out keeps it. */
+  defaultMode: DefaultModeSchema.nullable().optional(),
+  /** Each list given replaces the file's list; a list left out is kept. */
+  allow: z.array(PermissionRuleTextSchema).max(1000).optional(),
+  ask: z.array(PermissionRuleTextSchema).max(1000).optional(),
+  deny: z.array(PermissionRuleTextSchema).max(1000).optional(),
+});
+export type PermissionsWriteInput = z.input<typeof PermissionsWriteInputSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Platform
@@ -676,6 +835,11 @@ export interface DawgBridge {
     readFile(ref: FileRef): Promise<FileContent>;
     /** Saves a file. Rejects, naming the reason, when it changed on disk since it was read. */
     writeFile(input: WriteFileInput): Promise<{ mtimeMs: number }>;
+    /**
+     * `@` mentions: files and directories under the session's working directory matching the
+     * query, best first. Git-ignored files are left out.
+     */
+    findFiles(input: FindFilesInput): Promise<FindFilesResult>;
     /** Files changed on disk under a tracked session's directories. */
     onChanged(listener: (event: WorkspaceChangedEvent) => void): Unsubscribe;
   };
@@ -707,6 +871,35 @@ export interface DawgBridge {
     list(sessionId: string): Promise<TerminalReattach[]>;
     onData(listener: (event: TerminalDataEvent) => void): Unsubscribe;
     onExit(listener: (event: TerminalExitEvent) => void): Unsubscribe;
+  };
+
+  readonly notifications: {
+    /**
+     * Shows a macOS notification for a session, unless a dawg window is focused or Settings →
+     * General turns notifications off. A newer notification for a session replaces its older
+     * one. Resolves to whether it was shown.
+     */
+    show(input: NotifyInput): Promise<boolean>;
+    /**
+     * The Dock badge: how many sessions need the person; 0 clears it. Nothing shows while
+     * Settings → General turns the badge off.
+     */
+    setBadge(count: number): Promise<void>;
+    /** The person clicked a notification: main brought this window forward; show the session. */
+    onOpenSession(listener: (sessionId: string) => void): Unsubscribe;
+  };
+
+  /** Settings → Permissions: the default mode and the rules in the settings files. */
+  readonly permissions: {
+    read(projectDir: string | null): Promise<PermissionSettingsState>;
+    /**
+     * Changes one of dawg's settings files, keeping every other key in it, and answers with the
+     * new state. Rejects with a sentence for a rule that does not parse, a file that cannot be
+     * parsed, or a missing project. Open sessions apply the change from their next turn.
+     */
+    write(input: PermissionsWriteInput): Promise<PermissionSettingsState>;
+    /** Null when `rule` parses, else a sentence saying what is wrong, for checking as it is typed. */
+    checkRule(rule: string): Promise<string | null>;
   };
 
   readonly dialogs: {
@@ -760,6 +953,7 @@ export const IPC = {
   workspaceListDirectory: "dawg:workspace:list-directory",
   workspaceReadFile: "dawg:workspace:read-file",
   workspaceWriteFile: "dawg:workspace:write-file",
+  workspaceFindFiles: "dawg:workspace:find-files",
   workspaceChanged: "dawg:workspace:changed",
   worktreesBranches: "dawg:worktrees:branches",
   worktreesCreate: "dawg:worktrees:create",
@@ -771,6 +965,12 @@ export const IPC = {
   terminalList: "dawg:terminal:list",
   terminalData: "dawg:terminal:data",
   terminalExit: "dawg:terminal:exit",
+  notificationsShow: "dawg:notifications:show",
+  notificationsSetBadge: "dawg:notifications:set-badge",
+  notificationsOpenSession: "dawg:notifications:open-session",
+  permissionsRead: "dawg:permissions:read",
+  permissionsWrite: "dawg:permissions:write",
+  permissionsCheckRule: "dawg:permissions:check-rule",
   chooseFolder: "dawg:dialogs:choose-folder",
   openExternal: "dawg:shell:open-external",
   platform: "dawg:platform",

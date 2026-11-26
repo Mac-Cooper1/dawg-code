@@ -16,7 +16,10 @@ import {
   type DirEntry,
   type FileContent,
   type FileDiff,
+  type FileMatch,
   FileRefSchema,
+  FindFilesInputSchema,
+  type FindFilesResult,
   ProjectRefSchema,
   RevertInputSchema,
   SessionRefSchema,
@@ -28,6 +31,7 @@ import {
   type WorktreeInfo,
   WriteFileInputSchema,
 } from "../../shared/bridge.ts";
+import { fuzzySearch, normalizeQuery, prepareTarget } from "../../shared/fuzzy.ts";
 import { countChanges, makeHunks, reverseHunk } from "../code/diff.ts";
 import { validate } from "./validate.ts";
 
@@ -298,6 +302,60 @@ function sameFile(a: FakeFile | undefined, b: FakeFile | undefined): boolean {
   if (a.kind === "text" && b.kind === "text") return a.text === b.text;
   if (a.kind !== "text" && b.kind !== "text") return a.tag === b.tag && a.size === b.size;
   return false;
+}
+
+/**
+ * `@` search over files given by absolute path, as main answers it: files and the folders they
+ * imply under `cwd`, matched fuzzily; an empty query lists `recent` files (relative paths, newest
+ * first) and then the top level. Shared with the store tests' fake bridge.
+ */
+export function findInFiles(
+  cwd: string,
+  files: Iterable<string>,
+  query: string,
+  limit: number,
+  recent: readonly string[] = [],
+): FindFilesResult {
+  const root = trimSlash(cwd);
+  const relatives = new Set<string>();
+  for (const path of files) {
+    if (!path.startsWith(`${root}/`)) continue;
+    const rel = path.slice(root.length + 1);
+    // Other sessions' worktrees are not this folder's files.
+    if (/(^|\/)\.dawg\/worktrees\//.test(rel)) continue;
+    relatives.add(rel);
+    for (let slash = rel.indexOf("/"); slash !== -1; slash = rel.indexOf("/", slash + 1)) {
+      relatives.add(rel.slice(0, slash + 1));
+    }
+  }
+  const toMatch = (rel: string, highlights: number[]): FileMatch => ({
+    path: `${root}/${trimSlash(rel)}`,
+    relativePath: rel,
+    kind: rel.endsWith("/") ? "directory" : "file",
+    highlights,
+  });
+  if (normalizeQuery(query) === "") {
+    const chosen = recent.filter((rel) => relatives.has(rel)).slice(0, Math.min(10, limit));
+    const topLevel = [...relatives]
+      .filter((rel) => !trimSlash(rel).includes("/"))
+      .sort((a, b) => {
+        const aFolder = a.endsWith("/");
+        if (aFolder !== b.endsWith("/")) return aFolder ? -1 : 1;
+        return a.localeCompare(b, "en", { numeric: true, sensitivity: "base" });
+      });
+    for (const rel of topLevel) {
+      if (chosen.length >= limit) break;
+      if (!chosen.includes(rel)) chosen.push(rel);
+    }
+    return { matches: chosen.map((rel) => toMatch(rel, [])), truncated: false };
+  }
+  const targets = [...relatives].map(prepareTarget);
+  return {
+    matches: fuzzySearch(query, targets, limit).map((match) =>
+      toMatch(match.target.text, match.positions),
+    ),
+    truncated: false,
+  };
 }
 
 function fileSize(file: FakeFile): number {
@@ -599,6 +657,24 @@ export function createFakeWorkspace(options: FakeWorkspaceOptions = {}): FakeWor
       emit([path]);
       return { mtimeMs };
     },
+    async findFiles(input) {
+      const valid = validate(FindFilesInputSchema, input, "file search");
+      const tracked = session(valid.sessionId);
+      const repo = tracked.repo ? repos.get(tracked.repo) : undefined;
+      const files: string[] = [];
+      for (const path of disk.keys()) {
+        if (!isInside(path, tracked.cwd) || (repo && isIgnored(repo, path))) continue;
+        files.push(path);
+      }
+      // Files written since the project was made (by the agent or the editor), newest first.
+      const seededAt = Math.min(...files.map((path) => disk.get(path)?.mtimeMs ?? 0));
+      const recent = files
+        .filter((path) => (disk.get(path)?.mtimeMs ?? 0) > seededAt)
+        .sort((a, b) => (disk.get(b)?.mtimeMs ?? 0) - (disk.get(a)?.mtimeMs ?? 0))
+        .map((path) => relative(path, tracked.cwd));
+      return findInFiles(tracked.cwd, files, valid.query, valid.limit, recent);
+    },
+
     onChanged(listener): Unsubscribe {
       listeners.add(listener);
       return () => {

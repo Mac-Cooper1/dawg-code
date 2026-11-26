@@ -364,6 +364,32 @@ describe("connectRemote", () => {
     });
   });
 
+  test("takes vision from a remote llama-server's /props modalities", async () => {
+    const port = await jsonServer({
+      "GET /v1/models": () => ({ body: { data: [{ id: "vlm.gguf", owned_by: "llamacpp" }] } }),
+      "GET /props": () => ({
+        body: {
+          default_generation_settings: { n_ctx: 8192 },
+          modalities: { vision: true, audio: false },
+        },
+      }),
+    });
+    const vision = await connectRemote({ url: `http://127.0.0.1:${port}/v1` });
+    expect(vision.ok && vision.server.models[0]).toMatchObject({
+      capabilities: { vision: true },
+      capabilitiesSource: "reported",
+    });
+
+    const textOnly = await jsonServer({
+      "GET /v1/models": () => ({ body: { data: [{ id: "lm.gguf", owned_by: "llamacpp" }] } }),
+      "GET /props": () => ({
+        body: { default_generation_settings: { n_ctx: 8192 }, modalities: { vision: false } },
+      }),
+    });
+    const text = await connectRemote({ url: `http://127.0.0.1:${textOnly}/v1` });
+    expect(text.ok && text.server.models[0]).toMatchObject({ capabilities: { vision: false } });
+  });
+
   test("falls back to the configured, then a conservative, window", async () => {
     const port = await jsonServer({ "GET /v1/models": () => ({ body: { data: [{ id: "x" }] } }) });
     const configured = await connectRemote({

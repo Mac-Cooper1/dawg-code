@@ -83,7 +83,7 @@ describe("settings store", () => {
     expect(await readJson(file)).toEqual({
       permissions: { allow: ["Bash(npm test)"] },
       model: "qwen",
-      desktop: { appearance: "dark", toolCalls: "open", futureThing: 3 },
+      desktop: { ...DEFAULT_SETTINGS, appearance: "dark", toolCalls: "open", futureThing: 3 },
     });
   });
 
@@ -102,7 +102,7 @@ describe("settings store", () => {
     const file = settingsFile(root);
     await writeFile(file, JSON.stringify({ desktop: { appearance: "purple", toolCalls: "open" } }));
     const store = createSettingsStore(file, log);
-    expect(await store.get()).toEqual({ appearance: "system", toolCalls: "open" });
+    expect(await store.get()).toEqual({ ...DEFAULT_SETTINGS, toolCalls: "open" });
     expect(logs.join("\n")).toContain("desktop.appearance");
   });
 
@@ -122,7 +122,9 @@ describe("settings store", () => {
       store.update({ appearance: "light" }),
       store.update({ toolCalls: "closed" }),
     ]);
-    expect(await readJson(file)).toEqual({ desktop: { appearance: "light", toolCalls: "closed" } });
+    expect(await readJson(file)).toEqual({
+      desktop: { ...DEFAULT_SETTINGS, appearance: "light", toolCalls: "closed" },
+    });
   });
 });
 

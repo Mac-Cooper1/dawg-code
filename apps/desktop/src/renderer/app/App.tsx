@@ -4,11 +4,14 @@ import { FirstRunContainer } from "../onboarding/FirstRunContainer.tsx";
 import { SettingsContainer } from "../settings/SettingsContainer.tsx";
 import { useActions, useAppStore } from "../state/store.ts";
 import { MainWindow } from "./MainWindow.tsx";
+import { CommandPalette } from "./palette/CommandPalette.tsx";
+import { useAttention } from "./useAttention.ts";
 import { useGlobalShortcuts } from "./useShortcuts.ts";
 import { useApplyTheme } from "./useTheme.ts";
 
 /**
- * The window's root: applies the theme, listens for the window-wide shortcuts, and shows the
+ * The window's root: applies the theme, listens for the window-wide shortcuts, watches for
+ * sessions that want the person (notifications and the Dock badge), and shows the
  * sessions view, Settings, or (in place of the sessions view, until a model runs) first run.
  */
 export function App() {
@@ -22,7 +25,15 @@ export function App() {
   );
   useApplyTheme(appearance, reportTheme);
   useGlobalShortcuts();
+  useAttention();
 
-  if (view === "settings") return <SettingsContainer />;
-  return firstRun ? <FirstRunContainer /> : <MainWindow />;
+  const body =
+    view === "settings" ? <SettingsContainer /> : firstRun ? <FirstRunContainer /> : <MainWindow />;
+  return (
+    <>
+      {body}
+      {/* ⌘K, from every view. */}
+      <CommandPalette />
+    </>
+  );
 }

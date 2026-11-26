@@ -1,16 +1,44 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import type { ResolvedTheme } from "../../shared/bridge.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DawgBridge, FindFilesInput, ResolvedTheme } from "../../shared/bridge.ts";
 import {
   createTestStore,
   renderWithStore,
   resetTestViews,
   sampleComposer,
 } from "../app/testing.tsx";
+import { setBridgeForTests } from "../bridge/index.ts";
 import type { ComposerView, ConnectionState } from "../state/types.ts";
 import { THEMES } from "../test/render.tsx";
 import { ComposerContainer } from "./ComposerContainer.tsx";
+
+afterEach(() => setBridgeForTests(null));
+
+/** A bridge whose only part in use is the `@` search. */
+function searchBridge(paths: string[]) {
+  const calls: FindFilesInput[] = [];
+  const bridge = {
+    workspace: {
+      findFiles: async (input: FindFilesInput) => {
+        calls.push(input);
+        return {
+          matches: paths
+            .filter((path) => path.includes(input.query))
+            .map((path) => ({
+              path: `/Users/me/code/tally/${path}`,
+              relativePath: path,
+              kind: "file" as const,
+              highlights: [],
+            })),
+          truncated: false,
+        };
+      },
+    },
+  } as unknown as DawgBridge;
+  setBridgeForTests(bridge);
+  return calls;
+}
 
 vi.mock("../state/selectors.ts", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -92,6 +120,46 @@ describe.each(THEMES)("ComposerContainer (%s)", (theme) => {
     await user.click(screen.getByRole("menuitem", { name: "Manage models…" }));
     expect(actions.setSettingsPage).toHaveBeenCalledWith("models");
     expect(store.getState().layout).toMatchObject({ view: "settings", settingsPage: "models" });
+  });
+
+  it("searches the session's files for @, and sends what was mentioned", async () => {
+    const calls = searchBridge(["src/tally/money.py", "README.md"]);
+    const { user, actions, store } = setup(theme);
+    const textbox = screen.getByRole("textbox", { name: "Message to dawg" });
+    await user.type(textbox, "Read @money");
+    await screen.findByRole("option", { name: "src/tally/money.py" });
+    expect(actions.trackSession).toHaveBeenCalledWith("fix");
+    await waitFor(() =>
+      expect(calls.at(-1)).toEqual({ sessionId: "fix", query: "money", limit: 50 }),
+    );
+    await user.keyboard("{Enter}");
+    expect(actions.rememberMention).toHaveBeenCalledWith("fix", "src/tally/money.py");
+    // The store holds the remembered paths; this fake store keeps them by hand.
+    store.setState({
+      ui: { ...store.getState().ui, mentionPaths: { fix: ["src/tally/money.py"] } },
+    });
+    await user.keyboard("{Enter}");
+    expect(actions.submit).toHaveBeenCalledWith("fix", "Read @src/tally/money.py ", [
+      { path: "src/tally/money.py" },
+    ]);
+  });
+
+  it("shows the session's attached images and removes them through the store", async () => {
+    const { user, actions, store } = setup(theme);
+    store.setState({
+      ui: {
+        ...store.getState().ui,
+        attachments: {
+          fix: [
+            { id: "i1", name: "shot.png", mediaType: "image/png", data: "AA", width: 1, height: 1 },
+          ],
+        },
+      },
+    });
+    expect(await screen.findByRole("img", { name: "shot.png" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove shot.png" }));
+    expect(actions.removeAttachment).toHaveBeenCalledWith("fix", "i1");
+    expect(screen.queryByRole("img", { name: "shot.png" })).not.toBeInTheDocument();
   });
 
   it("cannot send until the engine is ready", async () => {

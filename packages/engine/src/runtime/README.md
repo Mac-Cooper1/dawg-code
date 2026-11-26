@@ -51,7 +51,7 @@ filled in.
 
 | Method | Protocol method | Notes |
 | --- | --- | --- |
-| `createSession(NewSessionOptions)`: `{ cwd, projectDir?, title?, mode?, model?, effort?, additionalDirectories?, capabilities? }` | `session.create` | Loads settings and instruction files, gathers the environment (git with read-only commands), builds the prefix, writes the session-context message |
+| `createSession(NewSessionOptions)`: `{ cwd, projectDir?, title?, mode?, model?, effort?, additionalDirectories?, capabilities? }` | `session.create` | Loads settings and instruction files, gathers the environment (git with read-only commands), builds the prefix, writes the session-context message. `projectDir` (default `cwd`) is the project a worktree session belongs to: see "Worktree sessions and personal settings" |
 | `resumeSession(id, { capabilities? })` | `session.resume` | Returns the open runtime if there is one |
 | `forkSession(id, { point?, title?, cwd?, capabilities? })` | `session.fork` | `point`: end (default; stops before a running turn), `beforeTurn`, `afterTurn`. Title defaults to the parent's plus " (fork)". A different `cwd` is refused |
 | `listSessions({ projectDir?, query?, includeArchived?, limit?, cursor? })` | `session.list` | `{ sessions: SessionSummary[], nextCursor }`, newest activity first |
@@ -186,6 +186,32 @@ and appends a `plan_approved` note; plans are also saved under `<storeRoot>/plan
 request (`plan.proposed`, and `pending` in the snapshot) carries `modeBeforePlan`, the mode an
 approval without a mode leads to: the mode before plan mode, or "default" when that was plan mode
 itself or settings turn it off. It is read back from the transcript's state records on resume.
+
+### Settings changes in an open session
+
+At the start of each turn the session stats its settings files (`settings-reload.ts`) and loads
+them again only when one appeared, went or changed (modification time, size or inode); the
+engine stamps them just before the first load, so an edit made meanwhile is still seen. Live
+from the next turn: the allow, ask and deny rules; `disableBypassPermissionsMode` (a session in
+bypassPermissions mode drops to "default", is told so, and an `error` event says why); and `env`
+for the turn's commands. "Allow always" rules follow the file they were saved to, so removing one
+in the settings stops it; one that could not be saved holds for the rest of the session. Not
+live: `additionalDirectories` (part of the session's state and of what the model was told; use
+`addDirectory`) and `defaultMode` (it only picks a new session's mode). If a file that was
+readable no longer is (half-saved, not JSON), the session keeps the settings it had, says so once
+with an `error` event, and tries again next turn.
+
+### Worktree sessions and personal settings
+
+A session created with a `projectDir` other than its `cwd` (a worktree of that project) belongs
+to the project: it is the summary's `projectDir`, kept in the side folder's `runtime.json` across
+resumes, and passed on to forks and `/clear`. Its personal settings (`.dawg/settings.local.json`
+and `.claude/settings.local.json`) are the project's, and "Allow always" saves there, so a rule
+outlives the worktree and applies to the project's other sessions from their next turn. The shared
+files (`.dawg/settings.json`, `.claude/settings.json`) still come from `cwd`, since they are
+committed and the branch may change them; the user's files are the same for every session. The
+reload stamps exactly these files. Rules keep their meaning: a project-relative rule such as
+`Edit(/src/**)` is read against the session's `cwd`, so it covers the worktree's own files.
 
 ## Sharing the model
 

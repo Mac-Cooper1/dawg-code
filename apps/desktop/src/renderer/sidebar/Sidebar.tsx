@@ -1,12 +1,15 @@
 import type { SessionId } from "@dawg/protocol";
 import { type KeyboardEvent, useId } from "react";
+import { ariaKeyShortcut, formatShortcut } from "../app/commands/keys.ts";
+import { SHORTCUTS } from "../app/commands/shortcuts.ts";
+import { usePlatformOs } from "../app/platform.tsx";
 import type { ModelFooterView, SidebarGroup } from "../state/types.ts";
 import { Icon, IconButton, Kbd } from "../ui/index.ts";
 import { SessionRow } from "./SessionRow.tsx";
 import styles from "./Sidebar.module.css";
 import { SidebarFooter } from "./SidebarFooter.tsx";
 
-/** The search field's id, so ⌘K can focus it from anywhere in the window. */
+/** The search field's id, so its shortcut (⌥⌘F) can focus it from anywhere in the window. */
 export const SIDEBAR_SEARCH_ID = "sidebar-search";
 
 export interface SidebarProps {
@@ -29,6 +32,7 @@ export interface SidebarProps {
 
 /** Sessions grouped by project, with New session, search and the running model. */
 export function Sidebar(props: SidebarProps) {
+  const os = usePlatformOs();
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape" && props.search !== "") {
       // Esc clears the search first; it must not also interrupt the selected session.
@@ -44,13 +48,13 @@ export function Sidebar(props: SidebarProps) {
         <button
           type="button"
           className={styles.newButton}
-          aria-keyshortcuts="Meta+N"
+          aria-keyshortcuts={ariaKeyShortcut(SHORTCUTS.newSession, os)}
           onClick={() => props.onNewSession()}
         >
           <Icon name="plus" />
           <span className={styles.grow}>New session</span>
           <span aria-hidden="true">
-            <Kbd>⌘N</Kbd>
+            <Kbd>{formatShortcut(SHORTCUTS.newSession, os)}</Kbd>
           </span>
         </button>
         <div className={styles.search}>
@@ -61,14 +65,14 @@ export function Sidebar(props: SidebarProps) {
             className={styles.searchInput}
             placeholder="Search sessions"
             aria-label="Search sessions"
-            aria-keyshortcuts="Meta+K"
+            aria-keyshortcuts={ariaKeyShortcut(SHORTCUTS.searchSessions, os)}
             autoComplete="off"
             spellCheck={false}
             value={props.search}
             onChange={(event) => props.onSearch(event.target.value)}
             onKeyDown={onSearchKeyDown}
           />
-          <Kbd>⌘K</Kbd>
+          <Kbd>{formatShortcut(SHORTCUTS.searchSessions, os)}</Kbd>
         </div>
       </div>
       <div className={styles.list}>
