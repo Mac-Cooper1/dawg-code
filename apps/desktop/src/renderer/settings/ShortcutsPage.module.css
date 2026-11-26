@@ -1,0 +1,120 @@
+/* Settings → Shortcuts: a filter, then a table of actions and keycaps per group. */
+
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 340px;
+  height: 30px;
+  margin-top: 16px;
+  padding: 0 9px;
+  border-radius: var(--radius);
+  background: var(--hover);
+  color: var(--ink-3);
+}
+
+/* The field draws no outline of its own; the box shows the focus ring. */
+.filter:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.filterInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  outline: none;
+  font-size: var(--text);
+}
+
+.filterInput::placeholder {
+  color: var(--ink-3);
+}
+
+.filterInput::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.group {
+  max-width: 720px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.row + .row {
+  border-top: 1px solid var(--line);
+}
+
+.action {
+  padding: 7px 16px 7px 0;
+  text-align: left;
+  font-weight: 400;
+  vertical-align: top;
+}
+
+.title {
+  display: block;
+  color: var(--ink);
+}
+
+.where {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.keysCell {
+  padding: 7px 0;
+  text-align: right;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.keys {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.alternative {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.or {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.combo {
+  display: inline-flex;
+}
+
+.caps {
+  display: inline-flex;
+  gap: 3px;
+}
+
+/* Keycaps: a little larger than the hints in buttons, with a base so they read as keys. Two
+   classes, to win over the shared hint's style whichever module loads first. */
+.caps .cap {
+  min-width: 20px;
+  padding: 0 5px;
+  font-size: var(--text-xs);
+  line-height: 19px;
+  text-align: center;
+  color: var(--ink-2);
+  background: var(--panel);
+  box-shadow: 0 1px 0 var(--line-2);
+}

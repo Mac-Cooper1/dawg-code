@@ -308,12 +308,16 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteResul
   const data = isObject(listing.data) ? asArray(listing.data.data) : [];
   if (data.length === 0) return { ok: false, error: "the server lists no models" };
 
-  // llama-server reports the real per-slot window in /props.
-  let llamaContext: number | undefined;
+  // llama-server reports the real per-slot window in /props, and whether the loaded model can
+  // see images (it was started with a vision projector) in its modalities.
+  const llama: LlamaProps = {};
   if (data.some((m) => isObject(m) && m.owned_by === "llamacpp")) {
     const props = await requestJson(`${base.replace(/\/v1$/, "")}/props`, opts);
-    if (props.ok && isObject(props.data) && isObject(props.data.default_generation_settings)) {
-      llamaContext = asPositive(props.data.default_generation_settings.n_ctx);
+    if (props.ok && isObject(props.data)) {
+      if (isObject(props.data.default_generation_settings)) {
+        llama.context = asPositive(props.data.default_generation_settings.n_ctx);
+      }
+      if (isObject(props.data.modalities)) llama.vision = props.data.modalities.vision === true;
     }
   }
   const models: DiscoveredModel[] = [];
@@ -321,17 +325,26 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteResul
     if (!isObject(m)) continue;
     const id = asString(m.id);
     if (!id) continue;
-    models.push(describeRemoteModel(id, m, llamaContext, options.contextWindow));
+    models.push(describeRemoteModel(id, m, llama, options.contextWindow));
   }
   return { ok: true, server: { kind: "remote", baseUrl: base, apiKey: options.apiKey, models } };
+}
+
+/** What a llama-server's /props says, when the server is one. */
+interface LlamaProps {
+  /** The per-slot context window. */
+  context?: number | undefined;
+  /** The loaded model takes images. */
+  vision?: boolean;
 }
 
 function describeRemoteModel(
   id: string,
   m: Json,
-  llamaContext: number | undefined,
+  llama: LlamaProps,
   configured: number | undefined,
 ): DiscoveredModel {
+  const llamaContext = llama.context;
   const meta = isObject(m.meta) ? m.meta : {};
   const topProvider = isObject(m.top_provider) ? m.top_provider : {};
   const reported =
@@ -345,7 +358,7 @@ function describeRemoteModel(
   const params = asArray(m.supported_parameters);
   const architecture = isObject(m.architecture) ? m.architecture : {};
   const inputs = asArray(architecture.input_modalities);
-  const capsReported = params.length > 0 || inputs.length > 0;
+  const capsReported = params.length > 0 || inputs.length > 0 || llama.vision !== undefined;
   return {
     id,
     contextWindow: reported ?? configured ?? REMOTE_FALLBACK_CONTEXT,
@@ -354,7 +367,7 @@ function describeRemoteModel(
     maxContext: asPositive(meta.n_ctx_train),
     capabilities: {
       tools: params.length > 0 ? params.includes("tools") : true,
-      vision: inputs.includes("image"),
+      vision: inputs.includes("image") || llama.vision === true,
       reasoning: params.includes("reasoning") || params.includes("include_reasoning"),
     },
     capabilitiesSource: capsReported ? "reported" : "assumed",

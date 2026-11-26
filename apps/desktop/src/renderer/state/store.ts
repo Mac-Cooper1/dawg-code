@@ -55,6 +55,8 @@ export function initialAppState(
     },
     ui: {
       drafts: {},
+      attachments: {},
+      mentionPaths: {},
       queues: {},
       openItems: {},
       shownAgain: {},
@@ -72,6 +74,7 @@ export function initialAppState(
     notices: [],
     workspaces: {},
     newSessionOffer: null,
+    liveBatches: {},
   };
 }
 

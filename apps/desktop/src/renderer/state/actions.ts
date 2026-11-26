@@ -5,6 +5,7 @@
  * that depend on the engine (titles, modes, answers) arrive as events rather than being guessed.
  */
 import {
+  type ContentPart,
   ErrorCodes,
   type PermissionMode,
   type QuestionResponse,
@@ -44,10 +45,12 @@ import type {
   AppActions,
   AppStore,
   EngineSlice,
+  ImageAttachment,
   Layout,
   NewSessionOffer,
   Notice,
   OnboardingState,
+  QueuedMessage,
   ReducerInput,
   SessionView,
   UiState,
@@ -121,6 +124,30 @@ function trackKeyOf(input: TrackSessionInput): string {
   return [input.cwd, input.projectDir, ...(input.additionalDirectories ?? [])].join("\n");
 }
 
+/**
+ * `liveBatches` after a batch: bumped for each session that live events (not a snapshot, replay
+ * or list) changed, and without the sessions that left. Unchanged when neither happened.
+ */
+function countLiveBatches(
+  counts: Record<SessionId, number>,
+  inputs: readonly ReducerInput[],
+  before: EngineSlice,
+  after: EngineSlice,
+  removed: readonly SessionId[],
+): Record<SessionId, number> {
+  let next = counts;
+  for (const input of inputs) {
+    if (input.type !== "event") continue;
+    const id = input.event.payload.sessionId;
+    const session = after.sessions[id];
+    // A duplicate event changes nothing, and one batch counts once.
+    if (!session || session === before.sessions[id] || next[id] !== counts[id]) continue;
+    next = { ...next, [id]: (counts[id] ?? 0) + 1 };
+  }
+  for (const id of removed) next = withoutKey(next, id);
+  return next;
+}
+
 export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Runtime {
   const { bridge } = deps;
   const get = store.getState;
@@ -186,7 +213,8 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     const slice = reduceAll(before, inputs);
     if (slice === before) return;
     const { ui, ended, removed } = followUps(prev, slice);
-    store.setState({ ...slice, ui });
+    const liveBatches = countLiveBatches(prev.liveBatches, inputs, before, slice, removed);
+    store.setState({ ...slice, ui, liveBatches });
     for (const id of removed) void forgetWorkspace(id);
     const selected = prev.layout.selectedSessionId;
     if (selected !== null && removed.includes(selected)) {
@@ -367,8 +395,15 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     if (offer) store.setState({ newSessionOffer: { ...offer, ...patch } });
   }
 
-  /** Opens the new-session dialog; settles once the person has answered it. */
-  function offerNewSession(projectDir: string, list: BranchList): Promise<SessionId | null> {
+  /**
+   * Opens the new-session dialog; settles once the person has answered it. `start` overrides
+   * where it starts: "Run in a worktree" checked, the name, and an error to show.
+   */
+  function offerNewSession(
+    projectDir: string,
+    list: BranchList,
+    start: Partial<Pick<NewSessionOffer, "worktree" | "suggestedName" | "error">> = {},
+  ): Promise<SessionId | null> {
     // A dialog already open gives way to the new one.
     offerResolve?.(null);
     const branches = orderBranches(list.current, list.branches);
@@ -377,10 +412,10 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       projectName: get().projects[projectDir]?.name ?? basename(projectDir),
       branches,
       current: list.current,
-      suggestedName: suggestWorktreeName(branches),
-      worktree: lastChoseWorktree,
+      suggestedName: start.suggestedName ?? suggestWorktreeName(branches),
+      worktree: start.worktree ?? lastChoseWorktree,
       busy: false,
-      error: null,
+      error: start.error ?? null,
     };
     store.setState({ newSessionOffer: offer });
     return new Promise((resolve) => {
@@ -394,6 +429,53 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     offerResolve = null;
     if (get().newSessionOffer !== null) store.setState({ newSessionOffer: null });
     resolve?.(id);
+  }
+
+  /**
+   * A new session where no choice was given: Settings → General → New sessions decides for a git
+   * project, unless `ask` opens the dialog anyway. Other folders start in the folder.
+   */
+  async function startAsPreferred(
+    projectDir: string,
+    ask: boolean | "worktree",
+  ): Promise<SessionId | null> {
+    const preference = ask === false ? get().settings.newSessionWorktree : "ask";
+    // Whether it is a repository does not matter: the folder it is.
+    if (preference === "folder") return createSession(projectDir, null);
+    const list = await branchesOf(projectDir);
+    if (!list?.isRepo) {
+      if (ask === "worktree") {
+        notice(
+          `“${basename(projectDir)}” is not a git repository, so the session runs in the folder.`,
+          "neutral",
+        );
+      }
+      return createSession(projectDir, null);
+    }
+    if (preference === "ask") {
+      return offerNewSession(projectDir, list, ask === "worktree" ? { worktree: true } : {});
+    }
+    // "worktree": what the dialog would suggest, from the current branch, without asking.
+    const suggestedName = suggestWorktreeName(orderBranches(list.current, list.branches));
+    if (list.current === null) {
+      return offerNewSession(projectDir, list, {
+        worktree: true,
+        suggestedName,
+        error: "The project has no current branch. Choose one to start from.",
+      });
+    }
+    let made: WorktreeInfo;
+    try {
+      made = await bridge.worktrees.create({ projectDir, name: suggestedName, base: list.current });
+    } catch (error) {
+      // The dialog says why, so another name or base can be tried.
+      return offerNewSession(projectDir, list, {
+        worktree: true,
+        suggestedName,
+        error: sentence(error),
+      });
+    }
+    return createSession(projectDir, made);
   }
 
   /**
@@ -433,8 +515,15 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
 
   // --- Sending ---------------------------------------------------------------------------------
 
-  /** Sends text as a new turn: a known "/command", or a prompt. Returns the turn id, if any. */
-  async function send(sessionId: SessionId, text: string): Promise<string | null> {
+  /**
+   * Sends a message as a new turn: a known "/command", or a prompt with its images and mentioned
+   * files. Returns the turn id, if any.
+   */
+  async function send(
+    sessionId: SessionId,
+    message: Pick<QueuedMessage, "text" | "images" | "mentions">,
+  ): Promise<string | null> {
+    const { text } = message;
     const session = get().sessions[sessionId];
     const command = queue.parseCommand(text, session?.commands ?? []);
     if (command) {
@@ -451,9 +540,16 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       if (result.openedSession) void adoptAndSelect(result.openedSession);
       return result.turnId;
     }
+    // Images first, then the words about them.
+    const content: ContentPart[] = (message.images ?? []).map((image) => ({
+      type: "image",
+      mediaType: image.mediaType,
+      data: image.data,
+    }));
+    if (text !== "") content.push({ type: "text", text });
     const result = await connection.request("session.prompt", {
       sessionId,
-      prompt: { content: [{ type: "text", text }] },
+      prompt: { content, mentions: message.mentions ?? [] },
     });
     return result.turnId;
   }
@@ -468,7 +564,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     if (!message || sending.has(message.id)) return;
     sending.add(message.id);
     try {
-      const turnId = await send(sessionId, message.text);
+      const turnId = await send(sessionId, message);
       setUi((ui) => ({ ...ui, queues: queue.removeQueued(ui.queues, sessionId, message.id) }));
       rememberQueuedTurn(turnId);
     } catch (error) {
@@ -488,10 +584,33 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     return session.activeTurnId !== null || session.status === "working";
   }
 
+  /** Clears the draft (and the paths its `@` menu inserted) unless it changed since sending. */
   function clearDraftIf(sessionId: SessionId, text: string): void {
     setUi((ui) =>
-      ui.drafts[sessionId] === text ? { ...ui, drafts: withoutKey(ui.drafts, sessionId) } : ui,
+      ui.drafts[sessionId] === text
+        ? {
+            ...ui,
+            drafts: withoutKey(ui.drafts, sessionId),
+            mentionPaths: withoutKey(ui.mentionPaths, sessionId),
+          }
+        : ui,
     );
+  }
+
+  /** Detaches images that went with a message, keeping any attached since. */
+  function detachSent(sessionId: SessionId, sent: readonly ImageAttachment[]): void {
+    if (sent.length === 0) return;
+    const ids = new Set(sent.map((image) => image.id));
+    setUi((ui) => {
+      const current = ui.attachments[sessionId];
+      if (!current) return ui;
+      const kept = current.filter((image) => !ids.has(image.id));
+      const attachments =
+        kept.length === 0
+          ? withoutKey(ui.attachments, sessionId)
+          : { ...ui.attachments, [sessionId]: kept };
+      return { ...ui, attachments };
+    });
   }
 
   async function answerWithText(sessionId: SessionId, text: string): Promise<boolean> {
@@ -786,6 +905,9 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
 
     setAppearance: (appearance) => updateSettings({ appearance }),
     setToolCallDisplay: (toolCalls) => updateSettings({ toolCalls }),
+    setNotifications: (notifications) => updateSettings({ notifications }),
+    setDockBadge: (dockBadge) => updateSettings({ dockBadge }),
+    setNewSessionWorktree: (newSessionWorktree) => updateSettings({ newSessionWorktree }),
     setResolvedTheme(theme) {
       if (get().resolvedTheme !== theme) store.setState({ resolvedTheme: theme });
     },
@@ -803,11 +925,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       if (dir === null) return null;
       const projectDir = dir;
       const choice = options?.worktree;
-      if (choice === undefined) {
-        const list = await branchesOf(projectDir);
-        if (list?.isRepo) return offerNewSession(projectDir, list);
-        return createSession(projectDir, null);
-      }
+      if (choice === undefined) return startAsPreferred(projectDir, options?.ask ?? false);
       if (choice === false) return createSession(projectDir, null);
       const made = await request("Could not make the worktree", () =>
         bridge.worktrees.create({ projectDir, name: choice.name, base: choice.base }),
@@ -904,31 +1022,45 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         return { ...ui, drafts };
       });
     },
-    async submit(sessionId, text) {
+    async submit(sessionId, text, mentions = []) {
       const trimmed = text.trim();
       const session = get().sessions[sessionId];
-      if (trimmed === "" || !session) return;
+      const hasImages = (get().ui.attachments[sessionId]?.length ?? 0) > 0;
+      if ((trimmed === "" && !hasImages) || !session) return;
       try {
         // A stored session must be open before the engine takes a prompt (and its commands known).
         if (!session.open || !session.loaded) await connection.openSession(sessionId);
-        if (await answerWithText(sessionId, trimmed)) {
+        // A card takes words; attached images wait for the next message.
+        if (trimmed !== "" && (await answerWithText(sessionId, trimmed))) {
           clearDraftIf(sessionId, text);
           return;
         }
+        // A command takes neither images nor mentions: they stay for the next message.
+        const commands = get().sessions[sessionId]?.commands ?? [];
+        const isCommand = queue.parseCommand(trimmed, commands) !== null;
+        const images = isCommand ? [] : (get().ui.attachments[sessionId] ?? []);
+        const message = {
+          text: trimmed,
+          ...(images.length > 0 ? { images } : {}),
+          ...(!isCommand && mentions.length > 0 ? { mentions } : {}),
+        };
+        if (message.text === "" && images.length === 0) return;
         if (isRunning(sessionId)) {
           setUi((ui) => ({
             ...ui,
             queues: queue.enqueue(ui.queues, sessionId, {
               id: nextId("queued"),
-              text: trimmed,
               state: "queued",
+              ...message,
             }),
           }));
           clearDraftIf(sessionId, text);
+          detachSent(sessionId, images);
           return;
         }
-        await send(sessionId, trimmed);
+        await send(sessionId, message);
         clearDraftIf(sessionId, text);
+        detachSent(sessionId, images);
       } catch (error) {
         notice(`Could not send your message: ${errorText(error)}.`);
       }
@@ -961,7 +1093,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       }
       sending.add(queueId);
       try {
-        const turnId = await send(sessionId, message.text);
+        const turnId = await send(sessionId, message);
         setUi((ui) => ({ ...ui, queues: queue.removeQueued(ui.queues, sessionId, queueId) }));
         rememberQueuedTurn(turnId);
       } catch (error) {
@@ -972,6 +1104,30 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     },
     removeQueued(sessionId, queueId) {
       setUi((ui) => ({ ...ui, queues: queue.removeQueued(ui.queues, sessionId, queueId) }));
+    },
+    addAttachments(sessionId, images) {
+      if (images.length === 0) return;
+      setUi((ui) => ({
+        ...ui,
+        attachments: {
+          ...ui.attachments,
+          [sessionId]: [...(ui.attachments[sessionId] ?? []), ...images],
+        },
+      }));
+    },
+    removeAttachment(sessionId, imageId) {
+      const image = get().ui.attachments[sessionId]?.find((candidate) => candidate.id === imageId);
+      if (image) detachSent(sessionId, [image]);
+    },
+    rememberMention(sessionId, relativePath) {
+      setUi((ui) => {
+        const known = ui.mentionPaths[sessionId] ?? [];
+        if (known.includes(relativePath)) return ui;
+        return {
+          ...ui,
+          mentionPaths: { ...ui.mentionPaths, [sessionId]: [...known, relativePath] },
+        };
+      });
     },
     async setMode(sessionId, mode: PermissionMode) {
       await request("Could not change the mode", () =>

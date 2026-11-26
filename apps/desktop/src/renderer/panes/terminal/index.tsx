@@ -14,6 +14,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { ResolvedTheme } from "../../../shared/bridge.ts";
+import { useNewTerminalRequests } from "../../app/commands/requests.ts";
 import { run } from "../../app/run.ts";
 import { getBridge } from "../../bridge/index.ts";
 import { displayPath } from "../../lib/format.ts";
@@ -120,6 +121,9 @@ export function TerminalPane({ sessionId }: PaneProps) {
       setOpening(false);
     }
   }, [actions, cwd, manager, sessionId]);
+
+  // "New terminal" from the command palette.
+  useNewTerminalRequests(sessionId, () => run(openTerminal()));
 
   const sendToComposer = useCallback(
     (text: string) => {

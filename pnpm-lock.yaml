@@ -190,6 +190,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@dawg/compat':
+        specifier: workspace:*
+        version: link:../../packages/compat
       '@dawg/engine':
         specifier: workspace:*
         version: link:../../packages/engine

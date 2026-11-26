@@ -725,7 +725,7 @@ describe("settings and window state", () => {
       { appearance: "light" },
       { toolCalls: "open" },
     ]);
-    expect(state(harness).settings).toEqual({ appearance: "light", toolCalls: "open" });
+    expect(state(harness).settings).toMatchObject({ appearance: "light", toolCalls: "open" });
     harness.bridge.changeSettings({ appearance: "dark" });
     expect(state(harness).settings.appearance).toBe("dark");
     actions(harness).setResolvedTheme("light");

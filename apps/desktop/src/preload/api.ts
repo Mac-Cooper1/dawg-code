@@ -8,6 +8,7 @@
 import type { z } from "zod";
 import {
   type AddedModelFile,
+  BadgeCountSchema,
   BRIDGE_VERSION,
   type BranchList,
   type ChangeSet,
@@ -22,13 +23,20 @@ import {
   type FileContent,
   type FileDiff,
   FileRefSchema,
+  FindFilesInputSchema,
+  type FindFilesResult,
   IdleUnloadSchema,
   IPC,
   ModelIdSchema,
   type ModelOption,
   type ModelStatus,
   type ModelsState,
+  NotifyInputSchema,
   OpenTerminalInputSchema,
+  PermissionRuleTextSchema,
+  type PermissionSettingsState,
+  PermissionsProjectSchema,
+  PermissionsWriteInputSchema,
   type PlatformInfo,
   type PreloadApi,
   ProjectRefSchema,
@@ -200,6 +208,11 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
         WriteFileInputSchema,
         "file",
       ),
+      findFiles: invokeWith<typeof FindFilesInputSchema, FindFilesResult>(
+        IPC.workspaceFindFiles,
+        FindFilesInputSchema,
+        "file search",
+      ),
       onChanged: (listener) => subscribe<WorkspaceChangedEvent>(IPC.workspaceChanged, listener),
     },
     worktrees: {
@@ -249,6 +262,36 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
       ),
       onData: (listener) => subscribe<TerminalDataEvent>(IPC.terminalData, listener),
       onExit: (listener) => subscribe<TerminalExitEvent>(IPC.terminalExit, listener),
+    },
+    notifications: {
+      show: invokeWith<typeof NotifyInputSchema, boolean>(
+        IPC.notificationsShow,
+        NotifyInputSchema,
+        "notification",
+      ),
+      setBadge: invokeWith<typeof BadgeCountSchema, void>(
+        IPC.notificationsSetBadge,
+        BadgeCountSchema,
+        "badge count",
+      ),
+      onOpenSession: (listener) => subscribe<string>(IPC.notificationsOpenSession, listener),
+    },
+    permissions: {
+      read: invokeWith<typeof PermissionsProjectSchema, PermissionSettingsState>(
+        IPC.permissionsRead,
+        PermissionsProjectSchema,
+        "project",
+      ),
+      write: invokeWith<typeof PermissionsWriteInputSchema, PermissionSettingsState>(
+        IPC.permissionsWrite,
+        PermissionsWriteInputSchema,
+        "permission settings",
+      ),
+      checkRule: invokeWith<typeof PermissionRuleTextSchema, string | null>(
+        IPC.permissionsCheckRule,
+        PermissionRuleTextSchema,
+        "rule",
+      ),
     },
     dialogs: {
       chooseFolder: async (options) => {

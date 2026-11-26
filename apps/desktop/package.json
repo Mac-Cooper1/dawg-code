@@ -15,6 +15,7 @@
     "e2e": "electron-vite build && playwright test"
   },
   "dependencies": {
+    "@dawg/compat": "workspace:*",
     "@dawg/engine": "workspace:*",
     "@dawg/models": "workspace:*",
     "@dawg/protocol": "workspace:*",

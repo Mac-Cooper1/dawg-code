@@ -11,7 +11,13 @@ const root = import.meta.dirname;
  * node_modules, so they (and zod, which they share with main) are bundled, never loaded at run
  * time. Other dependencies stay external in main so native modules (node-pty, later) still work.
  */
-const BUNDLED_DEPENDENCIES = ["@dawg/engine", "@dawg/models", "@dawg/protocol", "zod"];
+const BUNDLED_DEPENDENCIES = [
+  "@dawg/compat",
+  "@dawg/engine",
+  "@dawg/models",
+  "@dawg/protocol",
+  "zod",
+];
 
 /**
  * The page's Content-Security-Policy allows only scripts from 'self'. In the dev server,

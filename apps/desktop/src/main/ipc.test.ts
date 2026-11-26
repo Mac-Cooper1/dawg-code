@@ -71,6 +71,7 @@ function recordingPanes() {
     listDirectory: record("listDirectory"),
     readFile: record("readFile"),
     writeFile: record("writeFile"),
+    findFiles: record("findFiles"),
     onChanged: () => () => {},
     resolveDirectory: record("resolveDirectory"),
     dispose: () => {},
@@ -123,6 +124,34 @@ function services(): MainServices<string> & {
     workspace: panes.workspace,
     worktrees: panes.worktrees,
     terminals: panes.terminals,
+    notifications: {
+      show: async (...args) => {
+        panes.calls.push(["notify", ...args]);
+        return true;
+      },
+      setBadge: async (...args) => {
+        panes.calls.push(["setBadge", ...args]);
+      },
+    },
+    permissions: {
+      read: async (projectDir) => {
+        panes.calls.push(["permissionsRead", projectDir]);
+        return { projectDir, files: [], defaultMode: "default", bypassDisabled: false };
+      },
+      write: async (input) => {
+        panes.calls.push(["permissionsWrite", input]);
+        return {
+          projectDir: input.projectDir,
+          files: [],
+          defaultMode: "default",
+          bypassDisabled: false,
+        };
+      },
+      checkRule: async (rule) => {
+        panes.calls.push(["checkRule", rule]);
+        return null;
+      },
+    },
     ownerOf: (sender) => `owner:${sender}`,
     models: recordingModels(),
     chooseModelFile: async (sender) => {

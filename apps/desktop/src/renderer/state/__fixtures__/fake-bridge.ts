@@ -20,9 +20,12 @@ import {
   type EngineRestartInfo,
   type FileContent,
   type FileDiff,
+  type FindFilesInput,
   type ModelOption,
   type ModelStatus,
   type ModelsState,
+  type NotifyInput,
+  NotifyInputSchema,
   type OpenTerminalInput,
   type RevertInput,
   type TerminalDataEvent,
@@ -44,6 +47,12 @@ import {
   type FakeModelManager,
   type FakeModelManagerOptions,
 } from "../../bridge/fake-models.ts";
+import { findInFiles } from "../../bridge/fake-workspace.ts";
+import {
+  createFakePermissions,
+  type FakePermissions,
+  type FakeSettingsFile,
+} from "../../bridge/fake-permissions.ts";
 import { HOME } from "./streams.ts";
 
 export interface PortServer {
@@ -78,6 +87,8 @@ export interface FakeBridgeOptions {
   changes?: ChangeSet["files"];
   /** What `workspace.fileDiff` answers, by path. */
   diffs?: Record<string, FileDiff>;
+  /** Settings files for `permissions`, by absolute path. Default: none exist. */
+  permissionFiles?: Record<string, FakeSettingsFile>;
 }
 
 /** A fake shell. */
@@ -113,6 +124,8 @@ export interface FakeBridge extends DawgBridge {
   readonly reverts: RevertInput[];
   /** Every `workspace.writeFile` call. */
   readonly writes: WriteFileInput[];
+  /** Every `workspace.findFiles` call (`@` in the composer). */
+  readonly findFilesCalls: FindFilesInput[];
   /** The in-memory files (`writeFile` changes them). */
   readonly files: Map<string, { content: string; mtimeMs: number }>;
   /** Reports files changed on disk to `workspace.onChanged` listeners. */
@@ -133,6 +146,14 @@ export interface FakeBridge extends DawgBridge {
   terminalOutput(terminalId: string, data: string): void;
   /** The shell exits. */
   endTerminal(terminalId: string, exitCode?: number | null, signal?: number | null): void;
+  /** Every `notifications.show` call that main would show (notifications on), in order. */
+  readonly notificationsShown: NotifyInput[];
+  /** Every `notifications.setBadge` count, in order. */
+  readonly badgeCounts: number[];
+  /** The person clicks a session's notification: `notifications.onOpenSession` hears it. */
+  openSessionFromNotification(sessionId: string): void;
+  /** The settings files behind `permissions`, its writes, and a way to make one fail. */
+  readonly fakePermissions: FakePermissions;
   /** Closes every port it handed out. */
   close(): void;
 }
@@ -154,6 +175,10 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
   const saved: WindowState[] = [];
   const settingsUpdates: DesktopSettingsPatch[] = [];
   const initialModels = options.modelsState ?? mockModelsState();
+  const fakePermissions = createFakePermissions({
+    homeDir: HOME,
+    files: options.permissionFiles ?? {},
+  });
   const modelManager = createFakeModelManager({
     auto: false,
     ...options.modelManager,
@@ -177,6 +202,7 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
   const untracked: string[] = [];
   const reverts: RevertInput[] = [];
   const writes: WriteFileInput[] = [];
+  const findFilesCalls: FindFilesInput[] = [];
   const workspaceListeners = new Set<(event: WorkspaceChangedEvent) => void>();
   const files = new Map<string, { content: string; mtimeMs: number }>(
     Object.entries(options.files ?? {}).map(([path, content]) => [path, { content, mtimeMs: 1 }]),
@@ -253,6 +279,12 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
   const dataListeners = new Set<(event: TerminalDataEvent) => void>();
   const exitListeners = new Set<(event: TerminalExitEvent) => void>();
   let terminalCount = 0;
+
+  // --- Notifications -----------------------------------------------------------------------
+
+  const notificationsShown: NotifyInput[] = [];
+  const badgeCounts: number[] = [];
+  const openSessionListeners = new Set<(sessionId: string) => void>();
 
   function terminalOf(terminalId: string): FakeTerminal {
     const terminal = terminals.get(terminalId);
@@ -351,6 +383,12 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
         files.set(input.path, { content: input.content, mtimeMs });
         return { mtimeMs };
       },
+      findFiles: async (input) => {
+        findFilesCalls.push(input);
+        const cwd = tracked.findLast((track) => track.sessionId === input.sessionId)?.cwd;
+        if (cwd === undefined) throw new Error(`Session ${input.sessionId} is not tracked.`);
+        return findInFiles(cwd, files.keys(), input.query, input.limit ?? 50);
+      },
       onChanged: (listener) => subscribe(workspaceListeners, listener),
     },
     worktrees: {
@@ -427,6 +465,20 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
       onData: (listener) => subscribe(dataListeners, listener),
       onExit: (listener) => subscribe(exitListeners, listener),
     },
+    notifications: {
+      show: async (input) => {
+        // Validated as main does, so a test fails on a title or body main would refuse.
+        const valid = NotifyInputSchema.parse(input);
+        if (!settings.notifications) return false;
+        notificationsShown.push(valid);
+        return true;
+      },
+      setBadge: async (count) => {
+        badgeCounts.push(count);
+      },
+      onOpenSession: (listener) => subscribe(openSessionListeners, listener),
+    },
+    permissions: fakePermissions.api,
     dialogs: {
       chooseFolder: async () => (options.folder === undefined ? null : options.folder),
     },
@@ -448,10 +500,12 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
       modelManager.setStatus(status);
     },
     modelManager,
+    fakePermissions,
     tracked,
     untracked,
     reverts,
     writes,
+    findFilesCalls,
     files,
     workspaceChanged(event) {
       for (const listener of [...workspaceListeners]) listener(event);
@@ -472,6 +526,11 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
     endTerminal(terminalId, exitCode = 0, signal = null) {
       terminalOf(terminalId).alive = false;
       for (const listener of [...exitListeners]) listener({ terminalId, exitCode, signal });
+    },
+    notificationsShown,
+    badgeCounts,
+    openSessionFromNotification(sessionId) {
+      for (const listener of [...openSessionListeners]) listener(sessionId);
     },
     close() {
       modelManager.dispose();

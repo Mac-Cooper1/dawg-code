@@ -17,6 +17,8 @@ import type {
   FileContent,
   FileDiff,
   FileRef,
+  FindFilesInputSchema,
+  FindFilesResult,
   RevertInput,
   TrackSessionInputSchema,
   Unsubscribe,
@@ -33,6 +35,7 @@ import {
   trackedChanges,
   untrackedFiles,
 } from "./changes.ts";
+import { createFileIndexCache } from "./file-index.ts";
 import {
   currentBranch,
   describeBaseObject,
@@ -69,6 +72,8 @@ export interface WorkspaceServiceOptions {
   debounceMs?: number;
   /** Longest a report waits while changes keep coming. */
   maxWaitMs?: number;
+  /** The bundled ripgrep, which lists files for `@` mentions outside git. */
+  ripgrepPath?: string | null;
 }
 
 export interface WorkspaceService {
@@ -83,6 +88,8 @@ export interface WorkspaceService {
   listDirectory(ref: FileRef): Promise<DirEntry[]>;
   readFile(ref: FileRef): Promise<FileContent>;
   writeFile(input: WriteFileInput): Promise<{ mtimeMs: number }>;
+  /** `@` mentions: files and directories under the session's working directory, best first. */
+  findFiles(input: z.output<typeof FindFilesInputSchema>): Promise<FindFilesResult>;
   onChanged(listener: (event: WorkspaceChangedEvent) => void): Unsubscribe;
   /** A folder inside a tracked session's folders, for a terminal to start in. */
   resolveDirectory(sessionId: string, dir: string): Promise<{ real: string; logical: string }>;
@@ -141,6 +148,8 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
   const listeners = new Set<(event: WorkspaceChangedEvent) => void>();
   /** Tracks of one session run one after another. */
   const trackQueue = new Map<string, Promise<unknown>>();
+  /** The `@` mention index, one per working directory, kept fresh by the watchers' reports. */
+  const fileIndex = createFileIndexCache({ log, ripgrepPath: options.ripgrepPath ?? null });
 
   function emit(event: WorkspaceChangedEvent): void {
     for (const listener of listeners) {
@@ -268,8 +277,9 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
       watchers: [],
       batch: createBatcher(
         (paths) => {
-          if (sessions.get(input.sessionId) === session)
-            emit({ sessionId: input.sessionId, paths });
+          if (sessions.get(input.sessionId) !== session) return;
+          if (roots[0]) void fileIndex.changed(roots[0], paths);
+          emit({ sessionId: input.sessionId, paths });
         },
         debounceMs,
         maxWaitMs,
@@ -277,6 +287,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
     };
     sessions.set(input.sessionId, session);
     startWatching(session);
+    if (existing) releaseIndexIfUnused(existing);
 
     return {
       sessionId: session.id,
@@ -294,6 +305,15 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
   function forget(session: Session): void {
     stopWatching(session);
     if (sessions.get(session.id) === session) sessions.delete(session.id);
+    releaseIndexIfUnused(session);
+  }
+
+  /** Drops a working directory's file index once no tracked session works there. */
+  function releaseIndexIfUnused(session: Session): void {
+    const real = session.roots[0]?.real;
+    if (real === undefined) return;
+    for (const other of sessions.values()) if (other.roots[0]?.real === real) return;
+    fileIndex.release(real);
   }
 
   async function resolve(session: Session, input: string) {
@@ -416,6 +436,13 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
   }
 
   return {
+    async findFiles(input) {
+      const session = need(input.sessionId);
+      const root = session.roots[0];
+      if (!root) return { matches: [], truncated: false };
+      return fileIndex.find(root, input.query, input.limit);
+    },
+
     track(input, owner) {
       const previous = trackQueue.get(input.sessionId) ?? Promise.resolve();
       const run = previous.catch(() => {}).then(() => doTrack(input, owner));
@@ -645,6 +672,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
       for (const session of sessions.values()) stopWatching(session);
       sessions.clear();
       listeners.clear();
+      fileIndex.dispose();
     },
   };
 }

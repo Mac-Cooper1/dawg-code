@@ -62,8 +62,9 @@ export function createSettingsStore(file: string, log: Logger): SettingsStore {
   async function apply(patch: DesktopSettingsPatch): Promise<DesktopSettings> {
     const before = await get();
     const next: DesktopSettings = { ...before };
-    if (patch.appearance !== undefined) next.appearance = patch.appearance;
-    if (patch.toolCalls !== undefined) next.toolCalls = patch.toolCalls;
+    for (const [key, value] of Object.entries(patch) as [keyof DesktopSettings, unknown][]) {
+      if (value !== undefined) Object.assign(next, { [key]: value });
+    }
     current = next;
     await json.update((file) => {
       // Keys a newer version of the app wrote under "desktop" are kept too.

@@ -13,17 +13,25 @@ import type { SettingsFlags } from "./flags.ts";
 import { PERMISSION_LISTS, type ReadSettingsResult, readSettingsFile } from "./parse.ts";
 
 export interface LoadSettingsOptions {
-  /** The project's root directory (absolute). */
+  /** The project's root directory (absolute): a session's working directory. */
   projectDir: string;
+  /**
+   * Where the personal files (`settings.local.json`) are read from, absolute; default
+   * `projectDir`. A worktree session's is its main project: personal files are not committed,
+   * so a worktree has none of its own, and anything saved in one would go with it.
+   */
+  localDir?: string;
   /** The user's home directory (absolute). Tests point this at a temporary directory. */
   homeDir: string;
   flags?: SettingsFlags;
 }
 
-type FileSource = "local" | "project" | "user";
+/** The settings files' levels, as `SettingsSource` names them. */
+export type SettingsFileSource = "local" | "project" | "user";
 
-interface FileSpec {
-  source: FileSource;
+/** One settings file that applies, whether or not it exists. */
+export interface SettingsFileSpec {
+  source: SettingsFileSource;
   origin: SettingsOrigin;
   path: string;
 }
@@ -36,18 +44,26 @@ const FLAGS_REF: SettingsFileRef = { source: "flags", origin: null, path: null }
 /**
  * Every settings file, highest precedence first. Within one level our own file outranks the
  * Claude Code file, so a project can override an inherited `.claude` value from `.dawg`.
+ * A null project lists only the user's own files. The personal files come from `localDir`
+ * (default: the project; see `LoadSettingsOptions.localDir`).
  */
-export function settingsFilePaths(projectDir: string, homeDir: string): FileSpec[] {
-  const project = resolve(projectDir);
+export function settingsFilePaths(
+  projectDir: string | null,
+  homeDir: string,
+  localDir: string | null = projectDir,
+): SettingsFileSpec[] {
   const home = resolve(homeDir);
-  const user: FileSpec[] = [
+  const user: SettingsFileSpec[] = [
     { source: "user", origin: "dawg", path: join(home, ".dawg", "settings.json") },
     { source: "user", origin: "claude", path: join(home, ".claude", "settings.json") },
   ];
+  if (projectDir === null) return user;
+  const project = resolve(projectDir);
+  const local = resolve(localDir ?? projectDir);
   const userPaths = new Set(user.map((f) => f.path));
-  const projectLevels: FileSpec[] = [
-    { source: "local", origin: "dawg", path: join(project, ".dawg", "settings.local.json") },
-    { source: "local", origin: "claude", path: join(project, ".claude", "settings.local.json") },
+  const projectLevels: SettingsFileSpec[] = [
+    { source: "local", origin: "dawg", path: join(local, ".dawg", "settings.local.json") },
+    { source: "local", origin: "claude", path: join(local, ".claude", "settings.local.json") },
     { source: "project", origin: "dawg", path: join(project, ".dawg", "settings.json") },
     { source: "project", origin: "claude", path: join(project, ".claude", "settings.json") },
   ];
@@ -62,13 +78,42 @@ export function settingsFilePaths(projectDir: string, homeDir: string): FileSpec
  */
 export async function loadSettings(options: LoadSettingsOptions): Promise<Settings> {
   const projectDir = resolve(options.projectDir);
+  const localDir = resolve(options.localDir ?? projectDir);
   const homeDir = resolve(options.homeDir);
-  const flags = options.flags ?? {};
-  const specs = settingsFilePaths(projectDir, homeDir);
+  const specs = settingsFilePaths(projectDir, homeDir, localDir);
   const parsed: ReadSettingsResult[] = await Promise.all(
     specs.map((spec) => readSettingsFile(spec.path, spec.origin)),
   );
+  return mergeSettings({
+    projectDir,
+    localDir,
+    homeDir,
+    flags: options.flags ?? {},
+    specs,
+    parsed,
+  });
+}
 
+export interface MergeSettingsInput {
+  /** Absolute; relative directories in the shared project files resolve against it. */
+  projectDir: string;
+  /** Absolute, default `projectDir`; relative directories in the personal files resolve against it. */
+  localDir?: string;
+  /** Absolute. */
+  homeDir: string;
+  flags: SettingsFlags;
+  /** The files, highest precedence first, and what was read from each (same order). */
+  specs: readonly SettingsFileSpec[];
+  parsed: readonly ReadSettingsResult[];
+}
+
+/**
+ * Merges files that were already read, as `loadSettings` does. For callers that also need each
+ * file on its own (Settings → Permissions), so both views come from one read.
+ */
+export function mergeSettings(input: MergeSettingsInput): Settings {
+  const { projectDir, homeDir, flags, specs, parsed } = input;
+  const localDir = input.localDir ?? projectDir;
   const problems: SettingsProblem[] = [];
   const files: LoadedSettingsFile[] = [];
   const lists: Record<(typeof PERMISSION_LISTS)[number], PermissionRule[]> = {
@@ -117,9 +162,10 @@ export async function loadSettings(options: LoadSettingsOptions): Promise<Settin
 
     for (const list of PERMISSION_LISTS) for (const rule of result[list]) addRule(list, rule, ref);
 
-    // Relative entries in project files are relative to the project; in the user's files, to
-    // the home directory, since those files apply to every project.
-    const base = spec.source === "user" ? homeDir : projectDir;
+    // Relative entries in project files are relative to the folder the file is in (the
+    // personal files may be another folder's); in the user's files, to the home directory,
+    // since those files apply to every project.
+    const base = spec.source === "user" ? homeDir : spec.source === "local" ? localDir : projectDir;
     for (const dir of result.additionalDirectories) addDir(resolveUserPath(dir, base, homeDir));
 
     if (result.defaultMode !== null) {

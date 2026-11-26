@@ -72,6 +72,9 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
     dismissNotice: vi.fn((id) => set({ notices: get().notices.filter((n) => n.id !== id) })),
     setAppearance: vi.fn(async (appearance) => settings({ appearance })),
     setToolCallDisplay: vi.fn(async (toolCalls) => settings({ toolCalls })),
+    setNotifications: vi.fn(async (notifications) => settings({ notifications })),
+    setDockBadge: vi.fn(async (dockBadge) => settings({ dockBadge })),
+    setNewSessionWorktree: vi.fn(async (newSessionWorktree) => settings({ newSessionWorktree })),
     setResolvedTheme: vi.fn((resolvedTheme: ResolvedTheme) => set({ resolvedTheme })),
     newSession: vi.fn(async () => null),
     answerNewSessionOffer: vi.fn(async () => set({ newSessionOffer: null })),
@@ -88,6 +91,17 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
     interrupt: vi.fn(done),
     sendQueuedNow: vi.fn(done),
     removeQueued: vi.fn(),
+    addAttachments: vi.fn((sessionId, images) => {
+      const attachments = get().ui.attachments;
+      const next = [...(attachments[sessionId] ?? []), ...images];
+      set({ ui: { ...get().ui, attachments: { ...attachments, [sessionId]: next } } });
+    }),
+    removeAttachment: vi.fn((sessionId, imageId) => {
+      const attachments = get().ui.attachments;
+      const next = (attachments[sessionId] ?? []).filter((image) => image.id !== imageId);
+      set({ ui: { ...get().ui, attachments: { ...attachments, [sessionId]: next } } });
+    }),
+    rememberMention: vi.fn(),
     setMode: vi.fn(done),
     cycleMode: vi.fn(done),
     setModel: vi.fn(done),

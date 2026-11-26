@@ -50,6 +50,7 @@
 /* The box */
 
 .box {
+  position: relative;
   border: 1px solid var(--line-2);
   border-radius: var(--radius-2xl);
   background: var(--panel);
@@ -65,6 +66,133 @@
 
 .box[data-disabled="true"] {
   opacity: 0.6;
+}
+
+/* Files dragged over the box: the accent when they can be attached, quiet when they cannot. */
+.box[data-dropping="yes"] {
+  border-color: var(--acc-edge);
+  box-shadow:
+    var(--shadow-1),
+    0 0 0 2px var(--acc-edge);
+}
+
+.box[data-dropping="no"] {
+  border-style: dashed;
+}
+
+.dropHint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.box[data-dropping="yes"] .dropHint {
+  color: var(--acc-text);
+}
+
+/* Attached images, above the text */
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px 0;
+  list-style: none;
+}
+
+.attachment {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+.attachmentImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.preparing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+}
+
+.attachmentRemove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--ink-2);
+  box-shadow: var(--shadow-1);
+}
+
+.attachmentRemove:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* One line about what could not be attached. */
+.attachNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.attachNoticeText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachNoticeClose {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 6px;
+  color: var(--ink-3);
+}
+
+.attachNoticeClose:hover {
+  background: var(--hover);
+  color: var(--ink);
 }
 
 /* Grows with its text up to about ten lines, then scrolls. */
@@ -226,6 +354,42 @@
   padding: 0;
   list-style: none;
   overflow-y: auto;
+}
+
+/* The `@` file menu: the folder part quiet, matched characters in the accent. */
+.commandMenu.mentionMenu {
+  width: min(560px, 100%);
+  max-width: min(560px, 100%);
+}
+
+.mentionPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+.mentionFolder {
+  color: var(--ink-3);
+}
+
+.mentionHit {
+  color: var(--acc-text);
+  font-weight: 600;
+}
+
+.mentionStatus {
+  margin: 0;
+  padding: 7px 9px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+.mentionNote {
+  margin: 4px 0 0;
 }
 
 .argumentHint {

@@ -29,12 +29,14 @@ function without<T>(record: Record<string, T>, ids: readonly string[]): Record<s
   return next;
 }
 
-/** Drops everything the UI keeps for these sessions: drafts, queued messages, marks. */
+/** Drops everything the UI keeps for these sessions: drafts, images, queued messages, marks. */
 export function forgetSessions(ui: UiState, ids: readonly SessionId[]): UiState {
   if (ids.length === 0) return ui;
   const next: UiState = {
     ...ui,
     drafts: without(ui.drafts, ids),
+    attachments: without(ui.attachments, ids),
+    mentionPaths: without(ui.mentionPaths, ids),
     queues: without(ui.queues, ids),
     openItems: without(ui.openItems, ids),
     shownAgain: without(ui.shownAgain, ids),

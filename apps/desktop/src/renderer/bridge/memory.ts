@@ -14,6 +14,7 @@ import {
 } from "@dawg/protocol";
 import type { z } from "zod";
 import {
+  BadgeCountSchema,
   BRIDGE_VERSION,
   ChooseFolderOptionsSchema,
   type DawgBridge,
@@ -26,6 +27,8 @@ import {
   ExternalUrlSchema,
   type ModelOption,
   type ModelsState,
+  type NotifyInput,
+  NotifyInputSchema,
   type PlatformInfo,
   type Unsubscribe,
   type WindowState,
@@ -37,6 +40,12 @@ import {
   type FakeModelManager,
   type FakeModelManagerOptions,
 } from "./fake-models.ts";
+import {
+  browserPermissionFiles,
+  createFakePermissions,
+  type FakePermissions,
+  type FakeSettingsFile,
+} from "./fake-permissions.ts";
 import { createFakeTerminal, type FakeTerminal } from "./fake-terminal.ts";
 import {
   createFakeWorkspace,
@@ -77,6 +86,11 @@ export interface MemoryBridgeOptions {
   storage?: StorageLike | null;
   /** The pretend workspace and worktrees (see fake-workspace.ts). */
   workspace?: FakeWorkspaceOptions;
+  /**
+   * Settings files for Settings → Permissions, by absolute path (see fake-permissions.ts).
+   * Default: a few lived-in ones under the home folder and ~/code/tally.
+   */
+  permissionFiles?: Record<string, FakeSettingsFile>;
 }
 
 /** An in-memory bridge, also used by tests. */
@@ -89,6 +103,14 @@ export interface MemoryBridge extends DawgBridge {
   readonly fakeWorkspace: FakeWorkspace;
   /** The pretend shells behind `terminal`. */
   readonly fakeTerminal: FakeTerminal;
+  /** The settings files behind `permissions`. */
+  readonly fakePermissions: FakePermissions;
+  /** Every notification shown (by main's rules: notifications on, the page not focused). */
+  readonly notificationsShown: NotifyInput[];
+  /** Every count given to the Dock badge, in order. */
+  readonly badgeCounts: number[];
+  /** Test helper: the person clicked a session's notification. */
+  openSessionFromNotification(sessionId: string): void;
 }
 
 export const BROWSER_HOME_DIR = "/Users/you";
@@ -130,6 +152,13 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
 
   const fakeWorkspace = createFakeWorkspace(options.workspace);
   const fakeTerminal = createFakeTerminal();
+  const fakePermissions = createFakePermissions({
+    homeDir: platform.homeDir,
+    files: options.permissionFiles ?? browserPermissionFiles(platform.homeDir),
+  });
+  const notificationsShown: NotifyInput[] = [];
+  const badgeCounts: number[] = [];
+  const openSessionListeners = new Set<(sessionId: string) => void>();
 
   /** The engine sides of the ports handed out, closed on a simulated restart. */
   const engineEnds = new Set<Transport>();
@@ -172,8 +201,9 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
       update: async (patch) => {
         const valid = validate(DesktopSettingsPatchSchema, patch, "settings");
         const next: DesktopSettings = { ...settings };
-        if (valid.appearance !== undefined) next.appearance = valid.appearance;
-        if (valid.toolCalls !== undefined) next.toolCalls = valid.toolCalls;
+        for (const [key, value] of Object.entries(valid)) {
+          if (value !== undefined) Object.assign(next, { [key]: value });
+        }
         settings = next;
         persist(storage, STORAGE_KEYS.settings, settings);
         for (const listener of [...settingsListeners]) listener({ ...settings });
@@ -197,6 +227,20 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     workspace: fakeWorkspace.workspace,
     worktrees: fakeWorkspace.worktrees,
     terminal: fakeTerminal.api,
+    // Recorded, not shown: a page has no Dock, and browser notifications would need a prompt.
+    notifications: {
+      show: async (input) => {
+        const valid = validate(NotifyInputSchema, input, "notification");
+        if (!settings.notifications || globalThis.document?.hasFocus()) return false;
+        notificationsShown.push(valid);
+        return true;
+      },
+      setBadge: async (count) => {
+        badgeCounts.push(validate(BadgeCountSchema, count, "badge count"));
+      },
+      onOpenSession: (listener) => subscribe(openSessionListeners, listener),
+    },
+    permissions: fakePermissions.api,
     dialogs: {
       chooseFolder: async (folderOptions) => {
         validate(ChooseFolderOptionsSchema, folderOptions, "folder options");
@@ -212,6 +256,12 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     modelManager,
     fakeWorkspace,
     fakeTerminal,
+    fakePermissions,
+    notificationsShown,
+    badgeCounts,
+    openSessionFromNotification(sessionId) {
+      for (const listener of [...openSessionListeners]) listener(sessionId);
+    },
     simulateEngineRestart(reason = "The engine host restarted (simulated)") {
       for (const transport of [...engineEnds]) transport.close();
       if (!options.engine && defaultEngine) {

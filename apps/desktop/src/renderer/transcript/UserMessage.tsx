@@ -39,17 +39,24 @@ export const UserMessage = memo(function UserMessage({
               className={styles.thumb}
               src={`data:${image.mediaType};base64,${image.data}`}
               alt={`Attachment ${index + 1}`}
+              decoding="async"
+              loading="lazy"
             />
           ))}
         </div>
       )}
       {item.mentions.length > 0 && (
         <ul className={styles.mentions} aria-label="Mentioned files">
-          {item.mentions.map((mention) => {
+          {item.mentions.map((mention, index) => {
             const label = `${displayPath(mention.path, env.cwd, env.homeDir)}${lineRange(mention.startLine, mention.endLine)}`;
             return (
-              <li key={label}>
-                <Chip icon="file" mono title={mention.path}>
+              // biome-ignore lint/suspicious/noArrayIndexKey: a message's mentions never reorder
+              <li key={index}>
+                <Chip
+                  icon={mention.path.endsWith("/") ? "folder" : "file"}
+                  mono
+                  title={mention.path}
+                >
                   {label}
                 </Chip>
               </li>

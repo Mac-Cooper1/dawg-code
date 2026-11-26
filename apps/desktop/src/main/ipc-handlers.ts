@@ -3,8 +3,10 @@
  * sender is a type parameter) so the validation is unit-tested; `index.ts` registers these with
  * `ipcMain` behind the sender check.
  */
+import type { z } from "zod";
 import {
   type AddedModelFile,
+  BadgeCountSchema,
   type BranchList,
   type ChangeSet,
   type ChooseFolderOptions,
@@ -17,13 +19,21 @@ import {
   type FileContent,
   type FileDiff,
   FileRefSchema,
+  FindFilesInputSchema,
+  type FindFilesResult,
   IdleUnloadSchema,
   IPC,
   ModelIdSchema,
   type ModelOption,
   type ModelStatus,
   type ModelsState,
+  type NotifyInput,
+  NotifyInputSchema,
   OpenTerminalInputSchema,
+  PermissionRuleTextSchema,
+  type PermissionSettingsState,
+  PermissionsProjectSchema,
+  PermissionsWriteInputSchema,
   ProjectRefSchema,
   RevertInputSchema,
   type ServerInfo,
@@ -50,6 +60,20 @@ import type { WorktreeService } from "./workspace/worktrees.ts";
 /** An absolute path (the contract's schema for one, taken from a schema that has it). */
 const AbsolutePathSchema = FileRefSchema.shape.path;
 
+/** Notifications and the Dock badge, for the window that asks. */
+export interface NotificationServiceFor<Sender> {
+  /** Shows a notification unless a dawg window is focused or notifications are off. */
+  show(sender: Sender, input: NotifyInput): Promise<boolean>;
+  setBadge(sender: Sender, count: number): Promise<void>;
+}
+
+/** Settings → Permissions: reads and edits the settings files' default mode and rules. */
+export interface PermissionSettingsService {
+  read(projectDir: string | null): Promise<PermissionSettingsState>;
+  write(input: z.output<typeof PermissionsWriteInputSchema>): Promise<PermissionSettingsState>;
+  checkRule(rule: string): Promise<string | null>;
+}
+
 export interface MainServices<Sender> {
   settings: SettingsStore;
   windowState: WindowStateStore;
@@ -57,6 +81,8 @@ export interface MainServices<Sender> {
   workspace: WorkspaceService;
   worktrees: WorktreeService;
   terminals: TerminalService;
+  notifications: NotificationServiceFor<Sender>;
+  permissions: PermissionSettingsService;
   /** A stable name for the sender's window: the sessions it tracks are released when it closes. */
   ownerOf(sender: Sender): string;
   /** Which saved layout a sender uses. One window, "main", in this wave. */
@@ -77,7 +103,7 @@ export type SendHandler<Sender> = (sender: Sender, args: readonly unknown[]) => 
 export function createInvokeHandlers<Sender>(
   services: MainServices<Sender>,
 ): Record<string, InvokeHandler<Sender>> {
-  const { models, workspace, worktrees, terminals } = services;
+  const { models, workspace, worktrees, terminals, notifications, permissions } = services;
   const modelId = (value: unknown) => validateInput(ModelIdSchema, value, "model id");
   const sessionId = (value: unknown) => validateInput(SessionRefSchema, value, "session id");
   const fileRef = (value: unknown) => validateInput(FileRefSchema, value, "file");
@@ -138,6 +164,8 @@ export function createInvokeHandlers<Sender>(
       workspace.readFile(fileRef(ref)),
     [IPC.workspaceWriteFile]: async (_sender, [input]): Promise<{ mtimeMs: number }> =>
       workspace.writeFile(validateInput(WriteFileInputSchema, input, "file")),
+    [IPC.workspaceFindFiles]: async (_sender, [input]): Promise<FindFilesResult> =>
+      workspace.findFiles(validateInput(FindFilesInputSchema, input, "file search")),
     [IPC.worktreesBranches]: async (_sender, [ref]): Promise<BranchList> =>
       worktrees.branches(validateInput(ProjectRefSchema, ref, "project").projectDir),
     [IPC.worktreesCreate]: async (_sender, [input]): Promise<WorktreeInfo> =>
@@ -150,6 +178,16 @@ export function createInvokeHandlers<Sender>(
       terminals.close(validateInput(TerminalIdSchema, id, "terminal id")),
     [IPC.terminalList]: async (_sender, [id]): Promise<TerminalReattach[]> =>
       terminals.list(sessionId(id)),
+    [IPC.notificationsShow]: async (sender, [input]): Promise<boolean> =>
+      notifications.show(sender, validateInput(NotifyInputSchema, input, "notification")),
+    [IPC.notificationsSetBadge]: async (sender, [count]): Promise<void> =>
+      notifications.setBadge(sender, validateInput(BadgeCountSchema, count, "badge count")),
+    [IPC.permissionsRead]: async (_sender, [projectDir]): Promise<PermissionSettingsState> =>
+      permissions.read(validateInput(PermissionsProjectSchema, projectDir, "project")),
+    [IPC.permissionsWrite]: async (_sender, [input]): Promise<PermissionSettingsState> =>
+      permissions.write(validateInput(PermissionsWriteInputSchema, input, "permission settings")),
+    [IPC.permissionsCheckRule]: async (_sender, [rule]): Promise<string | null> =>
+      permissions.checkRule(validateInput(PermissionRuleTextSchema, rule, "rule")),
     [IPC.chooseFolder]: async (sender, [options]): Promise<string | null> =>
       services.chooseFolder(
         sender,

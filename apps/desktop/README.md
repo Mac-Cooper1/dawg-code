@@ -31,7 +31,7 @@ Run from this folder (pnpm runs through corepack: `corepack pnpm …`).
 | `corepack pnpm start` | Runs the built app |
 | `corepack pnpm typecheck` | `tsc` over the Node side and the web side |
 | `corepack pnpm test` | Vitest: `*.test.ts` in Node, `*.test.tsx` components in jsdom |
-| `corepack pnpm e2e` | Builds, then drives the app with Playwright: the shell checks (`e2e/app.spec.ts`) and a tour of every screen, decision card and the delete dialog that saves screenshots in both themes to `e2e/screenshots/tour/` (`e2e/tour.spec.ts`), both on the mock engine; the real engine against the fake model server from `packages/mock-model`, through a relaunch (`e2e/real-engine.spec.ts`); and the side panes and a worktree session against a real git repository (`e2e/panes.spec.ts`) |
+| `corepack pnpm e2e` | Builds, then drives the app with Playwright: the shell checks (`e2e/app.spec.ts`) and a tour of every screen, decision card and the delete dialog that saves screenshots in both themes to `e2e/screenshots/tour/` (`e2e/tour.spec.ts`), both on the mock engine; the real engine against the fake model server from `packages/mock-model`, through a relaunch (`e2e/real-engine.spec.ts`); the side panes and a worktree session against a real git repository (`e2e/panes.spec.ts`); and the everyday features on the real engine, with a model that can see: `@` mentions, an image, a rule added in Settings → Permissions, the Dock badge and a notification, the command palette and shortcuts (`e2e/daily-use.spec.ts`). CI runs them all on Apple Silicon |
 
 Lint runs from the repo root: `pnpm lint` (Biome).
 
@@ -90,14 +90,16 @@ Renderer (React, sandboxed) ──typed preload API──▶ Main ──▶ sett
 | `src/shared` | Contracts used on both sides: the bridge API and schemas, the main ⇄ engine host messages, mock model data |
 | `src/main`, `src/preload`, `src/engine-host` | The Electron side |
 | `src/main/models` | The model manager: state, downloads, the bundled runtime, servers and their keys |
-| `src/main/workspace` | Git and files for the panes (changes, diffs, reverts, listing, saving, watching), limited to a session's directories, and worktrees |
+| `src/main/workspace` | Git and files for the panes (changes, diffs, reverts, listing, saving, watching), limited to a session's directories, worktrees, and the file index behind `@` mentions (`file-index.ts`, ranked by `src/shared/fuzzy.ts`) |
+| `src/main/notifications.ts` | macOS notifications and the Dock badge; windows decide when to ask (`src/renderer/state/attention.ts`) |
 | `src/main/terminal` | The person's shells (`node-pty`), batched to windows, with a backlog for reloads |
 | `src/engine-host` | The engine switch (`engine.ts`), the real engine (`real-engine.ts`) and its model provider |
 | `src/mock-engine` | The mock engine, its recorded sessions (`fixtures/`) and the recording format |
 | `src/renderer/bridge` | `getBridge()` and the in-memory bridge |
 | `src/renderer/state` | Event reducer, Zustand store, selectors, engine connection (`types.ts` is the contract) |
 | `src/renderer/app` | Window layout: title bar, panes dock, notices, theme |
-| `src/renderer/sidebar`, `composer`, `settings` | Those parts of the window (Settings → Models is `settings/ModelsPage.tsx`) |
+| `src/renderer/app/commands`, `app/palette` | Every action and its shortcut in one registry (`commands/registry.ts`), which drives the window's shortcuts, the command palette (⌘K) and Settings → Shortcuts |
+| `src/renderer/sidebar`, `composer`, `settings` | Those parts of the window (the composer's `@` menu is `composer/MentionMenu.tsx` and its images `composer/images.ts`; Settings → Models is `settings/ModelsPage.tsx`; Settings → Permissions is `settings/PermissionsPage.tsx`, which edits dawg's settings files through `src/main/permissions.ts`; a worktree session's personal settings are its project's, so "Personal for this project" reaches it too) |
 | `src/renderer/onboarding`, `models` | The first run (welcome, download, start) and the model pieces it shares with Settings |
 | `src/renderer/panes` | The side panes, one folder each (`changes`, `files`, `terminal`, `plan`, `tasks`), registered in `panes/index.ts` |
 | `src/renderer/code` | Monaco, loaded on first use, with its worker, themes and the editor and diff components the panes share |

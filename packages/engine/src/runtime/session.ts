@@ -68,6 +68,7 @@ import type { EngineContext } from "./context.ts";
 import { RuntimeError } from "./errors.ts";
 import { closeUnfinished, type EventLog, type LoggedEvent, type ReplayPage } from "./event-log.ts";
 import { knownDate, knownMode, localDate } from "./known.ts";
+import { SettingsReloader } from "./settings-reload.ts";
 import { readSidecar, type Sidecar, writeSidecar } from "./sidecar.ts";
 import { generateTitle } from "./title.ts";
 import {
@@ -109,6 +110,11 @@ export interface RuntimeInit {
   records: readonly SessionRecord[];
   log: EventLog;
   settings: Settings;
+  /**
+   * What the settings files looked like just before `settings` was loaded (`settingsStamp`), so
+   * the first turn reloads only if they changed since. Left out, the first turn reloads them.
+   */
+  settingsStamp?: string | null;
   instructions: InstructionSet;
   connection: ModelConnection;
   capabilities: ClientCapabilities;
@@ -177,8 +183,12 @@ export class SessionRuntime {
   readonly #log: EventLog;
   readonly #sessionDir: string;
   readonly #bag: SessionStateBag = createStateBag();
-  readonly #settings: Settings;
+  /** Reloaded at the start of a turn when a file changed (see settings-reload.ts). */
+  #settings: Settings;
+  readonly #settingsReloader: SettingsReloader;
   #rules: PermissionState["rules"];
+  /** "Always allow" rules that could not be saved: they hold for this session whatever the files say. */
+  #unsavedAllow: PermissionRule[] = [];
   #instructions: InstructionSet;
   /** The instruction files as rendered into the prefix, for the context breakdown. */
   #instructionsText: string;
@@ -260,6 +270,16 @@ export class SessionRuntime {
     this.cwd = snapshot.meta.cwd;
     this.projectDir = init.sidecar?.projectDir ?? this.cwd;
     this.#settings = init.settings;
+    this.#settingsReloader = new SettingsReloader(
+      {
+        projectDir: this.cwd,
+        // A worktree session's personal settings are its project's (see engine.ts).
+        localDir: this.projectDir,
+        homeDir: ctx.homeDir,
+        ...(ctx.settingsFlags === undefined ? {} : { flags: ctx.settingsFlags }),
+      },
+      init.settingsStamp ?? null,
+    );
     this.#rules = {
       allow: [...init.settings.permissions.allow],
       ask: [...init.settings.permissions.ask],
@@ -609,6 +629,8 @@ export class SessionRuntime {
     const startedAt = this.#ctx.clock();
     let turnId: string;
     try {
+      // Settings edited since the last turn apply from this one.
+      await this.#reloadSettings();
       // The start of a turn is a safe point for notes: they go before the prompt.
       await this.#flushNotes();
       const content = await this.#promptContent(prompt);
@@ -1282,6 +1304,44 @@ export class SessionRuntime {
     return mode !== "bypassPermissions" || !this.#settings.permissions.bypassDisabled;
   }
 
+  /** Picks up changed settings files; see settings-reload.ts for what applies live. */
+  async #reloadSettings(): Promise<void> {
+    const check = await this.#settingsReloader.check(this.#settings);
+    if (check.kind === "unchanged") return;
+    if (check.kind === "unreadable") {
+      this.#emit("error", {
+        turnId: null,
+        error: errorInfo(
+          "other",
+          "A settings file could not be read, so this session keeps the permission rules it had until it is fixed.",
+          check.problems.map((p) => `${p.path}: ${p.message}`).join("\n"),
+          false,
+        ),
+      });
+      return;
+    }
+    const fresh = check.settings;
+    this.#settings = fresh;
+    const listed = new Set(fresh.permissions.allow.map((r) => r.rule));
+    this.#rules = {
+      allow: [...this.#unsavedAllow.filter((r) => !listed.has(r.rule)), ...fresh.permissions.allow],
+      ask: [...fresh.permissions.ask],
+      deny: [...fresh.permissions.deny],
+    };
+    if (!this.#modeAllowed(this.#mode)) {
+      this.#applyMode("default");
+      this.#emit("error", {
+        turnId: null,
+        error: errorInfo(
+          "other",
+          "bypassPermissions mode was turned off by permissions.disableBypassPermissionsMode, so this session now asks first.",
+          null,
+          false,
+        ),
+      });
+    }
+  }
+
   /**
    * The mode approving a plan leads to: the one the answer names, else the mode before plan
    * mode. "default" stands in for plan mode itself and for a mode settings turn off. With no
@@ -1703,7 +1763,7 @@ export class SessionRuntime {
     const from: SettingsFileRef = {
       source: "local",
       origin: "dawg",
-      path: localSettingsPath(this.cwd),
+      path: localSettingsPath(this.projectDir),
     };
     const known = new Set(this.#rules.allow.map((r) => r.rule));
     const added: PermissionRule[] = rules
@@ -1712,8 +1772,11 @@ export class SessionRuntime {
     // In force for this session at once, whether or not the file can be written.
     this.#rules = { ...this.#rules, allow: [...added, ...this.#rules.allow] };
     try {
-      await addPermissionRules({ projectDir: this.cwd, list: "allow", rules: [...rules] });
+      // The project's personal file, also from a worktree, so the rule outlives the worktree
+      // and applies to the project's other sessions from their next turn.
+      await addPermissionRules({ projectDir: this.projectDir, list: "allow", rules: [...rules] });
     } catch (error) {
+      this.#unsavedAllow = [...added, ...this.#unsavedAllow];
       this.#emit("error", {
         turnId: this.activeTurnId,
         error: errorInfo(
