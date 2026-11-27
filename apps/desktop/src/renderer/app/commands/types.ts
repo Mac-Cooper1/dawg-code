@@ -44,7 +44,9 @@ export type ShortcutScope =
   | "comment"
   | "file-tree"
   | "files"
-  | "terminal";
+  | "terminal"
+  | "settings"
+  | "regions";
 
 /** Said after a shortcut that works only in one place: "In the message field". */
 export const SCOPE_LABELS: Readonly<Record<ShortcutScope, string | null>> = {
@@ -63,6 +65,8 @@ export const SCOPE_LABELS: Readonly<Record<ShortcutScope, string | null>> = {
   "file-tree": "In the Files pane’s tree",
   files: "In the Files pane",
   terminal: "In the terminal",
+  settings: "In Settings, outside a text field",
+  regions: "Anywhere but a dialog or menu",
 };
 
 export interface CommandShortcut {

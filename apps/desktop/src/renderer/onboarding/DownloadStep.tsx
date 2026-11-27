@@ -3,7 +3,7 @@ import type { DownloadState, ModelsState } from "../../shared/bridge.ts";
 import { formatBytes } from "../lib/format.ts";
 import { CancelDownloadDialog } from "../models/CancelDownloadDialog.tsx";
 import { ProgressBar } from "../models/ProgressBar.tsx";
-import { downloadLine, downloadPercent } from "../models/text.ts";
+import { downloadAnnouncement, downloadLine, downloadPercent } from "../models/text.ts";
 import { findCatalogEntry, findDownload, isRunningDownload, modelName } from "../state/models.ts";
 import { Button, Icon, Spinner } from "../ui/index.ts";
 import styles from "./FirstRun.module.css";
@@ -55,7 +55,7 @@ export function DownloadStep(props: DownloadStepProps) {
       <section className={styles.feature} aria-label="Download">
         <div className={styles.percentLine}>
           <span className={styles.percent}>{downloadPercent(download)}</span>
-          <span className={styles.progressText} aria-live="polite">
+          <span className={styles.progressText}>
             {failure === null && download.phase !== "downloading" && running && (
               <Spinner size={12} />
             )}{" "}
@@ -65,6 +65,10 @@ export function DownloadStep(props: DownloadStepProps) {
           </span>
         </div>
         <ProgressBar download={download} label={`Downloading ${name}`} />
+        {/* Read out as the phase changes and every ten percent; the line above changes too often. */}
+        <p className="vh" aria-live="polite">
+          {failure === null ? downloadAnnouncement(download) : ""}
+        </p>
         {failure !== null && (
           <p className={styles.failure} role="alert">
             <Icon name="alert" size={14} className={styles.failureIcon} />

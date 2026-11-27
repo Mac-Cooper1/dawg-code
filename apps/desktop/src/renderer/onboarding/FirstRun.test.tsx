@@ -90,10 +90,13 @@ describe.each(THEMES)("First run (%s)", (theme) => {
   it("downloads with pause and resume, then starts the model and opens the sessions view", async () => {
     const { user, manager, store } = await setup(theme);
     await user.click(screen.getByRole("button", { name: "Download and start" }));
-    expect(
-      await screen.findByRole("heading", { level: 1, name: `Downloading ${Q8_NAME}` }),
-    ).toBeInTheDocument();
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: `Downloading ${Q8_NAME}`,
+    });
     expect(currentStep()).toBe("2Download");
+    // The button that started it is gone: focus is on the new step's heading.
+    expect(heading).toHaveFocus();
 
     act(() => manager.advanceDownload(Q8, 12_000_000_000));
     const bar = screen.getByRole("progressbar", { name: `Downloading ${Q8_NAME}` });
@@ -102,11 +105,16 @@ describe.each(THEMES)("First run (%s)", (theme) => {
     expect(
       screen.getByText(/12\.0 of 30\.0 GB · 1\.5 GB\/s · about 12 s left/),
     ).toBeInTheDocument();
+    // VoiceOver hears the progress in tens, not every byte and speed change.
+    expect(screen.getByText("Downloading, 40% done")).toHaveAttribute("aria-live", "polite");
+    act(() => manager.advanceDownload(Q8, 300_000_000));
+    expect(screen.getByText("Downloading, 40% done")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Pause" }));
     expect(
-      await screen.findByText(/Paused at 12\.0 of 30\.0 GB · resumes where it stopped/),
+      await screen.findByText(/Paused at 12\.3 of 30\.0 GB · resumes where it stopped/),
     ).toBeInTheDocument();
+    expect(screen.getByText("Download paused at 41%")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Resume" }));
     expect(await screen.findByRole("button", { name: "Pause" })).toBeInTheDocument();
 

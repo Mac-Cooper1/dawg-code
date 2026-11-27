@@ -51,7 +51,7 @@
 
 /* The field draws no outline of its own; the box shows the focus ring. */
 .search:focus-within {
-  outline: 2px solid var(--focus);
+  outline: var(--focus-width) solid var(--focus);
   outline-offset: 1px;
 }
 

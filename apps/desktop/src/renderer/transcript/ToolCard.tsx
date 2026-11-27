@@ -9,11 +9,11 @@ import { displayPath, formatDuration } from "../lib/format.ts";
 import { toolTarget, toolVerb } from "../lib/tools.ts";
 import type { ToolCallItem } from "../state/types.ts";
 import { Icon, Spinner } from "../ui/index.ts";
-import { AnsiText } from "./AnsiText.tsx";
 import { DiffView } from "./DiffView.tsx";
 import type { TranscriptEnv } from "./env.ts";
 import { FileLinesView } from "./FileLinesView.tsx";
 import { useNow } from "./hooks.ts";
+import { OutputLines } from "./OutputLines.tsx";
 import styles from "./ToolCard.module.css";
 import {
   commandOutput,
@@ -82,9 +82,11 @@ function ProblemText({ item }: { item: ToolCallItem }) {
         : "No details.";
   const isError = item.state === "error" || item.state === "invalid";
   return (
-    <pre className={`${styles.output} ${isError ? styles.errorText : styles.wrap}`}>
-      {text || fallback}
-    </pre>
+    <OutputLines
+      text={text || fallback}
+      label={isError ? "Error" : "Result"}
+      className={`${styles.output} ${isError ? styles.errorText : styles.wrap}`}
+    />
   );
 }
 
@@ -121,15 +123,15 @@ function BashBody({ item, env }: { item: ToolCallItem; env: TranscriptEnv }) {
       {text === "" ? (
         <div className={styles.placeholder}>{running ? "Waiting for output…" : "No output."}</div>
       ) : (
-        <pre
-          ref={ref}
+        <OutputLines
+          text={text}
+          label="Output"
+          ansi
+          focusable
           className={styles.output}
+          preRef={ref}
           onScroll={onScroll}
-          // biome-ignore lint/a11y/noNoninteractiveTabindex: the output scrolls; keyboard users need to reach it
-          tabIndex={0}
-        >
-          <AnsiText text={text} />
-        </pre>
+        />
       )}
       {running && item.statusLine && <div className={styles.status}>{item.statusLine}</div>}
       {finished && finished.notes.length > 0 && (
@@ -229,13 +231,7 @@ function TextResultBody({ item }: { item: ToolCallItem }) {
   if (item.state !== "success") return <ProblemText item={item} />;
   const text = contentText(item.content);
   return (
-    <pre
-      className={styles.output}
-      // biome-ignore lint/a11y/noNoninteractiveTabindex: the results scroll; keyboard users need to reach them
-      tabIndex={0}
-    >
-      {text || "No results."}
-    </pre>
+    <OutputLines text={text || "No results."} label="Results" focusable className={styles.output} />
   );
 }
 
@@ -245,7 +241,7 @@ function GenericBody({ item }: { item: ToolCallItem }) {
   return (
     <>
       <div className={styles.section}>Input</div>
-      <pre className={`${styles.output} ${styles.wrap}`}>{input}</pre>
+      <OutputLines text={input} label="Input" className={`${styles.output} ${styles.wrap}`} />
       {item.state === "running" ? (
         <Running item={item} />
       ) : item.state !== "success" ? (
@@ -256,7 +252,13 @@ function GenericBody({ item }: { item: ToolCallItem }) {
       ) : (
         <>
           <div className={styles.section}>Result</div>
-          {result !== "" && <pre className={`${styles.output} ${styles.wrap}`}>{result}</pre>}
+          {result !== "" && (
+            <OutputLines
+              text={result}
+              label="Result"
+              className={`${styles.output} ${styles.wrap}`}
+            />
+          )}
           <Images content={item.content} />
           {result === "" && !item.content?.length && (
             <div className={styles.placeholder}>No result.</div>

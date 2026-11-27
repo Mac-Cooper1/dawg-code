@@ -175,7 +175,7 @@
 
 .renameInput:focus-visible {
   border-color: var(--focus);
-  outline: 2px solid var(--focus);
+  outline: var(--focus-width) solid var(--focus);
   outline-offset: -1px;
 }
 

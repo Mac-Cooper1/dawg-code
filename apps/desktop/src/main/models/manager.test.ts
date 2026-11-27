@@ -818,6 +818,19 @@ describe("the end-to-end test hook", () => {
     expect(answer.ok && "apiKey" in answer.grant.endpoint).toBe(false);
     await h.manager.refreshServers();
     expect(h.calls.detectLocal).toBe(0);
+    // Without DAWG_TEST_SERVER_SLOTS its requests go out at once, as any server's do.
+    expect(answer.ok && answer.grant.slots).toBeUndefined();
+  });
+
+  it("shares the runtime's slots with DAWG_TEST_SERVER_SLOTS, so sessions queue for it", async () => {
+    const url = "http://127.0.0.1:7777/v1";
+    const h = await setup({
+      testServerUrl: url,
+      testServerSlots: true,
+      remote: { [url]: { models: ["mock-model"] } },
+    });
+    const answer = await h.manager.requestModel(null);
+    expect(answer.ok && answer.grant.slots).toEqual({ conversation: [0], utility: [1] });
   });
 });
 

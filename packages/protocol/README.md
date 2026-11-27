@@ -86,7 +86,9 @@ menu), and `background` (the session's background commands, oldest first).
 `SessionSummary` is `id`, `title` (null until generated), `cwd`, `projectDir`, `createdAt`,
 `lastActivityAt`, `status`, `queuePosition` (see `session.status`), `mode`, `model`, `effort`,
 `archived`, `forkedFrom {sessionId, point}` or null, and `lastSeq`. A session not open anywhere
-reports `idle`, or `error` if its last turn failed.
+reports `idle`, `error` if its last turn failed, or `waiting` if it stopped while its turn waited
+on the person: resuming it brings that turn back with its requests in `pending`, and answering
+one carries the turn on.
 
 `Usage` is `contextWindow`, `contextUsed`, `last` (the latest request's token counts and speeds),
 `totals`, `compactAt` (the context size above which the engine compacts on its own before a turn,

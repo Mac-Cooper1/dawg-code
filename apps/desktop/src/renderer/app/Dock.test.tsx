@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -73,5 +73,29 @@ describe.each(THEMES)("Dock (%s)", (theme) => {
     const props = setup(theme);
     await userEvent.click(screen.getByRole("button", { name: "Close the panes" }));
     expect(props.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("hands focus to the message field when it closes with focus inside", async () => {
+    const props = {
+      pane: "changes" as Pane,
+      view: sampleTitleBar(),
+      width: 560,
+      onSelectPane: vi.fn(),
+      onClose: vi.fn(),
+    };
+    const { rerender } = renderInTheme(
+      <>
+        <textarea aria-label="Message to dawg" />
+        <Dock {...props} />
+      </>,
+      theme,
+    );
+    screen.getByRole("button", { name: "Close the panes" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(props.onClose).toHaveBeenCalledOnce();
+    rerender(<textarea aria-label="Message to dawg" />);
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Message to dawg" })).toHaveFocus(),
+    );
   });
 });

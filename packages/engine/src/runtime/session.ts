@@ -51,7 +51,13 @@ import type {
 } from "../contracts/tools.ts";
 import { errorInfo, errorInfoFrom } from "../loop/errors.ts";
 import type { ExecutedCall } from "../loop/executor.ts";
-import { type RoomCheck, type RoomResult, runTurn, type TurnHost } from "../loop/turn.ts";
+import {
+  type ResumedBatch,
+  type RoomCheck,
+  type RoomResult,
+  runTurn,
+  type TurnHost,
+} from "../loop/turn.ts";
 import type { Emit, LoopResult } from "../loop/types.ts";
 import { scheduledClient } from "../model/slots.ts";
 import { readDeniedBy } from "../permissions/index.ts";
@@ -82,6 +88,7 @@ import {
 } from "./transcript.ts";
 import type { CompactionOutcome, ModelConnection, TurnOutcome } from "./types.ts";
 import { UsageTracker } from "./usage.ts";
+import { findWaitingTurn, requestCallId, requestIdOf, type WaitingTurn } from "./waiting-turn.ts";
 
 /**
  * Within a turn, history is compacted only when the next reply might not fit: when less than
@@ -127,6 +134,27 @@ interface PendingEntry {
   ask: PendingRequest;
   requestId: string;
   resolve(response: unknown): void;
+}
+
+/**
+ * A request brought back when the session opened (see waiting-turn.ts). The person answers it on
+ * the card as usual; the call that asked it takes the answer when the turn carries on.
+ */
+interface RestoredAsk {
+  ask: PendingRequest;
+  requestId: string;
+  /** Resolves with the person's answer. */
+  answer: Promise<unknown>;
+  settle(response: unknown): void;
+}
+
+/** A turn that waited on the person when the session stopped, brought back with it. */
+interface RestoredTurn {
+  waiting: WaitingTurn;
+  /** True once it runs again: answered, or stopped. */
+  running: boolean;
+  /** Ends the session's busy state once the turn is over. */
+  release(): void;
 }
 
 type Busy =
@@ -222,6 +250,17 @@ export class SessionRuntime {
   #statusQueuePosition: number | null = null;
   #busy: Busy | null = null;
   #pending = new Map<string, PendingEntry>();
+  /** A turn brought back waiting on the person, until it is over. */
+  #restoredTurn: RestoredTurn | null = null;
+  /** Its requests not yet taken by the calls that asked them, by tool call id. */
+  #restoredAsks = new Map<string, RestoredAsk>();
+  /**
+   * While a turn that waits on the person is let go on close: nothing it does on the way out is
+   * recorded, so the next open finds it still waiting.
+   */
+  #frozen = false;
+  /** What the turn waits on while it is kept for the next open (runtime.json). */
+  #suspendedOn: PendingRequest["kind"] | null = null;
   #lastOutcome: TurnOutcome | null = null;
   #lastTurnFailed: boolean;
   #closed = false;
@@ -322,6 +361,7 @@ export class SessionRuntime {
     this.#titleStarted = this.#title !== null;
 
     this.#emit = (event, fields) => {
+      if (this.#frozen) return;
       this.#log.emit(event, fields);
     };
     this.#log.subscribe((event) => ctx.publish(event));
@@ -344,8 +384,15 @@ export class SessionRuntime {
     for (const file of touchedSinceCompaction(records, (s) => s === TRIM_SUMMARY)) {
       await this.#instructions.forFile(file);
     }
+    // A turn that stopped while it waited on the person waits on: answering carries it on.
+    const waiting = findWaitingTurn(
+      this.#log.all(),
+      this.#writer.snapshot.view,
+      this.#prefix.tools,
+      this.#capabilities,
+    );
     // A session that stopped mid-batch has calls without results; templates refuse that.
-    const dangling = danglingCalls(this.#writer.snapshot.view);
+    const dangling = waiting === null ? danglingCalls(this.#writer.snapshot.view) : [];
     if (dangling.length > 0) {
       for (const call of dangling) {
         await this.#writer.appendMessage({
@@ -363,12 +410,115 @@ export class SessionRuntime {
       }
       await this.#appendNote({ type: "interrupted" });
     }
-    closeUnfinished(this.#log, this.#ctx.clock());
+    closeUnfinished(this.#log, this.#ctx.clock(), { keepWaitingTurn: waiting !== null });
     const stored = backgroundFromEvents(this.#log.all());
     this.#background = stored.tasks;
     this.#backgroundPaths = stored.outputPaths;
     getBackgroundTasks(this.#bag).continueAfter(stored.highestNumber);
+    if (waiting !== null) this.#restore(waiting);
     await this.#saveSidecar();
+  }
+
+  /**
+   * Brings back a turn that waited on the person: the session is busy with it and waiting, with
+   * the same requests pending. The first answer carries the turn on; stopping it ends it as an
+   * interrupted turn, with each request cancelled.
+   */
+  #restore(waiting: WaitingTurn): void {
+    let release = () => {};
+    const done = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const controller = new AbortController();
+    this.#busy = {
+      kind: "turn",
+      turnId: waiting.turnId,
+      controller,
+      done,
+      promptSeq: waiting.promptSeq,
+    };
+    const restored: RestoredTurn = { waiting, running: false, release };
+    this.#restoredTurn = restored;
+    for (const ask of waiting.requests) {
+      const requestId = requestIdOf(ask);
+      let settle: (response: unknown) => void = () => {};
+      const answer = new Promise<unknown>((resolve) => {
+        settle = resolve;
+      });
+      this.#restoredAsks.set(requestCallId(ask), { ask, requestId, answer, settle });
+      this.#pending.set(requestId, {
+        ask,
+        requestId,
+        resolve: (response) => {
+          settle(response);
+          this.#carryOn();
+        },
+      });
+    }
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        if (restored.running) return;
+        for (const entry of [...this.#pending.values()]) this.#cancel(entry);
+        this.#carryOn();
+      },
+      { once: true },
+    );
+    const first = waiting.requests[0]?.kind ?? null;
+    this.#suspendedOn = first;
+    // Clients last heard "waiting" for these requests; nothing needs saying again.
+    this.#status = "waiting";
+    this.#waitingOn = first;
+    this.#statusQueuePosition = null;
+  }
+
+  /** Runs the brought-back turn on: its remaining calls, then the loop as usual. */
+  #carryOn(): void {
+    const restored = this.#restoredTurn;
+    const busy = this.#busy;
+    if (restored === null || restored.running || busy?.kind !== "turn") return;
+    restored.running = true;
+    this.#suspendedOn = null;
+    void this.#saveSidecar();
+    const { waiting } = restored;
+    void this.#runTurn(waiting.turnId, busy.controller, waiting.startedAt, {
+      messageId: waiting.messageId,
+      calls: waiting.calls,
+      alreadyStarted: waiting.started,
+      lastText: waiting.lastText,
+    }).finally(() => {
+      if (this.#restoredTurn === restored) this.#restoredTurn = null;
+      this.#restoredAsks.clear();
+      restored.release();
+    });
+  }
+
+  /** The brought-back request a call asked before the restart, taken once. */
+  #takeRestored(kind: PendingRequest["kind"], toolCallId: string): RestoredAsk | null {
+    const restored = this.#restoredAsks.get(toolCallId);
+    if (restored === undefined || restored.ask.kind !== kind) return null;
+    this.#restoredAsks.delete(toolCallId);
+    return restored;
+  }
+
+  /** Waits for the answer to a brought-back request; stopping the turn cancels it. */
+  #awaitRestored<R>(restored: RestoredAsk, signal: AbortSignal): Promise<R> {
+    return new Promise<R>((resolve, reject) => {
+      const cancel = () => {
+        const entry = this.#pending.get(restored.requestId);
+        if (entry !== undefined) this.#cancel(entry);
+        reject(abortError());
+      };
+      if (signal.aborted) {
+        cancel();
+        return;
+      }
+      signal.addEventListener("abort", cancel, { once: true });
+      void restored.answer.then((response) => {
+        signal.removeEventListener("abort", cancel);
+        resolve(response as R);
+      });
+    });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -677,10 +827,19 @@ export class SessionRuntime {
     return true;
   }
 
-  async #runTurn(turnId: string, controller: AbortController, startedAt: number): Promise<void> {
+  async #runTurn(
+    turnId: string,
+    controller: AbortController,
+    startedAt: number,
+    resume?: ResumedBatch,
+  ): Promise<void> {
     let result: LoopResult;
     try {
-      result = await runTurn(this.#turnHost(), { turnId, signal: controller.signal });
+      result = await runTurn(this.#turnHost(), {
+        turnId,
+        signal: controller.signal,
+        ...(resume === undefined ? {} : { resume }),
+      });
     } catch (error) {
       result = { stopReason: "error", finalText: null, error: errorInfoFrom(error) };
       await this.#repairDangling().catch(() => {});
@@ -705,7 +864,7 @@ export class SessionRuntime {
     this.#lastTurnFailed = result.stopReason === "error";
     this.#busy = null;
     this.#refreshStatus();
-    if (!this.#writer.closed) {
+    if (!this.#writer.closed && !this.#frozen) {
       void this.#writer.setStatus(this.#lastTurnFailed ? "error" : "idle").catch(() => {});
     }
     void this.#saveSidecar();
@@ -714,7 +873,7 @@ export class SessionRuntime {
 
   /** After a failure inside the loop: give every call left without a result one. */
   async #repairDangling(): Promise<void> {
-    if (this.#writer.closed) return;
+    if (this.#writer.closed || this.#frozen) return;
     for (const call of danglingCalls(this.#writer.snapshot.view)) {
       await this.#writer.appendMessage({
         role: "tool",
@@ -867,6 +1026,7 @@ export class SessionRuntime {
     this.#emitResolved(entry, "answered", response);
     this.#refreshStatus();
     entry.resolve(response);
+    void this.#saveSidecar();
   }
 
   #emitResolved(entry: PendingEntry, outcome: "answered" | "cancelled", response: unknown): void {
@@ -928,6 +1088,8 @@ export class SessionRuntime {
       };
       signal.addEventListener("abort", onAbort, { once: true });
       this.#pending.set(requestId, entry);
+      // Listed as waiting even if the process ends before the answer (see waiting-turn.ts).
+      void this.#saveSidecar();
       switch (ask.kind) {
         case "permission":
           this.#emit("permission.requested", { turnId: ask.turnId, request: ask.request });
@@ -1253,7 +1415,18 @@ export class SessionRuntime {
   close(): Promise<void> {
     if (this.#closing !== null) return this.#closing;
     this.#closing = (async () => {
-      if (this.#busy !== null) {
+      const waitingOn = this.#firstPending()?.ask.kind ?? null;
+      if (this.#restoredTurn?.running === false) {
+        // Still waiting since it was brought back: it waits on for the next open, as it is.
+      } else if (this.#busy?.kind === "turn" && waitingOn !== null) {
+        // Waiting on the person: the turn is let go without being ended, so the next open
+        // brings the request back (see waiting-turn.ts) instead of closing it as interrupted.
+        this.#suspendedOn = waitingOn;
+        this.#frozen = true;
+        this.#busy.controller.abort();
+        await this.waitForIdle();
+        this.#frozen = false;
+      } else if (this.#busy !== null) {
         this.#busy.controller.abort();
         await this.waitForIdle();
       }
@@ -1520,7 +1693,13 @@ export class SessionRuntime {
       effort: this.#effort,
       lastTurnFailed: this.#lastTurnFailed,
       forkPoint: this.#forkPoint,
+      waitingOn: this.#suspendedOn ?? this.#firstPending()?.ask.kind ?? null,
     });
+  }
+
+  /** The oldest request waiting on the person, if any. */
+  #firstPending(): PendingEntry | undefined {
+    return this.#pending.values().next().value as PendingEntry | undefined;
   }
 
   #maybeGenerateTitle(): void {
@@ -1608,6 +1787,7 @@ export class SessionRuntime {
   // -------------------------------------------------------------------------------------------
 
   async #appendNote(note: SystemNote): Promise<void> {
+    if (this.#frozen) return;
     await this.#writer.appendMessage(this.#ctx.assembler.note(note));
     if (note.type === "mode_changed" || note.type === "plan_approved") this.#knownMode = note.mode;
     if (note.type === "date_changed") this.#knownDate = note.date;
@@ -1685,16 +1865,20 @@ export class SessionRuntime {
       setTasks: (tasks) => this.#setTasks(tasks),
       askUser: async (questions) => {
         if (!this.#capabilities.questions) throw new NoOneToAskError();
-        const response = await this.#raise<QuestionResponse>(
-          {
-            kind: "question",
-            turnId,
-            requestId: this.#ctx.newId("request"),
-            toolCallId,
-            questions,
-          },
-          signal,
-        );
+        const restored = this.#takeRestored("question", toolCallId);
+        const response =
+          restored !== null
+            ? await this.#awaitRestored<QuestionResponse>(restored, signal)
+            : await this.#raise<QuestionResponse>(
+                {
+                  kind: "question",
+                  turnId,
+                  requestId: this.#ctx.newId("request"),
+                  toolCallId,
+                  questions,
+                },
+                signal,
+              );
         if (response.outcome === "dismissed") {
           throw new RequestDismissedError(response.message ?? null);
         }
@@ -1702,20 +1886,27 @@ export class SessionRuntime {
       },
       proposePlan: async (plan) => {
         if (!this.#capabilities.planApproval) throw new NoOneToAskError();
-        const requestId = this.#ctx.newId("request");
-        const planPath = await this.#savePlan(requestId, plan);
-        const response = await this.#raise<PlanResponse>(
-          {
-            kind: "plan",
-            turnId,
-            requestId,
-            toolCallId,
-            plan,
-            planPath,
-            modeBeforePlan: this.#modeAfterPlan(undefined),
-          },
-          signal,
-        );
+        const restored = this.#takeRestored("plan", toolCallId);
+        let response: PlanResponse;
+        if (restored !== null) {
+          // Proposed before the restart; its plan file is already saved.
+          response = await this.#awaitRestored<PlanResponse>(restored, signal);
+        } else {
+          const requestId = this.#ctx.newId("request");
+          const planPath = await this.#savePlan(requestId, plan);
+          response = await this.#raise<PlanResponse>(
+            {
+              kind: "plan",
+              turnId,
+              requestId,
+              toolCallId,
+              plan,
+              planPath,
+              modeBeforePlan: this.#modeAfterPlan(undefined),
+            },
+            signal,
+          );
+        }
         if (response.decision === "reject") {
           return response.message === undefined
             ? { approved: false }
@@ -1852,9 +2043,18 @@ export class SessionRuntime {
       canAskPermission: () => this.#capabilities.permissionPrompts,
       askPermission: (request, turnId, signal) =>
         this.#raise<PermissionResponse>({ kind: "permission", turnId, request }, signal),
+      restoredPermission: (toolCallId) => {
+        const restored = this.#takeRestored("permission", toolCallId);
+        if (restored === null || restored.ask.kind !== "permission") return null;
+        return {
+          suggestions: restored.ask.request.suggestions,
+          wait: (signal) => this.#awaitRestored<PermissionResponse>(restored, signal),
+        };
+      },
       allowAlways: (rules) => this.#allowAlways(rules),
       toolContext: (call) => this.#toolContext(call),
       appendResult: async (message, extras) => {
+        if (this.#frozen) return;
         await writer.appendMessage(message, extras);
       },
       saveOutput: (name, content) => writer.saveOutput(name, content),
@@ -1864,6 +2064,7 @@ export class SessionRuntime {
       view: () => writer.snapshot.view,
       isCallIdTaken: (id) => this.#callIds.has(id),
       appendMessage: async (message, extras) => {
+        if (this.#frozen) return;
         await writer.appendMessage(message, extras);
         if (message.role === "assistant")
           for (const c of message.toolCalls) this.#callIds.add(c.id);

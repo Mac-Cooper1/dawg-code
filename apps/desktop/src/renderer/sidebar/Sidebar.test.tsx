@@ -129,6 +129,57 @@ describe.each(THEMES)("Sidebar (%s)", (theme) => {
     expect(on.onSelect).toHaveBeenCalledWith("csv");
   });
 
+  it("keeps one row in the tab order and moves between rows with the arrows", async () => {
+    const { on, user } = setup(theme);
+    screen.getByRole("searchbox", { name: "Search sessions" }).focus();
+    await user.tab();
+    // The project's "New session in tally" button, then the selected row and its actions.
+    expect(screen.getByRole("button", { name: "New session in tally" })).toHaveFocus();
+    await user.tab();
+    expect(row(/^Fix the failing split test/)).toHaveFocus();
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: "Actions for Fix the failing split test" }),
+    ).toHaveFocus();
+    // The other rows are reached with the arrows, across projects, not with Tab.
+    await user.tab();
+    expect(screen.getByRole("button", { name: "New session in dawg-site" })).toHaveFocus();
+    await user.tab({ shift: true });
+    await user.tab({ shift: true });
+    expect(row(/^Fix the failing split test/)).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(row(/^Flaky CSV import test/)).toHaveFocus();
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(row(/^Docs search page/)).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(row(/^Bump to Python 3.13/)).toHaveFocus();
+    await user.keyboard("{Home}{ArrowDown}");
+    expect(row(/^Flaky CSV import test/)).toHaveFocus();
+    // The row with focus is now the one Tab comes back to.
+    expect(row(/^Flaky CSV import test/)).toHaveAttribute("tabindex", "0");
+    expect(row(/^Fix the failing split test/)).toHaveAttribute("tabindex", "-1");
+    await user.keyboard("{Enter}");
+    expect(on.onSelect).toHaveBeenCalledWith("csv");
+  });
+
+  it("moves focus to the list's current row when the focused row goes away", async () => {
+    const groups = sampleSidebar();
+    const on = handlers();
+    const props = { ...on, search: "", footer: SAMPLE_FOOTER, width: 264 };
+    const { rerender } = renderInTheme(<Sidebar {...props} groups={groups} />, theme);
+    const user = userEvent.setup();
+    row(/^Fix the failing split test/).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(row(/^Flaky CSV import test/)).toHaveFocus();
+    // The session is deleted: its row leaves, and the selected row takes focus.
+    const without = groups.map((group) => ({
+      ...group,
+      rows: group.rows.filter((candidate) => candidate.sessionId !== "csv"),
+    }));
+    rerender(<Sidebar {...props} groups={without} />);
+    await waitFor(() => expect(row(/^Fix the failing split test/)).toHaveFocus());
+  });
+
   it("starts new sessions, in a project or after choosing a folder", async () => {
     const { on, user } = setup(theme);
     await user.click(screen.getByRole("button", { name: "New session" }));

@@ -11,6 +11,8 @@
  *   `bin/<platform>-<arch>/rg` in it. Without it, ripgrep is looked up (DAWG_RG_PATH, the
  *   checkout's fetched copy, PATH).
  * - DAWG_MOCK_SPEED: the mock engine's playback speed.
+ * - DAWG_MOCK_LONG_SESSION: with the mock engine, adds a synthetic session of that many
+ *   transcript items, for the performance tests (`src/mock-engine/long-session.ts`).
  *
  * Main stops the host with SIGTERM: the engine closes its sessions (a running turn is
  * interrupted, transcripts are flushed, locks released) before the process exits.
@@ -20,6 +22,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolveDawgHome } from "@dawg/engine";
+import { parseLongSession } from "../mock-engine/long-session.ts";
 import { createHostedEngine, type EngineConfig, parseEngineKind, parseSpeed } from "./engine.ts";
 import { startEngineHost } from "./host.ts";
 import { bundledRipgrepPath } from "./real-engine.ts";
@@ -53,7 +56,12 @@ const homeDir = env.HOME !== undefined && env.HOME !== "" ? env.HOME : homedir()
 
 function engineConfig(): EngineConfig {
   if (parseEngineKind(env.DAWG_ENGINE, log) === "mock") {
-    return { kind: "mock", homeDir, speed: parseSpeed(env.DAWG_MOCK_SPEED, log) };
+    return {
+      kind: "mock",
+      homeDir,
+      speed: parseSpeed(env.DAWG_MOCK_SPEED, log),
+      longSession: parseLongSession(env.DAWG_MOCK_LONG_SESSION, log),
+    };
   }
   const resources = env.DAWG_RESOURCES_DIR;
   let ripgrepPath: string | null = null;

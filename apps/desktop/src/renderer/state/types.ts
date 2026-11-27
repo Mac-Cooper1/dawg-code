@@ -350,6 +350,13 @@ export interface QueuedMessage {
   images?: ImageAttachment[];
   /** Files its text mentions (`@path`). */
   mentions?: FileMention[];
+  /**
+   * Set on a message brought back after dawg-code quit with it unsent: it comes back held, and
+   * says why.
+   */
+  restored?: true;
+  /** How many of its images were not kept across the relaunch (images are not saved). */
+  imagesNotKept?: number;
 }
 
 /** An image attached in the composer, ready to send (downscaled and encoded by the composer). */
@@ -446,6 +453,11 @@ export interface UiState {
   mentionPaths: Record<SessionId, string[]>;
   /** The client-side message queue per session. */
   queues: Record<SessionId, QueuedMessage[]>;
+  /**
+   * Per session, how many images attached to the draft were not kept when dawg-code quit (the
+   * draft's text was). Cleared once the draft is sent or emptied.
+   */
+  draftImagesNotKept: Record<SessionId, number>;
   /** Tool cards and reasoning blocks the person opened or closed by hand: itemId → open. */
   openItems: Record<SessionId, Record<string, boolean>>;
   /** Answered cards the person asked to see again: requestId → shown. */
@@ -658,6 +670,8 @@ export interface ComposerView {
   queue: readonly QueuedMessage[];
   commands: readonly CommandInfo[];
   draft: string;
+  /** Images attached to the draft that were not kept when dawg-code quit; 0 when none. */
+  draftImagesNotKept: number;
   canAttachImages: boolean;
 }
 

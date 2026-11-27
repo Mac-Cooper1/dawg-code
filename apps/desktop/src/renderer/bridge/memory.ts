@@ -25,6 +25,8 @@ import {
   DesktopSettingsSchema,
   type EngineRestartInfo,
   ExternalUrlSchema,
+  type MenuModel,
+  MenuModelSchema,
   type ModelOption,
   type ModelsState,
   type NotifyInput,
@@ -111,6 +113,10 @@ export interface MemoryBridge extends DawgBridge {
   readonly badgeCounts: number[];
   /** Test helper: the person clicked a session's notification. */
   openSessionFromNotification(sessionId: string): void;
+  /** The latest menu model the page sent (a page has no menu bar to show it in). */
+  readonly menuModel: MenuModel | null;
+  /** Test helper: the person chose a menu item meant for this page. */
+  chooseMenuItem(actionId: string): void;
 }
 
 export const BROWSER_HOME_DIR = "/Users/you";
@@ -159,6 +165,8 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
   const notificationsShown: NotifyInput[] = [];
   const badgeCounts: number[] = [];
   const openSessionListeners = new Set<(sessionId: string) => void>();
+  let menuModel: MenuModel | null = null;
+  const menuActionListeners = new Set<(actionId: string) => void>();
 
   /** The engine sides of the ports handed out, closed on a simulated restart. */
   const engineEnds = new Set<Transport>();
@@ -252,6 +260,18 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
         const valid = validate(ExternalUrlSchema, url, "link");
         globalThis.window?.open(valid, "_blank", "noopener,noreferrer");
       },
+    },
+    menu: {
+      update: (model) => {
+        menuModel = validate(MenuModelSchema, model, "menu");
+      },
+      onAction: (listener) => subscribe(menuActionListeners, listener),
+    },
+    get menuModel() {
+      return menuModel;
+    },
+    chooseMenuItem(actionId) {
+      for (const listener of [...menuActionListeners]) listener(actionId);
     },
     modelManager,
     fakeWorkspace,

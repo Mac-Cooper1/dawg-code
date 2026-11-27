@@ -89,3 +89,8 @@
 .underline {
   text-decoration: underline;
 }
+
+/* One line of output (OutputLines.tsx): a block of its own, so VoiceOver can step to it. */
+.line {
+  display: block;
+}

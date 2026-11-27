@@ -72,7 +72,8 @@ For each session the connection had open (a deleted session is no longer among t
   that resumes the session in that time takes it over, pending questions included (they are in
   the snapshot's `pending`). When the turn ends with nobody attached the session is closed; when
   the time runs out first, the turn is interrupted (its calls get "interrupted" results) and the
-  session closed.
+  session closed, unless the turn is only waiting on the person: then it stays waiting for the
+  next open (`../runtime/README.md`).
 - With `detachGraceMs: 0` a running turn is interrupted and the session closed at once. `dawg
   serve` and the command-line tool use this, so a headless run whose parent dies leaves nothing
   running.

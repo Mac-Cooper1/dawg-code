@@ -292,6 +292,7 @@ export interface HarnessOptions {
   local?: DiscoveredServer[];
   scan?: ExistingCopy[];
   testServerUrl?: string;
+  testServerSlots?: boolean;
   /** The fake runtime answers health at once. Default true. */
   autoReady?: boolean;
   /** Reuse a data root (a relaunch). */
@@ -377,6 +378,7 @@ export async function harness(options: HarnessOptions = {}) {
     progressIntervalMs: 40,
     pollIntervalMs: 3_600_000,
     ...(options.testServerUrl === undefined ? {} : { testServerUrl: options.testServerUrl }),
+    ...(options.testServerSlots === undefined ? {} : { testServerSlots: options.testServerSlots }),
   };
   const manager = new ModelManager(managerOptions);
   let modelsChanged = 0;

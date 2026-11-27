@@ -155,6 +155,35 @@ describe("window state store", () => {
     expect(await readFile(file, "utf8")).toBe("not json");
   });
 
+  it("loads a window saved before unsent words were kept, and keeps them from then on", async () => {
+    const file = stateFile(root);
+    // A state.json written by an earlier version: no `composers`.
+    await writeFile(
+      file,
+      JSON.stringify({ windows: { main: { sidebarWidth: 300, seenSeq: { s1: 4 } } } }),
+    );
+    const store = createWindowStateStore(file, log);
+    const old = await store.load("main");
+    expect(old).toEqual({ ...DEFAULT_WINDOW_STATE, sidebarWidth: 300, seenSeq: { s1: 4 } });
+    expect(old.composers).toEqual({});
+    const composers = {
+      s1: {
+        draft: "half typed",
+        mentionPaths: ["src/a.ts"],
+        imagesNotKept: 1,
+        queue: [{ text: "then this", mentions: [{ path: "src/a.ts" }], imagesNotKept: 0 }],
+      },
+    };
+    await store.save("main", { ...old, composers });
+    expect((await store.load("main")).composers).toEqual(composers);
+    // A damaged entry costs the saved words only, not the layout.
+    await writeFile(
+      file,
+      JSON.stringify({ windows: { main: { sidebarWidth: 300, composers: { s1: { queue: 5 } } } } }),
+    );
+    expect(await store.load("main")).toEqual({ ...DEFAULT_WINDOW_STATE, sidebarWidth: 300 });
+  });
+
   it("keeps valid fields when one stored field is invalid", async () => {
     const file = stateFile(root);
     await writeFile(

@@ -49,12 +49,21 @@ export function TitleBar(props: TitleBarProps) {
           {PANES.map((pane) => {
             const active = props.dockOpen && props.dockPane === pane.id;
             const count = paneCount(pane.id, view);
+            // Named in one string: hidden text after the visible label picks up a stray space
+            // in Chromium's name ("Changes , 6 lines added").
+            const name =
+              pane.id === "changes" && view.changes
+                ? `${pane.label}, ${view.changes.additions} lines added, ${view.changes.deletions} removed`
+                : pane.id === "tasks" && count
+                  ? `${pane.label}, ${count.label}`
+                  : undefined;
             return (
               <button
                 key={pane.id}
                 type="button"
                 className={styles.paneButton}
                 aria-pressed={active}
+                aria-label={name}
                 onClick={() => props.onTogglePane(pane.id)}
               >
                 <Icon name={pane.icon} />
@@ -67,18 +76,12 @@ export function TitleBar(props: TitleBarProps) {
                     <span className={styles.removed} aria-hidden="true">
                       −{view.changes.deletions}
                     </span>
-                    <span className="vh">
-                      , {view.changes.additions} lines added, {view.changes.deletions} removed
-                    </span>
                   </>
                 )}
                 {pane.id === "tasks" && count && (
-                  <>
-                    <span className={styles.count} aria-hidden="true">
-                      {count.text}
-                    </span>
-                    <span className="vh">, {count.label}</span>
-                  </>
+                  <span className={styles.count} aria-hidden="true">
+                    {count.text}
+                  </span>
                 )}
               </button>
             );

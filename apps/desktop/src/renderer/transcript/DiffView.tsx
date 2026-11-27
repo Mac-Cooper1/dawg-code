@@ -37,7 +37,13 @@ export const DiffView = memo(function DiffView({
   const shown = showAll ? rows : rows.slice(0, INITIAL_ROWS);
   const style = { "--number-width": numberWidth(rows) } as CSSProperties;
   return (
-    <div className={compact ? `${styles.lines} ${styles.compact}` : styles.lines} style={style}>
+    // biome-ignore lint/a11y/useSemanticElements: a fieldset is for form controls; these are lines of a diff
+    <div
+      className={compact ? `${styles.lines} ${styles.compact}` : styles.lines}
+      style={style}
+      role="group"
+      aria-label={`Diff, ${plural(rows.length, "line")}`}
+    >
       {shown.map((row, index) => (
         <div
           // Rows are positional within an immutable diff.

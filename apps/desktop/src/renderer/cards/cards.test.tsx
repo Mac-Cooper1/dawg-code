@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderInTheme, THEMES } from "../test/render.tsx";
@@ -215,6 +215,44 @@ describe.each(THEMES)("PermissionCard (%s)", (theme) => {
     });
   });
 
+  it("hands focus to the message field once answered, and when it leaves while focused", async () => {
+    const user = userEvent.setup();
+    const env = makeEnv();
+    const { rerender } = renderInTheme(
+      <>
+        <PermissionCard item={permissionItem()} shownAgain={false} autoFocus env={env} />
+        <textarea aria-label="Message to dawg" />
+      </>,
+      theme,
+    );
+    const allow = screen.getByRole("button", { name: /Allow once/ });
+    expect(allow).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(env.respondPermission).toHaveBeenCalledOnce();
+    const field = screen.getByRole("textbox", { name: "Message to dawg" });
+    await waitFor(() => expect(field).toHaveFocus());
+
+    // A card that leaves the transcript with focus inside (the answer arrived at once).
+    rerender(
+      <>
+        <PermissionCard
+          key="perm-2"
+          item={permissionItem({ requestId: "perm-2" })}
+          shownAgain={false}
+          autoFocus
+          env={env}
+        />
+        <textarea aria-label="Message to dawg" />
+      </>,
+    );
+    screen.getByRole("button", { name: /Deny…/ }).focus();
+    expect(screen.getByRole("button", { name: /Deny…/ })).toHaveFocus();
+    rerender(<textarea aria-label="Message to dawg" />);
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Message to dawg" })).toHaveFocus(),
+    );
+  });
+
   it("keeps Escape from reaching the window while it answers", () => {
     const onWindowKey = vi.fn();
     window.addEventListener("keydown", onWindowKey);
@@ -428,6 +466,29 @@ describe.each(THEMES)("QuestionCard (%s)", (theme) => {
     await user.click(screen.getByRole("button", { name: /Send answer/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("Pick an option or type an answer.");
     expect(env.respondQuestion).not.toHaveBeenCalled();
+  });
+
+  it("links the error to the unanswered question and moves focus there", async () => {
+    const user = userEvent.setup();
+    renderInTheme(
+      <QuestionCard item={questionItem()} shownAgain={false} autoFocus={false} env={makeEnv()} />,
+      theme,
+    );
+    const group = screen.getByRole("radiogroup", { name: "How should the tip be shared?" });
+    const own = screen.getByRole("textbox", { name: "Your own answer" });
+    expect(group).not.toHaveAttribute("aria-describedby");
+    await user.click(screen.getByRole("button", { name: /Send answer/ }));
+    const error = screen.getByRole("alert");
+    expect(group).toHaveAccessibleDescription("Pick an option or type an answer.");
+    expect(group).toHaveAttribute("aria-invalid", "true");
+    expect(own).toHaveAccessibleDescription("Pick an option or type an answer.");
+    expect(own).toHaveAttribute("aria-invalid", "true");
+    expect(error.id).not.toBe("");
+    expect(screen.getByRole("radio", { name: /Evenly, with the bill/ })).toHaveFocus();
+    // Answering clears the error and its links.
+    await user.click(screen.getByRole("radio", { name: /By what each person ordered/ }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(own).not.toHaveAttribute("aria-invalid");
   });
 
   it("dismisses with the button or esc", async () => {

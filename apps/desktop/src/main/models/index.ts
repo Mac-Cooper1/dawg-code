@@ -7,6 +7,8 @@
  * - DAWG_CATALOG: a catalog file to use instead of the bundled one (tests).
  * - DAWG_TEST_SERVER_URL: an OpenAI-compatible server added without a key, its first model the
  *   default; the scan and the Ollama / LM Studio probes are skipped (end-to-end tests).
+ * - DAWG_TEST_SERVER_SLOTS: "1" makes sessions share that server's slots as they share the
+ *   bundled runtime's, so they queue for one conversation slot (end-to-end tests).
  * - DAWG_RUNTIME_BIN: another llama-server binary (read by `resolveRuntimeBinary`).
  */
 import path from "node:path";
@@ -130,5 +132,6 @@ export function createModelService(options: ModelServiceOptions): ModelService {
     hubDir,
     log,
     ...(testServerUrl ? { testServerUrl } : {}),
+    ...(testServerUrl && env.DAWG_TEST_SERVER_SLOTS === "1" ? { testServerSlots: true } : {}),
   });
 }

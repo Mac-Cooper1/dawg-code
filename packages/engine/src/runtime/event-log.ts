@@ -398,9 +398,23 @@ export function findUnfinished(events: readonly LoggedEvent[]): Unfinished {
 /**
  * Emits the events that close whatever a crash left open, so every client sees each started
  * fact finish (protocol README, ordering rules 2 to 6).
+ *
+ * `keepWaitingTurn` leaves a turn that waits on the person open, with its requests and the calls
+ * that asked them: the session carries it on (see waiting-turn.ts). Background commands still
+ * end, since nothing watches them any more.
  */
-export function closeUnfinished(log: EventLog, now: number): void {
+export function closeUnfinished(
+  log: EventLog,
+  now: number,
+  options: { keepWaitingTurn?: boolean } = {},
+): void {
   const open = findUnfinished(log.all());
+  if (options.keepWaitingTurn === true) {
+    open.requests = [];
+    open.tools = [];
+    open.turn = null;
+    open.status = null;
+  }
   for (const r of open.requests) {
     log.emit("request.resolved", {
       kind: r.kind,

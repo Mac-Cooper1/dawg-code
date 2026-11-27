@@ -125,6 +125,12 @@ export interface ModelManagerOptions {
    * default. Set for end-to-end tests, which also skip the scan and the local server probes.
    */
   testServerUrl?: string;
+  /**
+   * DAWG_TEST_SERVER_SLOTS: the test server's grants carry the bundled runtime's slots, so
+   * sessions share one conversation slot and queue for it as they do on the bundled runtime.
+   * For end-to-end tests of several sessions at once.
+   */
+  testServerSlots?: boolean;
   /** Minimum time between state updates caused by download progress. Default 250 ms. */
   progressIntervalMs?: number;
   /** How often the runtime's memory (and idle sleep) is read. Default 5 s. */
@@ -1546,7 +1552,8 @@ export class ModelManager implements ModelService {
       };
     }
     const endpoint = toEndpoint(discovered, model);
-    return { ok: true, grant: this.grant(modelId, endpoint, false) };
+    const shared = server.ephemeral && this.options.testServerSlots === true;
+    return { ok: true, grant: this.grant(modelId, endpoint, shared) };
   }
 
   private grant(modelId: string, endpoint: Endpoint, bundled: boolean): ModelGrant {

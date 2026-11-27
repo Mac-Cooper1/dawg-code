@@ -117,10 +117,21 @@ been used, leaving a gap, which replays allow.
 On reopening, anything the crash left open (a turn, a message, a tool call, a request, a
 compaction, a background command) is closed with the events a client expects
 (`request.resolved` cancelled, `tool.finished` interrupted, `turn.finished` interrupted,
-`background.updated` stopped with reason `session_end`, `session.status` idle). A session with
+`background.updated` stopped with reason `session_end`, `session.status` idle).
+
+The exception is a turn that was only waiting on the person (`waiting-turn.ts`): its requests
+are open, no reply was streaming, and its reply's remaining calls have no results yet. Closing a
+session in that state (the app quitting) lets the turn go without ending it, and reopening it,
+after a close or a crash, brings it back as it was: the session is busy with that turn and
+waiting, the same requests are in `pending()` and the snapshot, and no event is sent. The first
+answer carries the turn on: the remaining calls run (each announced once; a permission answer
+stands whatever the rules say by then), then the loop goes on. Interrupting it first ends it as
+an interrupted turn, with its requests cancelled. Clients that cannot answer that kind of request
+get the old behaviour. While it waits closed, `runtime.json` says `waitingOn`, so a listing
+reports the session `waiting`. A session with
 no event log (a fork, or a transcript written by another tool) gets events rebuilt from its
-transcript, numbered from 1. `<session dir>/runtime.json` caches mode, model, effort, last `seq`
-and whether the last turn failed, so listing never replays transcripts.
+transcript, numbered from 1. `<session dir>/runtime.json` caches mode, model, effort, last `seq`,
+whether the last turn failed and what a turn waits on, so listing never replays transcripts.
 
 ## Background commands
 

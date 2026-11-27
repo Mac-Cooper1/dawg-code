@@ -60,6 +60,7 @@ import {
   clampDockWidth,
   clampSidebarWidth,
   createWindowStateSaver,
+  forgetComposersExcept,
   windowStateOf,
 } from "./window-state.ts";
 import { orderBranches, suggestWorktreeName } from "./worktree-names.ts";
@@ -169,6 +170,8 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
   let offerResolve: ((id: SessionId | null) => void) | null = null;
   /** The last session started from the dialog went into a worktree: the box starts checked. */
   let lastChoseWorktree = false;
+  /** Set once the saved drafts and queues have been checked against the listed sessions. */
+  let composersChecked = false;
   /** The latest `workspace.track` per session, with the directories it sent. */
   const tracking = new Map<SessionId, { key: string; promise: Promise<WorkspaceInfo | null> }>();
 
@@ -257,6 +260,12 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
 
   /** After each (re)connect: fix the selection, then open what needs to be live. */
   async function onSynced(info: SyncInfo): Promise<void> {
+    if (!composersChecked) {
+      // Unsent words were saved for sessions that may have gone since (deleted, archived).
+      composersChecked = true;
+      const known = new Set(Object.keys(get().sessions));
+      setUi((ui) => forgetComposersExcept(ui, known));
+    }
     const state = get();
     const selected = state.layout.selectedSessionId;
     const current = selected ? state.sessions[selected] : undefined;
@@ -592,6 +601,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
             ...ui,
             drafts: withoutKey(ui.drafts, sessionId),
             mentionPaths: withoutKey(ui.mentionPaths, sessionId),
+            draftImagesNotKept: withoutKey(ui.draftImagesNotKept, sessionId),
           }
         : ui,
     );
@@ -828,12 +838,26 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     );
     unsubscribe.push(
       store.subscribe((state, prev) => {
-        if (state.layout !== prev.layout || state.ui.seenSeq !== prev.ui.seenSeq) {
+        const { ui } = state;
+        if (
+          state.layout !== prev.layout ||
+          ui.seenSeq !== prev.ui.seenSeq ||
+          // What the person typed and has not sent (see window-state.ts).
+          ui.drafts !== prev.ui.drafts ||
+          ui.queues !== prev.ui.queues ||
+          ui.mentionPaths !== prev.ui.mentionPaths ||
+          ui.attachments !== prev.ui.attachments ||
+          ui.draftImagesNotKept !== prev.ui.draftImagesNotKept
+        ) {
           saver.schedule(windowStateOf(state));
         }
       }),
     );
     unsubscribe.push(() => saver.flush());
+    // The window is going (quit, or closed): the last keystrokes are saved now, not after the delay.
+    const flushOnHide = () => saver.flush();
+    globalThis.addEventListener?.("pagehide", flushOnHide);
+    unsubscribe.push(() => globalThis.removeEventListener?.("pagehide", flushOnHide));
 
     // The session the window shows is tracked, and tracked again when its directories change.
     let shownKey = "";
@@ -1017,9 +1041,15 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     setDraft(sessionId, text) {
       setUi((ui) => {
         if ((ui.drafts[sessionId] ?? "") === text) return ui;
-        const drafts =
-          text === "" ? withoutKey(ui.drafts, sessionId) : { ...ui.drafts, [sessionId]: text };
-        return { ...ui, drafts };
+        if (text === "") {
+          // An emptied draft no longer needs the line about images that were not kept.
+          return {
+            ...ui,
+            drafts: withoutKey(ui.drafts, sessionId),
+            draftImagesNotKept: withoutKey(ui.draftImagesNotKept, sessionId),
+          };
+        }
+        return { ...ui, drafts: { ...ui.drafts, [sessionId]: text } };
       });
     },
     async submit(sessionId, text, mentions = []) {

@@ -82,7 +82,7 @@ Approved on 2026-11-22 from a clickable mockup of first run, the main window, de
 | Sidebar and title bar    | `#EEEEE9`                                  | `#18191C`                                  |
 | Panels and cards         | `#FFFFFF`                                  | `#1E1F23`                                  |
 | Lines                    | `#E2E2DB`                                  | `#2C2E33`                                  |
-| Text, secondary, muted   | `#17181A`, `#45484D`, `#61656C`            | `#ECEDEF`, `#B9BCC2`, `#90949B`            |
+| Text, secondary, muted   | `#17181A`, `#45484D`, `#5B5F66`            | `#ECEDEF`, `#B9BCC2`, `#9A9EA5`            |
 | Accent fill, accent text | `#C8F03C`, `#4A6600`                       | `#C8F03C`, `#C8F03C`                       |
 | Amber, blue, red, green  | `#A34A00`, `#1D5BD1`, `#C2261E`, `#1A7536` | `#F6B44A`, `#7EA8FF`, `#FF7B72`, `#6CD38D` |
 
@@ -202,6 +202,7 @@ Every action is reachable from the keyboard. A command palette (Cmd+K) lists all
 ### Accessibility and performance
 
 - Full keyboard navigation, visible focus, VoiceOver labels on controls and status marks, respect for reduced-motion and contrast settings.
+- Text, status marks and focus rings meet WCAG 2.2 AA in both themes and with Increase contrast; `src/renderer/styles/contrast.test.ts` checks every pair the interface uses. The muted text colours were darkened (light) and lightened (dark) on 2026-11-27 to pass on selected rows.
 - Budgets: window visible within 2 seconds of launch; streaming text updates batched to one render per frame; smooth scrolling in a transcript of 5,000 items; a 5,000-line diff opens without freezing the window.
 
 ### Security
@@ -245,6 +246,15 @@ As in the shared baseline, plus:
 - Quitting mid-turn and relaunching restores every session, its transcript and its pending prompts.
 - The end-to-end suite passes in CI, and the performance budgets hold.
 - Two sessions can run at once in separate worktrees without interfering.
+
+**Status on 2026-11-27.** Every item but the first is shown by tests:
+
+- Events and requests: `src/renderer/state/coverage-events.test.ts` and `coverage-methods.test.ts` fail for any protocol event without a visible effect and any method no part of the window calls.
+- Relaunching: `e2e/resume.spec.ts` quits with permission, question and plan cards pending and a reply streaming, then launches again. Pending cards come back and answering them carries the turn on; the person's unsent draft and queued messages come back too, the queued ones held.
+- CI and budgets: CI runs the whole end-to-end suite on Apple Silicon, including `e2e/performance.spec.ts`, which asserts the budgets above.
+- Two sessions: `e2e/two-sessions.spec.ts` runs two worktree sessions of one project at once on a model with one conversation slot.
+
+The first, a full working day on a real project, is for the project owner, on the reference Mac with a catalog model.
 
 ## Open questions
 

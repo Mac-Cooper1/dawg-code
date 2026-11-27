@@ -1,5 +1,6 @@
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef } from "react";
 import { TextWithCode } from "../markdown/index.ts";
+import { focusMessageField, moveFocusSoon, useFocusFallback } from "../ui/focus.ts";
 import { Icon, type IconName } from "../ui/index.ts";
 import styles from "./DecisionCard.module.css";
 import { type CardShortcuts, handleCardKey } from "./keys.ts";
@@ -22,6 +23,9 @@ export interface DecisionFrameProps {
  * The frame every decision card shares: an amber border and header bar, and keyboard shortcuts
  * that work only while focus is inside the card. The listener is native so it can stop Escape
  * before the window's own handler (which would interrupt the turn) sees it.
+ *
+ * Once the card is answered (its shortcuts go), or it leaves the transcript while it has focus,
+ * focus moves to the message field: the button that had it is disabled, then gone.
  */
 export function DecisionFrame({
   icon,
@@ -46,6 +50,16 @@ export function DecisionFrame({
     element.addEventListener("keydown", onKeyDown);
     return () => element.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  const answered = !readOnly && shortcuts === null;
+  const wasPending = useRef(!readOnly && shortcuts !== null);
+  useEffect(() => {
+    if (!answered || !wasPending.current) return;
+    wasPending.current = false;
+    moveFocusSoon(focusMessageField, ref.current);
+  }, [answered]);
+  useFocusFallback(ref);
+
   return (
     <section
       ref={ref}

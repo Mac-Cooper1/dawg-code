@@ -4,7 +4,8 @@
  * (`src/mock-engine`) and never asks main for a model.
  */
 import type { Transport } from "@dawg/protocol";
-import { createMockEngine } from "../mock-engine/index.ts";
+import { BUILT_IN_SCENARIOS, createMockEngine } from "../mock-engine/index.ts";
+import { longSessionScenario } from "../mock-engine/long-session.ts";
 import type { HostToMain } from "../shared/engine-host-messages.ts";
 import type { ModelMessage } from "./model-provider.ts";
 import { createRealEngine } from "./real-engine.ts";
@@ -27,6 +28,8 @@ export type EngineConfig =
       homeDir: string;
       /** Playback speed (DAWG_MOCK_SPEED). */
       speed: number;
+      /** Items in the synthetic long session (DAWG_MOCK_LONG_SESSION), or null for none. */
+      longSession?: number | null;
     }
   | {
       kind: "real";
@@ -52,7 +55,14 @@ export function createHostedEngine(
       log: config.log,
     });
   }
-  const engine = createMockEngine({ homeDir: config.homeDir, speed: config.speed });
+  const longSession = config.longSession ?? null;
+  const engine = createMockEngine({
+    homeDir: config.homeDir,
+    speed: config.speed,
+    ...(longSession !== null
+      ? { scenarios: [...BUILT_IN_SCENARIOS, longSessionScenario(longSession)] }
+      : {}),
+  });
   return {
     kind: "mock",
     connect: (transport) => {

@@ -23,6 +23,8 @@ import {
   type FindFilesResult,
   IdleUnloadSchema,
   IPC,
+  type MenuModel,
+  MenuModelSchema,
   ModelIdSchema,
   type ModelOption,
   type ModelStatus,
@@ -227,5 +229,34 @@ export function createSendHandlers<Sender>(
       const size = validateInput(TerminalSizeSchema, { cols, rows }, "terminal size");
       terminals.resize(validateInput(TerminalIdSchema, id, "terminal id"), size.cols, size.rows);
     }),
+  };
+}
+
+/** Where a window's menu model goes: main/menu-bar.ts. */
+export interface MenuModelsFor<Sender> {
+  update(sender: Sender, model: MenuModel): void;
+}
+
+/**
+ * The window's menu model (`menu.update`), sent whenever it changes. One-way like keystrokes:
+ * a model that fails validation is dropped and logged, and the menus stay as they were.
+ */
+export function createMenuSendHandlers<Sender>(
+  menu: MenuModelsFor<Sender>,
+  log: (message: string) => void,
+): Record<string, SendHandler<Sender>> {
+  return {
+    [IPC.menuUpdate]: (sender, [model]) => {
+      let valid: MenuModel;
+      try {
+        valid = validateInput(MenuModelSchema, model, "menu");
+      } catch (error) {
+        log(
+          `Dropped "${IPC.menuUpdate}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
+      menu.update(sender, valid);
+    },
   };
 }

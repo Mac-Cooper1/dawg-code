@@ -52,8 +52,9 @@
   outline-offset: -2px;
 }
 
+/* Dimmed with the muted text colour rather than opacity, which fell below 4.5:1 in light. */
 .ignored {
-  opacity: 0.55;
+  color: var(--ink-3);
 }
 
 .chevron {

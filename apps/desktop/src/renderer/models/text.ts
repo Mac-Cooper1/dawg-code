@@ -97,6 +97,33 @@ export function downloadLine(download: DownloadState): string {
   }
 }
 
+/**
+ * What VoiceOver hears about a download, in a live region: the phase, and while it downloads the
+ * progress in steps of ten percent, so the bytes and speed that change every second are not read
+ * out each time. A failure is announced by its own alert.
+ */
+export function downloadAnnouncement(download: DownloadState): string {
+  const percent = Math.floor(downloadFraction(download) * 100);
+  switch (download.phase) {
+    case "queued":
+      return "Download queued";
+    case "checking":
+      return "Download starting";
+    case "downloading":
+      return `Downloading, ${Math.floor(percent / 10) * 10}% done`;
+    case "verifying":
+      return "Download complete, checking it";
+    case "paused":
+      return `Download paused at ${percent}%`;
+    case "done":
+      return "Download finished";
+    case "failed":
+      return "";
+    case "cancelled":
+      return "Download cancelled";
+  }
+}
+
 /** "Apple silicon" or "Intel". */
 export function archName(machine: MachineInfo): string {
   return machine.arch === "arm64" ? "Apple silicon" : "Intel";

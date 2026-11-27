@@ -43,6 +43,7 @@ function QuestionFields({
   onToggle,
   onText,
   firstOptionRef,
+  errorId,
 }: {
   question: Question;
   index: number;
@@ -53,6 +54,8 @@ function QuestionFields({
   onToggle(label: string): void;
   onText(text: string): void;
   firstOptionRef?: RefObject<HTMLInputElement | null> | undefined;
+  /** The error saying this question still needs an answer, while it shows. */
+  errorId?: string | undefined;
 }) {
   const textId = useId();
   const groupName = useId();
@@ -116,11 +119,21 @@ function QuestionFields({
       </p>
       {question.options.length > 0 &&
         (question.multiSelect ? (
-          <fieldset className={`${styles.options} ${styles.fieldset}`} aria-labelledby={textId}>
+          <fieldset
+            className={`${styles.options} ${styles.fieldset}`}
+            aria-labelledby={textId}
+            aria-describedby={errorId}
+          >
             {options}
           </fieldset>
         ) : (
-          <div className={styles.options} role="radiogroup" aria-labelledby={textId}>
+          <div
+            className={styles.options}
+            role="radiogroup"
+            aria-labelledby={textId}
+            aria-describedby={errorId}
+            aria-invalid={errorId ? true : undefined}
+          >
             {options}
           </div>
         ))}
@@ -129,6 +142,8 @@ function QuestionFields({
         type="text"
         placeholder="Or type your own answer"
         aria-label={showHeader ? `Your own answer to: ${question.question}` : "Your own answer"}
+        aria-describedby={errorId}
+        aria-invalid={errorId ? true : undefined}
         value={draft.text}
         readOnly={readOnly}
         onChange={(event) => onText(event.target.value)}
@@ -159,6 +174,7 @@ function QuestionForm({
   const firstOptionRef = useRef<HTMLInputElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
   const dismissRef = useRef<HTMLButtonElement>(null);
+  const errorId = useId();
   const hasOptions = (questions[0]?.options.length ?? 0) > 0;
   useFocusOnAppear(hasOptions ? firstOptionRef : sendRef, autoFocus && !readOnly);
 
@@ -187,12 +203,16 @@ function QuestionForm({
     setSent(true);
     env.respondQuestion(item.requestId, response);
   };
+  const isUnanswered = (draft: Draft) => draft.selected.length === 0 && draft.text.trim() === "";
   const send = () => {
-    const unanswered = drafts.some(
-      (draft) => draft.selected.length === 0 && draft.text.trim() === "",
-    );
-    if (unanswered) {
+    const first = drafts.findIndex(isUnanswered);
+    if (first !== -1) {
       setMissing(true);
+      // To the first question still without an answer, where the error is read out.
+      sendRef.current
+        ?.closest("section")
+        ?.querySelector<HTMLElement>(`[data-question-index="${first}"] input:not(:disabled)`)
+        ?.focus();
       return;
     }
     respond({
@@ -240,22 +260,26 @@ function QuestionForm({
       }
       readOnly={readOnly}
     >
-      {questions.map((question, index) => (
-        <QuestionFields
-          // biome-ignore lint/suspicious/noArrayIndexKey: the questions of a request never change
-          key={index}
-          question={question}
-          index={index}
-          draft={drafts[index] ?? { selected: [], text: "" }}
-          readOnly={readOnly}
-          showHeader={questions.length > 1}
-          onToggle={(optionLabel) => toggle(index, optionLabel)}
-          onText={(text) => update(index, (draft) => ({ ...draft, text }))}
-          firstOptionRef={index === 0 ? firstOptionRef : undefined}
-        />
-      ))}
+      {questions.map((question, index) => {
+        const draft = drafts[index] ?? { selected: [], text: "" };
+        return (
+          <QuestionFields
+            // biome-ignore lint/suspicious/noArrayIndexKey: the questions of a request never change
+            key={index}
+            question={question}
+            index={index}
+            draft={draft}
+            readOnly={readOnly}
+            showHeader={questions.length > 1}
+            onToggle={(optionLabel) => toggle(index, optionLabel)}
+            onText={(text) => update(index, (next) => ({ ...next, text }))}
+            firstOptionRef={index === 0 ? firstOptionRef : undefined}
+            errorId={missing && isUnanswered(draft) ? errorId : undefined}
+          />
+        );
+      })}
       {missing && (
-        <p className={styles.error} role="alert">
+        <p id={errorId} className={styles.error} role="alert">
           {questions.length > 1
             ? "Answer every question: pick an option or type an answer."
             : "Pick an option or type an answer."}

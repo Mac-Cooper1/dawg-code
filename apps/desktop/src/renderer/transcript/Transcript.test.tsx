@@ -54,11 +54,11 @@ const FIRST_TURN: TranscriptItem[] = [
 describe.each(THEMES)("Transcript (%s)", (theme) => {
   it("is a labelled log of the items in order", () => {
     renderInTheme(<Transcript {...makeProps({ view: makeView({ items: FIRST_TURN }) })} />, theme);
-    expect(screen.getByRole("region", { name: "Transcript" })).toHaveAttribute(
-      "data-session",
-      "session-1",
-    );
     const log = screen.getByRole("log", { name: "Transcript" });
+    expect(log.closest("[data-session]")).toHaveAttribute("data-session", "session-1");
+    // One element named "Transcript": the log. The window's main area is the landmark.
+    expect(screen.getAllByLabelText("Transcript")).toEqual([log]);
+    expect(screen.queryByRole("region", { name: "Transcript" })).not.toBeInTheDocument();
     expect(log).toHaveAttribute("aria-live", "off");
     const text = log.textContent ?? "";
     const order = ["test_split_evenly", "Ran", "Read", "Edited", "Fixed.", "48 s"].map((part) =>

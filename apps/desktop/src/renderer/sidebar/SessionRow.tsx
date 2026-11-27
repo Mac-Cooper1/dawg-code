@@ -1,7 +1,8 @@
 import { ContextMenu, DropdownMenu } from "radix-ui";
-import { useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import menu from "../app/menu.module.css";
 import type { SidebarRow } from "../state/types.ts";
+import { focusMessageField, useFocusFallback } from "../ui/focus.ts";
 import { ConfirmDialog, Icon, IconButton, type IconName } from "../ui/index.ts";
 import { RenameField } from "./RenameField.tsx";
 import styles from "./Sidebar.module.css";
@@ -17,6 +18,16 @@ const ROW_ACTIONS: readonly { id: RowAction; label: string; icon: IconName }[] =
   { id: "delete", label: "Delete…", icon: "trash" },
 ];
 
+/**
+ * After a row with focus leaves the list (its session deleted or archived): the list's current
+ * row, else the message field.
+ */
+function focusCurrentRow(): void {
+  const current = document.querySelector<HTMLElement>("button[data-session-row][tabindex='0']");
+  if (current) current.focus();
+  else focusMessageField();
+}
+
 /** Marks of a session whose turn still runs (waiting on the model or on the person included). */
 const RUNNING_MARKS: ReadonlySet<SidebarRow["mark"]> = new Set(["working", "queued", "needs-you"]);
 
@@ -29,6 +40,15 @@ export interface SessionRowProps {
   onArchive(): void;
   /** Called once the person has confirmed. */
   onDelete(): void;
+  /**
+   * The sidebar's list keeps one row in the tab order (roving focus); arrows move between rows.
+   * False takes this row and its "…" button out of the tab order. Default true.
+   */
+  tabbable?: boolean;
+  /** Keys on the row: the sidebar moves focus between rows with the arrows. */
+  onRowKeyDown?(event: KeyboardEvent<HTMLButtonElement>): void;
+  /** The row's button took focus. */
+  onRowFocus?(): void;
 }
 
 /**
@@ -61,9 +81,12 @@ function DeleteText({ row }: { row: SidebarRow }) {
  */
 export function SessionRow(props: SessionRowProps) {
   const { row } = props;
+  const tabbable = props.tabbable ?? true;
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const rowButton = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  useFocusFallback(rowRef, focusCurrentRow);
   // Rename and the delete dialog start once their menu has closed. While a menu is open it traps
   // focus, so a field that mounted earlier would lose focus to it; and the closing menu must not
   // hand focus back to its trigger. When the edit ends from the keyboard, focus returns to the row.
@@ -103,7 +126,7 @@ export function SessionRow(props: SessionRowProps) {
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild disabled={editing}>
-        <div className={styles.row} data-editing={editing ? "true" : undefined}>
+        <div ref={rowRef} className={styles.row} data-editing={editing ? "true" : undefined}>
           {editing ? (
             <span className={styles.rowButton}>
               <StatusMark mark={row.mark} label={row.markLabel} />
@@ -116,7 +139,11 @@ export function SessionRow(props: SessionRowProps) {
               className={styles.rowButton}
               aria-label={rowName(row)}
               aria-current={row.selected ? "true" : undefined}
+              data-session-row={row.sessionId}
+              tabIndex={tabbable ? 0 : -1}
               onClick={props.onSelect}
+              onKeyDown={props.onRowKeyDown}
+              onFocus={props.onRowFocus}
             >
               <StatusMark mark={row.mark} label={row.markLabel} />
               <span className={styles.rowText}>
@@ -137,6 +164,7 @@ export function SessionRow(props: SessionRowProps) {
                   size="sm"
                   label={`Actions for ${row.title}`}
                   className={styles.more}
+                  tabIndex={tabbable ? 0 : -1}
                 />
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>

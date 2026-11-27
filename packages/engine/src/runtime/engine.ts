@@ -10,6 +10,7 @@ import type {
   ClientCapabilities,
   ForkPoint,
   SessionSummary as ProtocolSummary,
+  SessionStatus,
 } from "@dawg/protocol";
 import { DEFAULT_TOOL_LIMITS } from "../contracts/tools.ts";
 import { DEFAULT_LOOP_LIMITS, type IdKind } from "../loop/types.ts";
@@ -553,7 +554,7 @@ export class Engine {
       projectDir: sidecar?.projectDir ?? s.cwd,
       createdAt: Date.parse(s.createdAt),
       lastActivityAt: Date.parse(s.lastActivity),
-      status: sidecar?.lastTurnFailed || s.status === "error" ? "error" : "idle",
+      status: storedStatus(sidecar, s.status === "error"),
       queuePosition: null,
       mode: sidecar?.mode ?? "default",
       model: sidecar?.model ?? null,
@@ -578,7 +579,7 @@ export class Engine {
       projectDir: sidecar?.projectDir ?? snapshot.meta.cwd,
       createdAt: Date.parse(snapshot.meta.time),
       lastActivityAt: Date.parse(snapshot.lastTime),
-      status: sidecar?.lastTurnFailed ? "error" : "idle",
+      status: storedStatus(sidecar, false),
       queuePosition: null,
       mode: snapshot.state.mode ?? "default",
       model: snapshot.state.model,
@@ -660,4 +661,13 @@ async function readMetaCwd(file: string): Promise<string | null> {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+/**
+ * What a listing says about a session that is not open: waiting when it stopped while its turn
+ * waited on the person (opening it brings the request back), error when its last turn failed.
+ */
+function storedStatus(sidecar: Sidecar | null, failed: boolean): SessionStatus {
+  if (sidecar?.waitingOn) return "waiting";
+  return sidecar?.lastTurnFailed || failed ? "error" : "idle";
 }

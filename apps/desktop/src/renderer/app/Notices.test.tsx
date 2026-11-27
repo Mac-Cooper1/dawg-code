@@ -8,12 +8,15 @@ import { Notices } from "./Notices.tsx";
 const READY: ConnectionState = { phase: "ready", engine: { name: "mock", version: "1" } };
 
 describe.each(THEMES)("Notices (%s)", (theme) => {
-  it("renders nothing when connected with no notices", () => {
+  it("keeps an empty live region when connected with no notices", () => {
     const { container } = renderInTheme(
       <Notices notices={[]} connection={READY} onDismiss={vi.fn()} />,
       theme,
     );
-    expect(container).toBeEmptyDOMElement();
+    // Mounted while empty, so a notice that arrives later is read out.
+    const region = container.firstElementChild;
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toBeEmptyDOMElement();
   });
 
   it("shows a quiet line while connecting and while the engine restarts", () => {
@@ -61,5 +64,38 @@ describe.each(THEMES)("Notices (%s)", (theme) => {
     if (!first) throw new Error("no dismiss button");
     await userEvent.click(first);
     expect(onDismiss).toHaveBeenCalledWith("n1");
+  });
+
+  it("moves focus to the next notice, then to the message field, as notices are dismissed", async () => {
+    const notices: Notice[] = [
+      { id: "n1", text: "The engine restarted.", tone: "neutral" },
+      { id: "n2", text: "Could not save settings.", tone: "error" },
+    ];
+    const { rerender } = renderInTheme(
+      <>
+        <Notices notices={notices} onDismiss={vi.fn()} />
+        <textarea aria-label="Message to dawg" />
+      </>,
+      theme,
+    );
+    const [first] = screen.getAllByRole("button", { name: "Dismiss" });
+    if (!first) throw new Error("no dismiss button");
+    first.focus();
+    await userEvent.keyboard("{Enter}");
+    rerender(
+      <>
+        <Notices notices={notices.slice(1)} onDismiss={vi.fn()} />
+        <textarea aria-label="Message to dawg" />
+      </>,
+    );
+    expect(screen.getByRole("button", { name: "Dismiss" })).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    rerender(
+      <>
+        <Notices notices={[]} onDismiss={vi.fn()} />
+        <textarea aria-label="Message to dawg" />
+      </>,
+    );
+    expect(screen.getByRole("textbox", { name: "Message to dawg" })).toHaveFocus();
   });
 });
