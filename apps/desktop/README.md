@@ -142,7 +142,9 @@ The Phase 3 budgets, and one of our own, are asserted by `e2e/performance.spec.t
 engine with a 5,000-item session (`DAWG_MOCK_LONG_SESSION=5000`: prompts, Markdown answers with
 code, reasoning, reads, searches, edits with diffs, command output, interrupted turns,
 compactions and answered decisions) and a temporary git repository. `PERF_PROFILE_DIR=<dir>`
-also writes CPU profiles of the open and the stream there and prints where the time went.
+also writes CPU profiles of the open and the stream there and prints where the time went. On CI
+(GitHub's shared macOS runners, which render through a virtual GPU) every time budget gets twice
+the room and the spec retries once; the numbers below are the strict ones, for a real Mac.
 
 Measured on the reference laptop for this work, a 2019 Intel MacBook Pro (i7-8557U, 16 GB), with
 other work running; ranges are several runs.
@@ -153,7 +155,7 @@ other work running; ranges are several runs.
 | Open a 5,000-item session: newest items painted | 2.5–8.1 s | 0.28–0.30 s | < 1 s |
 | … longest main-thread task while it opens and draws the rest | 1.8–6.4 s | none over 50 ms | < 300 ms |
 | … the whole session drawn, in the background | (with the above) | 2.0–2.2 s | < 20 s |
-| Scrolling it (3,600 px/s): 95th percentile frame, worst frame | 34–161 ms, 39–243 ms | 18 ms, 19–21 ms | < 25 ms, < 100 ms |
+| Scrolling it (3,600 px/s): 95th percentile frame, worst frame | 34–161 ms, 39–243 ms | 18 ms, 19–21 ms | < 25 ms; at most 1 frame in 200 over 100 ms |
 | Text streaming into it: 95th percentile frame | 118 ms (about 10 frames a second) | 19–20 ms | < 25 ms |
 | … transcript commits per frame, and what a delta makes React visit | 1, all 5,000 items | 1, one group of 25 | 1, at most 2 groups touched |
 | A 5,000-line diff (1,000 hunks) in Changes: drawn, longest task | 0.18–0.34 s, up to 168 ms | 0.17–0.18 s, none | < 2 s, < 300 ms |

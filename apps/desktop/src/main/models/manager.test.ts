@@ -822,6 +822,17 @@ describe("the end-to-end test hook", () => {
     expect(answer.ok && answer.grant.slots).toBeUndefined();
   });
 
+  it("keeps asking a test server that does not answer at first", async () => {
+    const url = "http://127.0.0.1:7777/v1";
+    const h = await setup({
+      testServerUrl: url,
+      remote: { [url]: { models: ["mock-model"], failFirst: 2 } },
+    });
+    const id = remoteServerId(url);
+    expect((await h.manager.state()).defaultModelId).toBe(`${id}/mock-model`);
+    expect(h.remoteCalls.filter((call) => call.url === url)).toHaveLength(3);
+  });
+
   it("shares the runtime's slots with DAWG_TEST_SERVER_SLOTS, so sessions queue for it", async () => {
     const url = "http://127.0.0.1:7777/v1";
     const h = await setup({

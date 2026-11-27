@@ -189,6 +189,8 @@ const ACTIVE_PHASES = new Set<DownloadState["phase"]>([
 ]);
 const ENDED_PHASES = new Set<DownloadState["phase"]>(["done", "failed", "cancelled"]);
 const LOCAL_KINDS = ["ollama", "lmstudio"] as const;
+/** How many times the end-to-end test hook asks its server before giving up (about 4 s in all). */
+const TEST_SERVER_TRIES = 5;
 const SERVER_NAMES: Record<"ollama" | "lmstudio", string> = {
   ollama: "Ollama",
   lmstudio: "LM Studio",
@@ -1430,12 +1432,23 @@ export class ModelManager implements ModelService {
     this.modelsChanged();
   }
 
+  /** `connectRemote` for the test hook's address, with or without its `/v1`. */
+  private async probeTestServer(url: string): ReturnType<ModelBackend["connectRemote"]> {
+    const result = await this.backend.connectRemote({ url });
+    if (result.ok || /\/v1\/?$/.test(url)) return result;
+    const retry = await this.backend.connectRemote({ url: `${url.replace(/\/+$/, "")}/v1` });
+    return retry.ok ? retry : result;
+  }
+
   /** The test hook: the server, in memory and without a key, with its first model the default. */
   private async connectTestServer(url: string): Promise<void> {
-    let result = await this.backend.connectRemote({ url });
-    if (!result.ok && !/\/v1\/?$/.test(url)) {
-      const retry = await this.backend.connectRemote({ url: `${url.replace(/\/+$/, "")}/v1` });
-      if (retry.ok) result = retry;
+    // A few tries: a server that has only just started may not answer yet, and Node's fetch in
+    // Electron's main process has been seen to fail once for no reason of the server's (on a CI
+    // runner: "Cannot read properties of undefined (reading 'markResourceTiming')").
+    let result = await this.probeTestServer(url);
+    for (let attempt = 1; !result.ok && attempt < TEST_SERVER_TRIES; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+      result = await this.probeTestServer(url);
     }
     if (!result.ok) {
       this.log(`DAWG_TEST_SERVER_URL ${displayUrl(url)} did not answer: ${result.error}`);
