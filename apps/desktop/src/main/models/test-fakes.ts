@@ -265,6 +265,8 @@ export class FakeRuntime implements BundledRuntime {
 export interface FakeServer {
   key?: string;
   models: string[];
+  /** Fails this many requests first, as a server still starting (or a flaky fetch) does. */
+  failFirst?: number;
 }
 
 export function discovered(id: string, contextWindow = 32_768): DiscoveredModel {
@@ -346,6 +348,10 @@ export async function harness(options: HarnessOptions = {}) {
       const base = url.replace(/\/+$/, "");
       const server = remote.get(base);
       if (!server) return { ok: false, error: "the server did not answer" };
+      if ((server.failFirst ?? 0) > 0) {
+        server.failFirst = (server.failFirst ?? 0) - 1;
+        return { ok: false, error: "fetch failed" };
+      }
       if (server.key !== undefined && apiKey !== server.key) {
         return { ok: false, error: "Unauthorized", status: 401 };
       }

@@ -142,7 +142,9 @@ The Phase 3 budgets, and one of our own, are asserted by `e2e/performance.spec.t
 engine with a 5,000-item session (`DAWG_MOCK_LONG_SESSION=5000`: prompts, Markdown answers with
 code, reasoning, reads, searches, edits with diffs, command output, interrupted turns,
 compactions and answered decisions) and a temporary git repository. `PERF_PROFILE_DIR=<dir>`
-also writes CPU profiles of the open and the stream there and prints where the time went.
+also writes CPU profiles of the open and the stream there and prints where the time went. On CI
+(GitHub's shared macOS runners, which render through a virtual GPU) every time budget gets twice
+the room and the spec retries once; the numbers below are the strict ones, for a real Mac.
 
 Measured on the reference laptop for this work, a 2019 Intel MacBook Pro (i7-8557U, 16 GB), with
 other work running; ranges are several runs.
