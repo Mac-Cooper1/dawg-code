@@ -8,6 +8,8 @@ import { editTool } from "./edit/index.ts";
 import { globTool } from "./glob/index.ts";
 import { grepTool } from "./grep/index.ts";
 import { readTool } from "./read/index.ts";
+import { webFetchTool } from "./web-fetch/index.ts";
+import { webSearchTool } from "./web-search/index.ts";
 import { writeTool } from "./write/index.ts";
 
 export {
@@ -19,6 +21,8 @@ export {
 } from "./bash/index.ts";
 export { fileTracker } from "./files/index.ts";
 export { RipgrepNotFoundError, resolveRipgrep } from "./ripgrep/index.ts";
+export * from "./web-fetch/index.ts";
+export * from "./web-search/index.ts";
 export { bashTool, editTool, globTool, grepTool, readTool, taskStopTool, writeTool };
 
 export const CORE_TOOLS: readonly AnyTool[] = [
@@ -30,3 +34,10 @@ export const CORE_TOOLS: readonly AnyTool[] = [
   bashTool,
   taskStopTool,
 ];
+
+/**
+ * The web tools, after the core and interactive tools in the default order so adding them left
+ * the earlier tools' place in the prefix alone. WebSearch is offered only to sessions opened
+ * while a search service is configured (`ToolDefinition.offered`).
+ */
+export const WEB_TOOLS: readonly AnyTool[] = [webFetchTool, webSearchTool];

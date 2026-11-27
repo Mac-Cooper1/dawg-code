@@ -3,6 +3,7 @@ import type { SettingsFlags } from "@dawg/compat";
 import type { ClientCapabilities, PromptInput } from "@dawg/protocol";
 import type { Engine } from "../runtime/engine.ts";
 import type { SessionRuntime } from "../runtime/session.ts";
+import type { SkillPromptOptions } from "../skills/session-skills.ts";
 import type { CommandRegistry } from "./registry.ts";
 
 /** Where a session's model requests go, as shown by `/status` and `/model`. */
@@ -40,7 +41,13 @@ export interface CommandContext {
  */
 export type CommandResult =
   | { kind: "output"; text: string }
-  | { kind: "prompt"; prompt: PromptInput; text: string | null }
+  | {
+      kind: "prompt";
+      prompt: PromptInput;
+      text: string | null;
+      /** For a skill or custom command: the command as typed, and the skill that ran. */
+      options?: SkillPromptOptions;
+    }
   | {
       kind: "session";
       session: SessionRuntime;
@@ -57,8 +64,10 @@ export interface SlashCommand {
   argumentHint: string | null;
   /** Other names that run the same command, for example "reset" for "clear". */
   aliases?: readonly string[];
-  /** Where it came from: "builtin" here; Phase 4 adds user and project commands. */
-  source?: string;
+  /** Where it came from: built in, or a custom command or skill from the person's or the project's files. */
+  source?: "builtin" | "user" | "project";
+  /** A slash command, or a skill the person can also run by name. Default "command". */
+  kind?: "command" | "skill";
   run(context: CommandContext): CommandResult | Promise<CommandResult>;
 }
 

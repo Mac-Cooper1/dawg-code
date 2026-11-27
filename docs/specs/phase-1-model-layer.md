@@ -183,6 +183,8 @@ interface Endpoint {
 
 Settled on 2026-11-24 against the pinned build (b12359). The bundled runtime runs two slots, one for conversations and one for side requests such as titles, over one unified KV cache: `-c <window + 8192> -np 2 --kv-unified --kv-unified-per-slot <window>`. Each slot's window is then `<window>` (llama-server reports it in `/props` as `n_ctx`), and the cache holds one window plus a small reserve for the side slot instead of two full windows. Without `--kv-unified`, llama-server splits `-c` evenly between slots. The app and the command-line tool both take this layout from `twoSlotLayout` (`packages/models/src/runtime/args.ts`), and the app's memory check counts `<window + 8192>` tokens of cache.
 
+**The helper model** (added 2026-11-27). Side requests can instead go to a tiny catalog model (`role: "helper"`, MiniCPM5 1B) in a second llama-server: `-c 32768 -np 1 --no-kv-unified --reasoning off --cache-ram 0 --ctx-checkpoints 0`, with its own port, key file, `helper-` prefixed logs and slot folder, under its own watchdog (`helperRuntimeConfig` and `helperPaths` in `packages/models/src/runtime/helper.ts`). It starts with the main model, unloads with the same `--sleep-idle-seconds`, and is restarted by its supervisor if it dies. The main model keeps its two-slot layout, so side requests can fall back to its side slot whenever the helper is missing, off or not answering. The memory check takes the helper's weights, its 32K of cache and 512 MiB off the 70% budget before it chooses the main model's window.
+
 ### Bundling the runtime
 
 - A lock file records the llama.cpp release tag and the SHA-256 of each macOS archive (arm64 and x64).

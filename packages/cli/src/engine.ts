@@ -8,10 +8,12 @@ import type { SettingsFlags } from "@dawg/compat";
 import {
   createEngine,
   createEngineHost,
+  createTrustStore,
   type Engine,
   type EngineHost,
   getModelProfile,
   resolveDawgHome,
+  type SearchProvider,
 } from "@dawg/engine";
 import {
   type Client,
@@ -49,6 +51,7 @@ export function settingsFlagsFrom(options: CliOptions): SettingsFlags {
   if (options.disallowedTools.length > 0) flags.disallowedTools = options.disallowedTools;
   if (options.permissionMode !== null) flags.permissionMode = options.permissionMode;
   if (options.addDirs.length > 0) flags.addDirs = options.addDirs;
+  if (options.sandbox) flags.sandbox = true;
   return flags;
 }
 
@@ -57,8 +60,11 @@ export function buildEngine(input: {
   paths: Paths;
   models: ModelSetup;
   generateTitles: boolean;
+  /** The search service WebSearch uses (`searchFromEnvironment`), or none. */
+  search?: SearchProvider | null;
 }): Engine {
   const { options, paths, models } = input;
+  const search = input.search ?? null;
   return createEngine({
     storeRoot: paths.dawgHome,
     homeDir: paths.homeDir,
@@ -66,6 +72,11 @@ export function buildEngine(input: {
     profile: (endpoint) => getModelProfile(profileIdForModel(endpoint.model)),
     settingsFlags: settingsFlagsFrom(options),
     generateTitles: input.generateTitles,
+    webSearch: () => search,
+    // Consent for project-supplied code, shared with the app through the data root.
+    trust: createTrustStore({ storeRoot: paths.dawgHome, homeDir: paths.homeDir }),
+    // The project's memory folder, shared with the app through the data root.
+    autoMemory: true,
     ...(options.maxTurns === null ? {} : { limits: { maxRequestsPerTurn: options.maxTurns } }),
   });
 }

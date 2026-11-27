@@ -4,13 +4,19 @@
  */
 import type {
   BackgroundTask,
+  CompatReport,
+  CompatSource,
+  HookInfo,
   ModelInfo,
   PermissionRequest,
   SessionSummary,
+  SkillInfo,
   TaskItem,
   Usage,
 } from "../common.ts";
 import type { EventName, EventPayloadInput } from "../events.ts";
+import type { McpServerInfo } from "../mcp.ts";
+import type { SubagentInfo } from "../subagents.ts";
 import type { MethodName, MethodParams, ResultInput } from "../methods.ts";
 import type { SessionSnapshot } from "../methods.ts";
 
@@ -97,8 +103,94 @@ export const snapshot: SessionSnapshot = {
   usage: null,
   pending: [{ kind: "permission", turnId: "t1", request: permissionRequest }],
   activeTurnId: "t1",
-  commands: [{ name: "compact", description: "Summarise the conversation", argumentHint: "[focus]" }],
+  commands: [
+    {
+      name: "compact",
+      description: "Summarise the conversation",
+      argumentHint: "[focus]",
+      source: "builtin",
+      kind: "command",
+    },
+    {
+      name: "review",
+      description: "Review the staged changes",
+      argumentHint: null,
+      source: "project",
+      kind: "skill",
+    },
+  ],
   background: [backgroundTask],
+};
+
+/** Where the sample hook comes from: a project's Claude Code settings. */
+const hookSource: CompatSource = {
+  path: "/Users/me/tally/.claude/settings.json",
+  origin: "claude",
+  scope: "project",
+};
+
+export const compatReport: CompatReport = {
+  projectDir: "/Users/me/tally",
+  items: [
+    {
+      kind: "skill",
+      name: "review",
+      source: {
+        path: "/Users/me/tally/.claude/skills/review/SKILL.md",
+        origin: "claude",
+        scope: "project",
+      },
+      status: "loaded",
+      notes: [],
+    },
+    {
+      kind: "hook",
+      name: "PreToolUse on Bash: ./scripts/check-command.sh",
+      source: hookSource,
+      status: "needs-approval",
+      notes: ["Runs a command from the project's files."],
+    },
+  ],
+  approval: {
+    hash: "sha256:9f2c",
+    approved: false,
+    items: [
+      {
+        kind: "hook",
+        name: "PreToolUse on Bash: ./scripts/check-command.sh",
+        source: hookSource,
+        status: "needs-approval",
+        notes: ["Runs a command from the project's files."],
+      },
+    ],
+  },
+};
+
+/** The sample hook as Settings → Hooks lists it. */
+export const hookInfo: HookInfo = {
+  id: "hook:7d1e",
+  event: "PreToolUse",
+  matcher: "Bash",
+  type: "command",
+  command: "./scripts/check-command.sh",
+  timeout: null,
+  source: hookSource,
+  status: "needs-approval",
+  notes: ["Runs a command from the project's files."],
+  enabled: true,
+};
+
+/** The sample skill as Settings → Skills and commands lists it. */
+export const skillInfo: SkillInfo = {
+  name: "review",
+  kind: "skill",
+  description: "Review the current changes for bugs and style",
+  argumentHint: "[focus]",
+  source: { path: "/Users/me/tally/.claude/skills/review/SKILL.md", origin: "claude", scope: "project" },
+  userInvocable: true,
+  modelInvocable: true,
+  status: "partly-supported",
+  notes: ["model “sonnet” is mapped to the session's model: model names are mapped, not obeyed."],
 };
 
 type MethodSamples = {
@@ -108,6 +200,43 @@ type MethodSamples = {
     badParams: unknown;
     badResult: unknown;
   };
+};
+
+export const mcpServer: McpServerInfo = {
+  name: "github",
+  scope: "project",
+  source: { path: "/Users/me/tally/.mcp.json", origin: "claude", scope: "project" },
+  transport: "stdio",
+  target: "npx -y @modelcontextprotocol/server-github",
+  state: "connected",
+  reason: null,
+  tools: [
+    { name: "mcp__github__get_issue", tool: "get_issue", description: "Get an issue by number" },
+  ],
+  prompts: 1,
+  resources: 0,
+  enabled: true,
+  notes: [],
+};
+
+export const subagentInfo: SubagentInfo = {
+  agentId: "agent-1",
+  sessionId: "s1-agent-1",
+  agentType: "Explore",
+  description: "Find the config loader",
+  toolCallId: "c1",
+  turnId: "t1",
+  fork: false,
+  background: false,
+  status: "running",
+  queuePosition: null,
+  worktree: null,
+  startedAt: 1_700_000_000_000,
+  endedAt: null,
+  toolUses: 2,
+  activity: "Read src/config.ts",
+  result: null,
+  error: null,
 };
 
 export const methodSamples: MethodSamples = {
@@ -234,6 +363,40 @@ export const methodSamples: MethodSamples = {
       hasMore: false,
     },
   },
+  "session.checkpoints": {
+    params: { sessionId: "s1" },
+    result: {
+      checkpoints: [
+        {
+          id: "turn-4",
+          turnId: "turn-4",
+          time: 1_700_000_000_000,
+          prompt: "Add a greeting",
+          tracked: true,
+          files: [{ path: `${cwd}/hello.txt`, change: "created" }],
+          restore: [{ path: `${cwd}/hello.txt`, action: "delete", changedOutside: false }],
+        },
+      ],
+      retention: 100,
+    },
+    badParams: { sessionId: "" },
+    badResult: {
+      checkpoints: [{ id: "turn-4", turnId: "turn-4", time: 1, prompt: "", tracked: true, files: [], restore: [{ path: "/a", action: "shred", changedOutside: false }] }],
+      retention: 100,
+    },
+  },
+  "session.rewind": {
+    params: { sessionId: "s1", checkpointId: "turn-4", action: "both" },
+    result: {
+      outcome: "done",
+      conflicts: [],
+      files: { restored: [`${cwd}/readme.md`], deleted: [`${cwd}/hello.txt`], skipped: [] },
+      session: snapshot,
+      prompt: "Add a greeting",
+    },
+    badParams: { sessionId: "s1", checkpointId: "turn-4", action: "undo-everything" },
+    badResult: { outcome: "maybe", conflicts: [], files: null, session: null, prompt: null },
+  },
   "background.output": {
     params: { sessionId: "s1", taskId: "bg1" },
     result: { text: "listening on :3000\n", nextOffset: 19, totalBytes: 19, done: false },
@@ -245,6 +408,141 @@ export const methodSamples: MethodSamples = {
     result: { stopped: true },
     badParams: { sessionId: "s1" },
     badResult: {},
+  },
+  "subagent.stop": {
+    params: { sessionId: "s1", agentId: "agent-1" },
+    result: { stopped: true },
+    badParams: { sessionId: "s1", agentId: "" },
+    badResult: { stopped: "yes" },
+  },
+  "project.inspect": {
+    params: { projectDir: "/Users/me/tally" },
+    result: compatReport,
+    badParams: { projectDir: "" },
+    badResult: { ...compatReport, items: [{ ...compatReport.items[0], status: "maybe" }] },
+  },
+  "project.trust": {
+    params: { projectDir: "/Users/me/tally", hash: "sha256:9f2c", approved: true },
+    result: { approved: true },
+    badParams: { projectDir: "/Users/me/tally", hash: "", approved: true },
+    badResult: { approved: "yes" },
+  },
+  "hooks.list": {
+    params: { projectDir: "/Users/me/tally" },
+    result: { projectDir: "/Users/me/tally", hooks: [hookInfo], disabledBy: null },
+    badParams: { projectDir: 3 },
+    badResult: {
+      projectDir: "/Users/me/tally",
+      hooks: [{ ...hookInfo, enabled: "yes" }],
+      disabledBy: null,
+    },
+  },
+  "hooks.setEnabled": {
+    params: { projectDir: "/Users/me/tally", id: hookInfo.id, enabled: false },
+    result: { enabled: false },
+    badParams: { projectDir: "/Users/me/tally", id: "", enabled: false },
+    badResult: { enabled: null },
+  },
+  "project.skills": {
+    params: { projectDir: "/Users/me/tally" },
+    result: {
+      projectDir: "/Users/me/tally",
+      skills: [skillInfo],
+      commands: [
+        {
+          ...skillInfo,
+          name: "frontend:test",
+          kind: "command",
+          description: "Run the frontend tests",
+          argumentHint: null,
+          source: {
+            path: "/Users/me/.claude/commands/frontend/test.md",
+            origin: "claude",
+            scope: "user",
+          },
+          modelInvocable: false,
+          status: "loaded",
+          notes: [],
+        },
+      ],
+    },
+    badParams: { projectDir: "" },
+    badResult: { projectDir: null, skills: [{ ...skillInfo, kind: "agent" }], commands: [] },
+  },
+  "mcp.list": {
+    params: { projectDir: "/Users/me/tally" },
+    result: { projectDir: "/Users/me/tally", servers: [mcpServer], importable: 2 },
+    badParams: { projectDir: 3 },
+    badResult: {
+      projectDir: "/Users/me/tally",
+      servers: [{ ...mcpServer, state: "sleeping" }],
+      importable: 0,
+    },
+  },
+  "mcp.restart": {
+    params: { projectDir: "/Users/me/tally", name: "github" },
+    result: { server: mcpServer },
+    badParams: { projectDir: "/Users/me/tally", name: "" },
+    badResult: { server: { ...mcpServer, tools: null } },
+  },
+  "mcp.setEnabled": {
+    params: { projectDir: null, name: "github", enabled: false },
+    result: { enabled: false },
+    badParams: { projectDir: null, name: "github" },
+    badResult: { enabled: "no" },
+  },
+  "mcp.importPreview": {
+    params: {},
+    result: {
+      from: "/Users/me/.claude.json",
+      to: "/Users/me/.dawg/mcp.json",
+      hash: "sha256:abc",
+      items: [
+        {
+          name: "github",
+          project: null,
+          transport: "stdio",
+          target: "npx -y @modelcontextprotocol/server-github",
+          secrets: ["env GITHUB_TOKEN"],
+          action: "copy",
+          reason: null,
+        },
+      ],
+    },
+    badParams: null,
+    badResult: { from: "/Users/me/.claude.json", to: "x", hash: null, items: [{ name: "" }] },
+  },
+  "mcp.import": {
+    params: { hash: "sha256:abc" },
+    result: { imported: 1, path: "/Users/me/.dawg/mcp.json" },
+    badParams: { hash: "" },
+    badResult: { imported: -1, path: "/Users/me/.dawg/mcp.json" },
+  },
+  "mcp.session": {
+    params: { sessionId: "s1" },
+    result: {
+      resources: [
+        {
+          server: "docs",
+          uri: "file://api/auth.md",
+          name: "Authentication",
+          description: "How the API signs requests",
+          mimeType: "text/markdown",
+          mention: "@docs:file://api/auth.md",
+        },
+      ],
+      prompts: [
+        {
+          name: "mcp__github__pr_review",
+          description: "Review a pull request (MCP)",
+          argumentHint: "<number>",
+          source: "user",
+          kind: "command",
+        },
+      ],
+    },
+    badParams: { sessionId: "" },
+    badResult: { resources: [{ server: "docs" }], prompts: [] },
   },
   "permission.respond": {
     params: {
@@ -462,6 +760,44 @@ export const eventSamples: EventSamples = {
   "background.updated": {
     payload: { ...base, task: backgroundTask },
     bad: { ...base, task: { ...backgroundTask, status: "paused" } },
+  },
+  "subagent.updated": {
+    payload: { ...base, agent: subagentInfo },
+    bad: { ...base, agent: { ...subagentInfo, status: "sleeping" } },
+  },
+  "hook.ran": {
+    payload: {
+      ...base,
+      turnId: "t1",
+      toolCallId: "c1",
+      hook: {
+        event: "PreToolUse",
+        matcher: "Bash",
+        type: "command",
+        command: "./scripts/check-command.sh",
+        source: hookSource,
+      },
+      outcome: "blocked",
+      exitCode: 2,
+      durationMs: 41,
+      decision: "deny",
+      message: "rm -rf is not allowed in this project",
+    },
+    bad: {
+      ...base,
+      turnId: "t1",
+      toolCallId: "c1",
+      hook: { event: "PreToolUse", matcher: null, type: "command", command: "x", source: hookSource },
+      outcome: "exploded",
+      exitCode: 1,
+      durationMs: 1,
+      decision: null,
+      message: null,
+    },
+  },
+  "hook.skipped": {
+    payload: { ...base, turnId: "t1", projectDir: "/Users/me/tally", sources: [hookSource] },
+    bad: { ...base, turnId: "t1", projectDir: "/Users/me/tally", sources: [{ path: "" }] },
   },
   "usage.updated": {
     payload: { ...base, usage },

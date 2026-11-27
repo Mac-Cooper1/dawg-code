@@ -1,0 +1,27 @@
+/* The marker where a forked session's own conversation starts. */
+
+.marker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+}
+
+.line {
+  flex: 1;
+  height: 1px;
+  background: var(--line-2);
+}
+
+.text {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 85%;
+  text-align: center;
+  line-height: var(--leading);
+}

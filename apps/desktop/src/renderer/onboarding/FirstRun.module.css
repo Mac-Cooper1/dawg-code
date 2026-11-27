@@ -220,6 +220,39 @@
   flex: 1;
 }
 
+/* The helper model that comes with the lead model's one click. */
+.helperNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.helperNoteIcon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ink-3);
+}
+
+.helperLine {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.helperName {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
 .note {
   margin: 0;
   font-size: var(--text-sm);

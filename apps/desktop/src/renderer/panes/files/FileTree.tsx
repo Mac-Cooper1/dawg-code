@@ -27,7 +27,11 @@ export interface TreeRow {
 }
 
 /** The rows the tree shows, top to bottom. */
-export function visibleRows(roots: readonly string[], session: FilesSession): TreeRow[] {
+export function visibleRows(
+  roots: readonly string[],
+  session: FilesSession,
+  rootNames: Readonly<Record<string, string>> = {},
+): TreeRow[] {
   const rows: TreeRow[] = [];
   const walk = (dir: string, depth: number) => {
     const listing = session.dirs[dir];
@@ -58,7 +62,7 @@ export function visibleRows(roots: readonly string[], session: FilesSession): Tr
     const own = session.dirs[root];
     rows.push({
       path: root,
-      name: basename(root) || root,
+      name: rootNames[root] ?? (basename(root) || root),
       kind: "directory",
       depth: 0,
       ignored: false,
@@ -116,11 +120,13 @@ function Chevron({ open }: { open: boolean }) {
 export function FileTree(props: {
   sessionId: SessionId;
   roots: readonly string[];
+  /** Names for roots shown otherwise than by their folder's name ("Project memory"). */
+  rootNames?: Readonly<Record<string, string>>;
   session: FilesSession;
   touched: ReadonlyMap<string, "created" | "edited">;
 }) {
-  const { sessionId, roots, session, touched } = props;
-  const rows = useMemo(() => visibleRows(roots, session), [roots, session]);
+  const { sessionId, roots, session, touched, rootNames } = props;
+  const rows = useMemo(() => visibleRows(roots, session, rootNames), [roots, session, rootNames]);
   const holders = useMemo(() => foldersAbove(touched.keys()), [touched]);
   const [focused, setFocused] = useState<string | null>(null);
   const tree = useRef<HTMLDivElement>(null);

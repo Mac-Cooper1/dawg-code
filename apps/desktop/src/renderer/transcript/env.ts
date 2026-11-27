@@ -17,4 +17,14 @@ export interface TranscriptEnv {
   openLink(url: string): void;
   /** Absent until the Changes pane exists; the "Open in Changes" link is hidden then. */
   openInChanges: ((filePath: string) => void) | null;
+  /**
+   * Opens the review of a project's code (the trust dialog), for the line about hooks that wait
+   * for approval. Null when the shell offers none; the Review button is hidden then.
+   */
+  reviewProjectCode: ((projectDir: string) => void) | null;
+  /**
+   * Shows a subagent's own transcript, from its card ("Open transcript"). Null where there is
+   * nowhere to show it (inside an agent's transcript); the button is hidden then.
+   */
+  openSubagent: ((agentId: string) => void) | null;
 }

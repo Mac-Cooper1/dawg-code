@@ -27,9 +27,11 @@ import type { CliOptions } from "./args.ts";
 import { cliVersion } from "./engine.ts";
 import { EXIT } from "./exit-codes.ts";
 import type { Io } from "./io.ts";
-import { diffLines, permissionLines, toolLine } from "./render.ts";
+import { agentLine, diffLines, permissionLines, sandboxLine, toolLine } from "./render.ts";
+import { editorCommand, openInEditor, rewindInteractively } from "./rewind.ts";
 import { openSession, runErrorFrom } from "./session.ts";
 import { type Running, start } from "./start.ts";
+import { approveProjectCode, askProjectCode, hookLine, skippedLine } from "./trust.ts";
 
 type RequestEvent = Extract<
   EngineEvent,
@@ -104,6 +106,8 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
   let active: { sessionId: string; turnId: string } | null = null;
   let interrupting = false;
   let quitting = false;
+  /** A message to put back on the input line (after `/rewind`). */
+  let refill: string | null = null;
 
   const interrupt = () => {
     if (active === null || running === null) {
@@ -132,7 +136,23 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
     });
     const { client } = running;
     const cwd = path.resolve(io.cwd, options.cwd ?? ".");
+    // Code the project supplies waits for consent: asked once, before the session opens, so
+    // its SessionStart hooks can run. A session resumed by id is asked about once it is open.
+    const consent = async (projectDir: string) => {
+      if (options.approveProjectCode) await approveProjectCode(client, projectDir, err);
+      else {
+        await askProjectCode(client, projectDir, {
+          line: err,
+          ask: async (question) => {
+            io.stderr.write(question);
+            return lines.next();
+          },
+        });
+      }
+    };
+    if (options.resume === null) await consent(cwd);
     current = await openSession(client, options, cwd, err);
+    if (options.resume !== null) await consent(current.session.projectDir);
     err(
       `dawg ${cliVersion()}: ${current.modelInfo?.id ?? "model"} in ${current.session.cwd}, ` +
         `session ${current.session.id}, ${current.session.mode} mode.`,
@@ -155,6 +175,12 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
       ) {
         requests.push(event);
         closers.set(requestIdOf(event), new AbortController());
+        // A background agent can ask while no turn of ours runs: ask at the prompt.
+        if (active === null && event.event === "permission.requested") {
+          view.endLine();
+          for (const l of permissionLines(event.payload.request, view.cwd())) view.line(l);
+          view.write(`${ALLOW_QUESTION}\n`);
+        }
       }
       if (event.event === "request.resolved") {
         const id = event.payload.requestId;
@@ -197,6 +223,27 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
         return;
       }
       try {
+        // `/rewind` asks here which point and what to restore (./rewind.ts).
+        if (command !== null && command.name === "rewind" && command.args === "") {
+          finished.delete(`${sessionId}/compaction`);
+          const done = await rewindInteractively(client, sessionId, {
+            ask: async (question) => {
+              view.write(question);
+              try {
+                return await lines.next();
+              } finally {
+                view.endLine();
+              }
+            },
+            line: (text) => view.line(text),
+            cwd: session.session.cwd,
+          });
+          if (done === null) return;
+          if (done.session !== null) current = done.session;
+          if (done.summarizing) await follow(sessionId, "compaction");
+          refill = done.prompt;
+          return;
+        }
         if (command !== null) {
           const compacting = command.name === "compact";
           finished.delete(`${sessionId}/compaction`);
@@ -206,6 +253,8 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
             args: command.args,
           });
           if (result.output !== null) out(`${result.output}\n`);
+          // `/memory`: MEMORY.md opens in the person's editor, when one is set.
+          if (command.name === "memory" && command.args === "") await editMemory(sessionId);
           if (result.openedSession !== null) {
             current = result.openedSession;
             err(`Session ${current.session.id} in ${current.session.cwd}.`);
@@ -225,6 +274,27 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
       }
     };
 
+    /** Opens the session's MEMORY.md in `$VISUAL` or `$EDITOR`, at an interactive terminal. */
+    const editMemory = async (sessionId: string) => {
+      const index = running?.engine.get(sessionId)?.memory?.indexPath ?? null;
+      const editor = editorCommand(io.env);
+      if (index === null || editor === null || !tty) {
+        if (index !== null && editor === null && tty) {
+          err("Set $EDITOR to open MEMORY.md from here.");
+        }
+        return;
+      }
+      rl.pause();
+      const raw = io.stdin as { setRawMode?: (on: boolean) => void };
+      raw.setRawMode?.(false);
+      try {
+        await openInEditor(editor, index);
+      } finally {
+        raw.setRawMode?.(true);
+        rl.resume();
+      }
+    };
+
     // A resumed session can open with its turn waiting on the person (it stopped while it
     // waited): ask again, and follow the turn to its end before reading new prompts.
     const opened = current;
@@ -238,9 +308,32 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
     }
     if (options.prompt !== null && options.prompt.trim() !== "") await send(options.prompt);
     while (!quitting) {
-      if (tty) rl.prompt();
+      if (tty) {
+        rl.prompt();
+        // A rewound message comes back on the line, to send again or change.
+        if (refill !== null) rl.write(refill);
+      }
+      refill = null;
       const line = await lines.next();
       if (line === null) break;
+      // Between turns, a line answers a background agent's permission request first.
+      const idle = requests[0];
+      if (active === null && idle?.event === "permission.requested") {
+        const response = permissionAnswer(line);
+        if (response === null) {
+          view.line(ALLOW_QUESTION);
+          continue;
+        }
+        requests.shift();
+        await client
+          .request("permission.respond", {
+            sessionId: idle.payload.sessionId,
+            requestId: idle.payload.request.requestId,
+            response,
+          })
+          .catch((error: unknown) => err(error instanceof Error ? error.message : String(error)));
+        continue;
+      }
       if (line.trim() === "") continue;
       await send(line);
     }
@@ -268,6 +361,8 @@ class View {
   readonly #streamed = new Set<string>();
   readonly #started = new Map<string, { toolName: string; input: Record<string, unknown> }>();
   #mode: string | null = null;
+  /** Each subagent's state as last shown, so a line goes out only when it changes. */
+  readonly #agents = new Map<string, string>();
 
   constructor(io: Io, cwd: () => string) {
     this.#io = io;
@@ -309,6 +404,8 @@ class View {
         break;
       case "tool.finished": {
         this.line(toolLine(this.#started.get(event.payload.toolCallId), event.payload, cwd));
+        const blocked = sandboxLine(event.payload.display);
+        if (blocked !== null) this.line(blocked);
         if (event.payload.display?.kind === "diff" && event.payload.outcome === "success") {
           for (const l of diffLines(event.payload.display, cwd)) this.line(l);
         }
@@ -341,6 +438,21 @@ class View {
       case "error":
         this.endLine();
         this.#io.stderr.write(`Error: ${event.payload.error.message}\n`);
+        break;
+      case "hook.ran":
+        this.line(hookLine(event.payload));
+        break;
+      case "subagent.updated": {
+        const agent = event.payload.agent;
+        const key = `${agent.status}/${agent.queuePosition ?? ""}`;
+        if (this.#agents.get(agent.agentId) === key) break;
+        this.#agents.set(agent.agentId, key);
+        this.line(agentLine(agent));
+        break;
+      }
+      case "hook.skipped":
+        this.endLine();
+        this.#io.stderr.write(`${skippedLine(event.payload, false)}\n`);
         break;
       case "turn.finished":
         this.endLine();
@@ -472,22 +584,24 @@ async function answerPermission(
   view.endLine();
   for (const l of permissionLines(payload.request, view.cwd())) view.line(l);
   for (;;) {
-    const line = await ask(
-      lines,
-      view,
-      "Allow? y = once, a = always, n = deny (n <reason> to say why): ",
-      signal,
-    );
+    const line = await ask(lines, view, ALLOW_QUESTION, signal);
     if (line === null) return { behavior: "deny", message: "No answer: the input ended." };
-    const text = line.trim();
-    if (/^y(es)?$/i.test(text)) return { behavior: "allow", scope: "once" };
-    if (/^a(lways)?$/i.test(text)) return { behavior: "allow", scope: "always" };
-    const deny = /^n(o)?(?:\s+(.*))?$/is.exec(text);
-    if (deny !== null) {
-      const message = deny[2]?.trim();
-      return message ? { behavior: "deny", message } : { behavior: "deny" };
-    }
+    const response = permissionAnswer(line);
+    if (response !== null) return response;
   }
+}
+
+const ALLOW_QUESTION = "Allow? y = once, a = always, n = deny (n <reason> to say why): ";
+
+/** An answer to a permission request as typed, or null when the line is not one. */
+function permissionAnswer(line: string): PermissionResponse | null {
+  const text = line.trim();
+  if (/^y(es)?$/i.test(text)) return { behavior: "allow", scope: "once" };
+  if (/^a(lways)?$/i.test(text)) return { behavior: "allow", scope: "always" };
+  const deny = /^n(o)?(?:\s+(.*))?$/is.exec(text);
+  if (deny === null) return null;
+  const message = deny[2]?.trim();
+  return message ? { behavior: "deny", message } : { behavior: "deny" };
 }
 
 async function answerQuestion(

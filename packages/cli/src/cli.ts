@@ -1,5 +1,6 @@
 /** The `dawg` command's dispatch, and the process's streams and signals. */
 import { HELP, parseArgs } from "./args.ts";
+import { runCompat } from "./compat.ts";
 import { cliVersion } from "./engine.ts";
 import { EXIT } from "./exit-codes.ts";
 import { runHeadless } from "./headless.ts";
@@ -22,6 +23,8 @@ export function processIo(): Io {
   // inherited by the commands the agent runs, which could otherwise print it.
   const env = { ...process.env };
   delete process.env.DAWG_API_KEY;
+  // Likewise the search service's key (WebSearch reads it from `env`).
+  delete process.env.DAWG_SEARCH_API_KEY;
   return {
     stdin: process.stdin,
     stdout: process.stdout,
@@ -55,6 +58,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     case "options": {
       const { options } = parsed;
       if (options.command === "serve") return runServe(options, io);
+      if (options.command === "compat") return runCompat(options, io);
       if (options.print) return runHeadless(options, io);
       return runInteractive(options, io);
     }

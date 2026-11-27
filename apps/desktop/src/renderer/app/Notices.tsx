@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ConnectionState, Notice } from "../state/types.ts";
 import { focusIsLost, focusMessageField } from "../ui/focus.ts";
-import { Icon, IconButton, Spinner } from "../ui/index.ts";
+import { Button, Icon, IconButton, Spinner } from "../ui/index.ts";
 import styles from "./Notices.module.css";
 
 export interface NoticesProps {
@@ -73,6 +73,19 @@ export function Notices(props: NoticesProps) {
         >
           {notice.tone === "error" && <Icon name="alert" size={14} />}
           <span className={styles.text}>{notice.text}</span>
+          {notice.action && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className={styles.action}
+              onClick={() => {
+                notice.action?.run();
+                props.onDismiss(notice.id);
+              }}
+            >
+              {notice.action.label}
+            </Button>
+          )}
           <IconButton
             icon="close"
             size="sm"

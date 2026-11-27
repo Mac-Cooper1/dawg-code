@@ -17,12 +17,21 @@
  */
 import type {
   BackgroundTask,
+  Checkpoint,
+  CodeApproval,
   CommandInfo,
+  CompatReport,
+  CompatSource,
   ContentPart,
   ContextBreakdown,
   EngineEvent,
   ErrorInfo,
+  EventPayload,
   FileMention,
+  HookInfo,
+  McpImportPlan,
+  McpResourceInfo,
+  McpServerInfo,
   ModelInfo,
   PermissionMode,
   PermissionRequest,
@@ -30,11 +39,14 @@ import type {
   PlanResponse,
   Question,
   QuestionResponse,
+  RewindAction,
   SessionId,
   SessionSnapshot,
   SessionStatus,
   SessionSummary,
+  SkillInfo,
   StopReason,
+  SubagentInfo,
   TaskItem,
   ToolDisplay,
   ToolOutcome,
@@ -97,6 +109,12 @@ export interface UserMessageItem extends ItemBase {
   mentions: FileMention[];
   /** Set when a slash command started the turn. */
   command: { name: string; args: string } | null;
+  /**
+   * Set on a turn the engine started by itself because a background agent ended while the
+   * session was idle (its prompt starts "Background agent"): no person typed it, so it is drawn
+   * as a quiet line rather than a message.
+   */
+  fromAgent?: true;
 }
 
 /** An assistant reply's text. Created at `message.started` or the first delta; `message.finished` replaces the text. */
@@ -154,6 +172,12 @@ export interface ToolCallItem extends ItemBase {
    * either (the card's one-line record says it).
    */
   permissionRequestId: string | null;
+  /**
+   * For a call that started a subagent's task (`Agent`, `SendMessage`, a forked `Skill`): the
+   * agent as the latest `subagent.updated` naming this call left it. A later task of the same
+   * agent belongs to its own call, so this card keeps the state of the task it started.
+   */
+  agent?: SubagentInfo;
 }
 
 /** The task list as of the latest `tasks.updated` in a turn. One per turn, updated in place. */
@@ -242,6 +266,38 @@ export interface CommandOutputItem extends ItemBase {
   output: string;
 }
 
+/**
+ * One hook handler that ran (`hook.ran`): a compact line that opens to its source, command, exit
+ * code and timing. A tool call's hooks sit next to its card: PreToolUse ones just before it (and
+ * before its permission card), PostToolUse ones just after it.
+ */
+export interface HookItem extends ItemBase {
+  kind: "hook";
+  /** The tool call it ran for, or null (prompt, stop, session start and end). */
+  toolCallId: string | null;
+  /** That call's tool, when the transcript knows it: "Bash". */
+  toolName: string | null;
+  hook: EventPayload<"hook.ran">["hook"];
+  outcome: EventPayload<"hook.ran">["outcome"];
+  exitCode: number | null;
+  durationMs: number;
+  decision: EventPayload<"hook.ran">["decision"];
+  message: string | null;
+  /** When it finished (the event's time). */
+  time: number;
+}
+
+/**
+ * Hooks held back because they wait for the person's consent (`hook.skipped`): a quiet line with
+ * a way to review them.
+ */
+export interface HookSkippedItem extends ItemBase {
+  kind: "hook-skipped";
+  /** The project to review, or null for only the person's own files. */
+  projectDir: string | null;
+  sources: CompatSource[];
+}
+
 export type TranscriptItem =
   | UserMessageItem
   | AssistantTextItem
@@ -255,7 +311,9 @@ export type TranscriptItem =
   | CompactionItem
   | TurnSummaryItem
   | ErrorItem
-  | CommandOutputItem;
+  | CommandOutputItem
+  | HookItem
+  | HookSkippedItem;
 
 export type TranscriptItemKind = TranscriptItem["kind"];
 
@@ -311,6 +369,11 @@ export interface SessionView {
    * (or the snapshot) says.
    */
   background: BackgroundTask[];
+  /**
+   * The session's subagents, oldest first, each as its latest `subagent.updated` says. Rebuilt
+   * by replaying the session (snapshots do not carry them).
+   */
+  subagents: SubagentInfo[];
   usage: Usage | null;
   commands: CommandInfo[];
   activeTurnId: string | null;
@@ -372,13 +435,24 @@ export interface ImageAttachment {
   height: number;
 }
 
-export type SettingsPage = "general" | "models" | "permissions" | "shortcuts";
+export type SettingsPage =
+  | "general"
+  | "models"
+  | "permissions"
+  | "setup"
+  | "hooks"
+  | "skills"
+  | "mcp"
+  | "web"
+  | "shortcuts";
 
 export interface Notice {
   id: string;
   /** One line: "The engine restarted. Sessions were resumed from their transcripts." */
   text: string;
   tone: "neutral" | "error";
+  /** A link-style button after the text ("See what it uses"); choosing it also dismisses. */
+  action?: { label: string; run(): void };
 }
 
 /** Where a new session in a git project runs: a new worktree from `base`, named `name`. */
@@ -411,6 +485,54 @@ export interface NewSessionOffer {
   error: string | null;
 }
 
+/**
+ * The project trust dialog (Phase 4, principle 3): the code a project supplies (hooks, later MCP
+ * servers) and the person's decision on it. Shown while set.
+ */
+export interface TrustReview {
+  projectDir: string;
+  /** Folder name: "tally". */
+  projectName: string;
+  /** loading: `project.inspect` is on its way; ready: shown; saving: `project.trust` is. */
+  phase: "loading" | "ready" | "saving";
+  /** What needs consent, and whether it has it; null when nothing in the project does. */
+  approval: CodeApproval | null;
+  /**
+   * A sentence above the list: the definitions changed since the person looked, or a request
+   * failed. Null otherwise.
+   */
+  message: string | null;
+}
+
+/** Settings → Skills and commands: what `project.skills` answered. */
+export interface SkillsListing {
+  projectDir: string | null;
+  skills: SkillInfo[];
+  commands: SkillInfo[];
+}
+
+/** Settings → MCP servers: what `mcp.list` answered. */
+export interface McpListing {
+  projectDir: string | null;
+  servers: McpServerInfo[];
+  /** Servers in Claude Code's own settings that dawg has not imported. */
+  importable: number;
+}
+
+/** What a session's MCP servers offer the composer. */
+export interface McpOffer {
+  resources: McpResourceInfo[];
+  prompts: CommandInfo[];
+}
+
+/** Settings → Hooks: what `hooks.list` answered. */
+export interface HooksListing {
+  projectDir: string | null;
+  hooks: HookInfo[];
+  /** The settings file whose `disableAllHooks` turns every hook off, or null. */
+  disabledBy: string | null;
+}
+
 export type ConnectionState =
   | { phase: "connecting" }
   | { phase: "ready"; engine: { name: string; version: string } }
@@ -427,6 +549,14 @@ export type OnboardingState =
   | { step: "welcome" }
   | { step: "download"; modelId: string; error: string | null }
   | { step: "start"; modelId: string; error: string | null };
+
+/** How first run sets a model up (`AppActions.setUpModel`). */
+export interface SetUpModelOptions {
+  /** Adopt the copy another app has instead of downloading. */
+  useExisting?: boolean;
+  /** Also download the helper model, queued after the model's own download. */
+  withHelper?: boolean;
+}
 
 export interface Layout {
   view: "sessions" | "settings";
@@ -472,6 +602,56 @@ export interface UiState {
   stoppedByUser: Record<SessionId, boolean>;
   /** Turns this client interrupted, for "Interrupted by you". */
   interruptedTurns: Record<string, true>;
+  /**
+   * The subagent whose transcript is shown in place of its parent session's, read-only, while
+   * that session is selected. Null when none is.
+   */
+  openSubagent: { sessionId: SessionId; agentId: string } | null;
+  /**
+   * Sessions whose memory folder the Files pane shows, since `/memory` (or "Open memory") asked
+   * for it: tracking then asks main for it as a root. Not kept across launches.
+   */
+  memoryShown: Record<SessionId, true>;
+}
+
+/**
+ * The rewind dialog (Esc twice in the composer, `/rewind`, the palette): a session's checkpoints
+ * from `session.checkpoints`, and the rewind chosen from it (`session.rewind`).
+ */
+export interface RewindDialog {
+  sessionId: SessionId;
+  /**
+   * loading: listing the checkpoints; ready: the list; failed: it could not be read; working: a
+   * rewind runs; conflicts: files changed outside dawg since, so the person is asked first.
+   */
+  phase: "loading" | "ready" | "failed" | "working" | "conflicts";
+  /** Newest first. */
+  checkpoints: Checkpoint[];
+  /** How many of the latest checkpoints keep their files. */
+  retention: number;
+  /** Why the list could not be read, or the rewind failed; null otherwise. */
+  error: string | null;
+  /** The rewind waiting for an answer about files changed outside dawg (phase conflicts). */
+  conflict: {
+    checkpointId: string;
+    action: RewindAction;
+    instructions: string | null;
+    files: string[];
+  } | null;
+}
+
+/**
+ * A subagent's own transcript, read through `session.replay` with its session id (a child
+ * session is never opened on a connection). Its events go through the same reducer as any
+ * session's, into a slice of their own, so the sidebar never sees it.
+ */
+export interface SubagentTranscript {
+  parentSessionId: SessionId;
+  agentId: string;
+  /** The child session's state: one session, its transcript, nothing pending. */
+  slice: EngineSlice;
+  /** Why the last read failed, as a sentence; null otherwise. */
+  error: string | null;
 }
 
 /** The whole renderer state. Matches "State model" in docs/specs/phase-3-desktop-app.md. */
@@ -505,12 +685,18 @@ export interface AppState {
   workspaces: Record<SessionId, WorkspaceInfo>;
   /** The new-session dialog, while it is open. */
   newSessionOffer: NewSessionOffer | null;
+  /** The project trust dialog, while it is open. */
+  trustReview: TrustReview | null;
+  /** The rewind dialog, while it is open. */
+  rewind: RewindDialog | null;
   /**
    * Per session, how many batches of live events have changed it in this window. Snapshots,
    * replays and session lists leave it alone, so a watcher can tell what happened just now from
    * what the window caught up on: notifications (attention.ts) fire only for the former.
    */
   liveBatches: Record<SessionId, number>;
+  /** Subagent transcripts read so far, by the child session's id. */
+  subagentTranscripts: Record<SessionId, SubagentTranscript>;
 }
 
 /** One read of a background command's output (`background.output`). */
@@ -683,6 +869,21 @@ export interface TasksPaneView {
   tasks: readonly TaskItem[];
   /** Oldest first. */
   background: readonly BackgroundTask[];
+  /** The session's background agents, oldest first. */
+  agents: readonly SubagentInfo[];
+}
+
+/** A subagent's transcript, shown read-only in place of its parent session's. */
+export interface SubagentPanelView {
+  /** The parent session. */
+  sessionId: SessionId;
+  agent: SubagentInfo;
+  /** "Explore agent: Find the config loader". */
+  title: string;
+  /** Null until the child session's first page has been read. */
+  transcript: TranscriptView | null;
+  /** Why it could not be read, as a sentence; null otherwise. */
+  error: string | null;
 }
 
 /** The Plan pane: the session's latest plan, if it has one. */
@@ -803,6 +1004,54 @@ export interface AppActions {
    */
   deleteSession(id: SessionId): Promise<void>;
   markUnread(id: SessionId): void;
+  /**
+   * Opens the review of the code a project supplies (its hooks and, later, MCP servers), where
+   * the person approves it or not. Stand-in until the project trust dialog lands (Phase 4).
+   */
+  reviewProjectCode(projectDir: string): void;
+  /**
+   * Settings → Project setup: what a Claude Code setup holds and what dawg does with each item
+   * (`project.inspect`), for a project or (null) only the person's own files. Never throws: a
+   * failure comes back as `{ error }`, a sentence.
+   */
+  inspectProject(projectDir: string | null): Promise<CompatReport | { error: string }>;
+  /**
+   * Answers the project trust dialog: true approves what it lists (`project.trust`; when the
+   * definitions changed meanwhile, the dialog shows the new list and says so), false is "Not
+   * now" (asked again on the next launch, or when the definitions change).
+   */
+  answerTrustReview(approve: boolean): Promise<void>;
+  /**
+   * Settings → Hooks: every hook that applies to a project, or to the person's own files
+   * (`hooks.list`). Never throws: a failure comes back as `{ error }`, a sentence.
+   */
+  listHooks(projectDir: string | null): Promise<HooksListing | { error: string }>;
+  /** Turns one hook off or back on (`hooks.setEnabled`). False when it failed (a notice says why). */
+  setHookEnabled(projectDir: string | null, id: string, enabled: boolean): Promise<boolean>;
+  /**
+   * Settings → Skills and commands: every skill and custom command a project's sessions get, or
+   * (null) only the person's own (`project.skills`). Never throws: a failure comes back as
+   * `{ error }`, a sentence.
+   */
+  listSkills(projectDir: string | null): Promise<SkillsListing | { error: string }>;
+  /**
+   * Settings → MCP servers: the servers a project's sessions get, or (null) only the person's
+   * own, with their state (`mcp.list`). Never throws: a failure comes back as `{ error }`.
+   */
+  listMcpServers(projectDir: string | null): Promise<McpListing | { error: string }>;
+  /** Stops a server and starts it again (`mcp.restart`). Null when it failed (a notice says why). */
+  restartMcpServer(projectDir: string | null, name: string): Promise<McpServerInfo | null>;
+  /** The person's switch for one server (`mcp.setEnabled`). False when it failed. */
+  setMcpServerEnabled(projectDir: string | null, name: string, enabled: boolean): Promise<boolean>;
+  /** What importing Claude Code's servers would copy (`mcp.importPreview`). */
+  previewMcpImport(): Promise<McpImportPlan | { error: string }>;
+  /** Copies the servers the person saw (`mcp.import`); `{ error }` when it did not. */
+  importMcpServers(hash: string): Promise<{ imported: number; path: string } | { error: string }>;
+  /**
+   * What a session's MCP servers offer the composer now (`mcp.session`): resources for the `@`
+   * menu, prompts for the `/` menu. Empty when the session is not open or the request fails.
+   */
+  mcpOffer(sessionId: SessionId): Promise<McpOffer>;
 
   // --- Composer --------------------------------------------------------------------------------
   setDraft(sessionId: SessionId, text: string): void;
@@ -855,6 +1104,8 @@ export interface AppActions {
   /** The model new sessions use. */
   setDefaultModel(modelId: string): Promise<void>;
   setIdleUnload(minutes: number | null): Promise<void>;
+  /** Side requests (titles, page summaries) go to the helper model, or to the main model. */
+  setHelperEnabled(enabled: boolean): Promise<void>;
   /** The native file picker. The added model, or null when cancelled (or it failed). */
   addModelFile(): Promise<AddedModelFile | null>;
   /** Adds a remote server: the server, or the sentence saying why it could not be added. */
@@ -868,9 +1119,10 @@ export interface AppActions {
   /**
    * Sets the chosen model up and makes it the default: downloads it unless it is on this Mac
    * already (`useExisting` adopts another app's copy instead), then starts it. The first-run
-   * screens follow each step and give way to the sessions view once it runs.
+   * screens follow each step and give way to the sessions view once it runs. `withHelper` also
+   * queues the helper model's download, after the model's own: starting never waits for it.
    */
-  setUpModel(modelId: string, options?: { useExisting?: boolean }): Promise<void>;
+  setUpModel(modelId: string, options?: SetUpModelOptions): Promise<void>;
   /** Back to the welcome screen, to choose another model. */
   showWelcome(): void;
 
@@ -899,6 +1151,44 @@ export interface AppActions {
   ): Promise<BackgroundOutput | { error: string }>;
   /** Stops a running background command (`background.stop`). False when it failed. */
   stopBackground(sessionId: SessionId, taskId: string): Promise<boolean>;
+
+  // --- Subagents ---------------------------------------------------------------------------------
+  /**
+   * Shows a subagent's transcript in place of its parent session's (selecting the parent): read
+   * with `session.replay` on the agent's session, and read again from where it left off each
+   * time a `subagent.updated` for it arrives while it is shown.
+   */
+  openSubagent(sessionId: SessionId, agentId: string): void;
+  /** Back to the parent session's transcript. */
+  closeSubagent(): void;
+  /** Stops a queued or running subagent (`subagent.stop`). False when it failed. */
+  stopSubagent(sessionId: SessionId, agentId: string): Promise<boolean>;
+
+  // --- Rewind and memory (Phase 4) --------------------------------------------------------------
+  /**
+   * Opens the rewind dialog on a session and lists its checkpoints (`session.checkpoints`). Not
+   * while a turn runs: a notice says why.
+   */
+  openRewind(sessionId: SessionId): Promise<void>;
+  closeRewind(): void;
+  /** Leaves the question about files changed outside dawg: back to the checkpoint's actions. */
+  dismissRewindConflict(): void;
+  /**
+   * Rewinds the dialog's session to a checkpoint (`session.rewind`). The conversation goes on in
+   * the fork, selected, with the prompt back in its composer; a summary puts the prompt back in
+   * the same session's; restored files are reported in a notice. Files changed outside dawg
+   * since stop it with the dialog asking; `overwrite` answers yes.
+   */
+  rewind(
+    checkpointId: string,
+    action: RewindAction,
+    options?: { overwrite?: boolean; instructions?: string },
+  ): Promise<void>;
+  /**
+   * `/memory`: runs the engine's command (its listing goes in the transcript; it makes the folder
+   * and MEMORY.md), then shows the project's memory folder in the Files pane with MEMORY.md open.
+   */
+  openMemory(sessionId: SessionId): Promise<void>;
 
   // --- Transcript UI ---------------------------------------------------------------------------
   setItemOpen(sessionId: SessionId, itemId: string, open: boolean): void;

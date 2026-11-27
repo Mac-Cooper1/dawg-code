@@ -84,6 +84,18 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
     archiveSession: vi.fn(done),
     deleteSession: vi.fn(done),
     markUnread: vi.fn(),
+    reviewProjectCode: vi.fn(),
+    inspectProject: vi.fn(async (projectDir) => ({ projectDir, items: [], approval: null })),
+    answerTrustReview: vi.fn(async () => set({ trustReview: null })),
+    listHooks: vi.fn(async (projectDir) => ({ projectDir, hooks: [], disabledBy: null })),
+    listSkills: vi.fn(async (projectDir) => ({ projectDir, skills: [], commands: [] })),
+    listMcpServers: vi.fn(async (projectDir) => ({ projectDir, servers: [], importable: 0 })),
+    restartMcpServer: vi.fn(async () => null),
+    setMcpServerEnabled: vi.fn(async () => true),
+    previewMcpImport: vi.fn(async () => ({ from: "", to: "", hash: null, items: [] })),
+    importMcpServers: vi.fn(async () => ({ imported: 0, path: "" })),
+    mcpOffer: vi.fn(async () => ({ resources: [], prompts: [] })),
+    setHookEnabled: vi.fn(async () => true),
     setDraft: vi.fn((sessionId, text) =>
       set({ ui: { ...get().ui, drafts: { ...get().ui.drafts, [sessionId]: text } } }),
     ),
@@ -117,6 +129,7 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
     stopModel: vi.fn(done),
     setDefaultModel: vi.fn(done),
     setIdleUnload: vi.fn(done),
+    setHelperEnabled: vi.fn(done),
     addModelFile: vi.fn(async () => null),
     connectServer: vi.fn(async () => ({ error: "Not in this test." })),
     removeServer: vi.fn(done),
@@ -136,6 +149,16 @@ export function createTestStore(patch?: (state: AppState) => Partial<AppState>):
       done: true,
     })),
     stopBackground: vi.fn(async () => true),
+    openSubagent: vi.fn((sessionId: SessionId, agentId: string) =>
+      set({ ui: { ...get().ui, openSubagent: { sessionId, agentId } } }),
+    ),
+    closeSubagent: vi.fn(() => set({ ui: { ...get().ui, openSubagent: null } })),
+    stopSubagent: vi.fn(async () => true),
+    openRewind: vi.fn(done),
+    closeRewind: vi.fn(() => set({ rewind: null })),
+    dismissRewindConflict: vi.fn(),
+    rewind: vi.fn(done),
+    openMemory: vi.fn(done),
   };
 
   const base = initialAppState(HOME);

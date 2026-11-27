@@ -5,6 +5,7 @@ import type {
   DiffDisplay,
   EventPayload,
   PermissionRequest,
+  SubagentInfo,
   ToolDisplay,
 } from "@dawg/protocol";
 
@@ -42,6 +43,13 @@ export function describeInput(
       return Array.isArray(input.todos) ? `${input.todos.length} tasks` : "";
     case "ExitPlanMode":
       return "plan ready";
+    case "Agent": {
+      const type = str("subagent_type") ?? "general-purpose";
+      const background = input.run_in_background === true ? ", in the background" : "";
+      return `${type}: ${oneLine(str("description") ?? "")}${background}`;
+    }
+    case "SendMessage":
+      return `to ${str("to") ?? "?"}: ${oneLine(str("message") ?? "", 60)}`;
     default: {
       const json = JSON.stringify(input);
       return json === "{}" ? "" : oneLine(json);
@@ -67,6 +75,14 @@ function displaySummary(display: ToolDisplay | null): string {
       return display.exitCode === null ? "" : ` (exit ${display.exitCode})`;
     case "search":
       return ` (${display.resultCount} results)`;
+    case "web-fetch":
+      return display.redirectUrl === null
+        ? ` (${display.status}, ${display.chars} characters)`
+        : ` (moved to ${display.redirectUrl})`;
+    case "web-search":
+      return ` (${display.results.length} results)`;
+    case "mcp":
+      return ` (the ${display.server} server's ${display.tool}${display.savedTo === null ? "" : `, saved whole to ${display.savedTo}`})`;
   }
 }
 
@@ -94,6 +110,33 @@ export function toolLine(
   }
 }
 
+/**
+ * Added (Phase 4, sandbox): the line under a shell command the sandbox stopped from doing
+ * something, or null. Indented, so it reads as part of the call above it.
+ */
+export function sandboxLine(display: ToolDisplay | null): string | null {
+  if (display?.kind !== "command" || display.sandbox === undefined) return null;
+  const blocked = display.sandbox.blocked;
+  if (blocked.length === 0) return null;
+  return `  Blocked by the sandbox: ${blocked.join("; ")}`;
+}
+
+/** Why a command would run outside the sandbox, for a permission request; null inside or off. */
+function outsideReason(request: PermissionRequest): string | null {
+  const sandbox = request.sandbox;
+  if (sandbox === undefined || sandbox.placement !== "outside") return null;
+  switch (sandbox.reason) {
+    case "retry":
+      return "Runs outside the sandbox: the sandbox blocked it, and it is being tried again without it.";
+    case "excluded":
+      return "Runs outside the sandbox: it is one of the commands excluded from it in the settings.";
+    case "unavailable":
+      return "Runs outside the sandbox: the sandbox cannot run on this system.";
+    default:
+      return "Runs outside the sandbox.";
+  }
+}
+
 /** A compact unified diff, at most `maxLines` lines of changes and context. */
 export function diffLines(display: DiffDisplay, cwd: string, maxLines = 24): string[] {
   const out = [
@@ -117,10 +160,38 @@ export function diffLines(display: DiffDisplay, cwd: string, maxLines = 24): str
 }
 
 export function permissionLines(request: PermissionRequest, cwd: string): string[] {
-  const lines = [`Permission needed: ${request.title}`];
+  // A subagent's request is raised in its parent's session: say which agent asks.
+  const who =
+    request.agent === undefined
+      ? ""
+      : ` (${request.agent.agentId}, ${request.agent.agentType} agent: ${oneLine(request.agent.description, 60)})`;
+  const lines = [`Permission needed${who}: ${request.title}`];
   const what = describeInput(request.toolName, request.input, cwd);
   lines.push(`  ${request.toolName}${what === "" ? "" : ` ${what}`}`);
   if (request.reason !== "") lines.push(`  ${request.reason}`);
+  const outside = outsideReason(request);
+  if (outside !== null) lines.push(`  ${outside}`);
   if (request.display?.kind === "diff") lines.push(...diffLines(request.display, cwd, 16));
   return lines;
+}
+
+/**
+ * One compact line about a subagent, for each change of its state: "[agent-1 Explore] Find the
+ * port: running".
+ */
+export function agentLine(agent: SubagentInfo): string {
+  const head = `[${agent.agentId} ${agent.agentType}] ${oneLine(agent.description, 60)}`;
+  const uses = agent.toolUses === 1 ? "1 tool use" : `${agent.toolUses} tool uses`;
+  switch (agent.status) {
+    case "queued":
+      return `${head}: queued${agent.queuePosition === null ? "" : ` (${agent.queuePosition} in line for the model)`}`;
+    case "running":
+      return `${head}: running${agent.background ? " in the background" : ""}${agent.worktree === null ? "" : ` in ${agent.worktree.path}`}`;
+    case "completed":
+      return `${head}: done, ${uses}`;
+    case "failed":
+      return `${head}: failed${agent.error === null ? "" : `: ${oneLine(agent.error.message)}`}`;
+    case "stopped":
+      return `${head}: stopped`;
+  }
 }

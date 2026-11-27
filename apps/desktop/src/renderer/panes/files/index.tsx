@@ -23,6 +23,7 @@ import {
   useWorkspaceChanged,
 } from "../../code/session.ts";
 import { basename, displayPath, formatBytes } from "../../lib/format.ts";
+import { onPaneFileRequest, takePaneFile } from "../../state/pane-requests.ts";
 import { useAppStore } from "../../state/store.ts";
 import { Button, ConfirmDialog, IconButton } from "../../ui/index.ts";
 import { PaneEmpty } from "../PaneEmpty.tsx";
@@ -38,6 +39,7 @@ import {
   loadDir,
   openFile,
   reloadFile,
+  requestOpenFile,
   retryFile,
   revealInTree,
   saveFile,
@@ -48,6 +50,7 @@ import {
 } from "./store.ts";
 
 const NEVER_DIRTY = () => false;
+const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
 const NO_SUBSCRIPTION = () => () => {};
 
 /** Whether a document has unsaved edits, kept current as it is edited. */
@@ -74,9 +77,23 @@ function SessionFiles({ sessionId }: PaneProps) {
   const activity = useSessionActivity(sessionId);
   const touched = useMemo(() => touchedFiles(activity.edits), [activity.edits]);
   const homeDir = useAppStore((state) => state.homeDir);
+  // `/memory` adds the project's memory folder, which main found, as a root of its own.
+  const memoryDirectory =
+    workspace.status === "ready" ? (workspace.info.memoryDirectory ?? null) : null;
   const roots = useMemo(
-    () => (folders ? [folders.cwd, ...folders.additionalDirectories] : []),
-    [folders],
+    () =>
+      folders
+        ? [
+            folders.cwd,
+            ...folders.additionalDirectories,
+            ...(memoryDirectory === null ? [] : [memoryDirectory]),
+          ]
+        : [],
+    [folders, memoryDirectory],
+  );
+  const rootNames = useMemo(
+    () => (memoryDirectory === null ? NO_NAMES : { [memoryDirectory]: "Project memory" }),
+    [memoryDirectory],
   );
   const ready = workspace.status === "ready";
 
@@ -96,10 +113,21 @@ function SessionFiles({ sessionId }: PaneProps) {
     run(followDisk(sessionId, event.paths));
   });
 
+  // A file the store asked for (`/memory` opens MEMORY.md): it waits until its root is shown.
+  useEffect(() => {
+    const take = () => {
+      const path = takePaneFile(sessionId);
+      if (path !== null) requestOpenFile(sessionId, path);
+    };
+    take();
+    return onPaneFileRequest(take);
+  }, [sessionId]);
+
   // "Open in Files" from the Changes pane.
   const pendingOpen = session.pendingOpen;
   useEffect(() => {
     if (!ready || pendingOpen === null) return;
+    if (!roots.some((root) => pendingOpen === root || pendingOpen.startsWith(`${root}/`))) return;
     const path = takePendingOpen(sessionId);
     if (path === null) return;
     run(openFile(sessionId, path));
@@ -128,7 +156,13 @@ function SessionFiles({ sessionId }: PaneProps) {
   return (
     <div className={styles.pane}>
       <div className={styles.split}>
-        <FileTree sessionId={sessionId} roots={roots} session={session} touched={touched} />
+        <FileTree
+          sessionId={sessionId}
+          roots={roots}
+          rootNames={rootNames}
+          session={session}
+          touched={touched}
+        />
         <div className={styles.main}>
           {session.tabs.length === 0 ? (
             <PaneEmpty pane="files" title="No file open">

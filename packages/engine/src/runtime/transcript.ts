@@ -27,6 +27,33 @@ export function promptSeqs(records: readonly SessionRecord[]): number[] {
   return records.filter((r) => r.type === "user").map((r) => r.seq);
 }
 
+/**
+ * Where a record's message sits in the model's current view: its index, or null when it is not
+ * in the view (before the latest compaction, or not a message). Rebuilds the view's shape from
+ * the records as the store's replay does.
+ */
+export function viewIndexOfRecord(records: readonly SessionRecord[], seq: number): number | null {
+  let length = 0;
+  let index: number | null = null;
+  for (const record of records) {
+    if (record.type === "compact") {
+      length = record.messages.length;
+      index = null;
+      continue;
+    }
+    if (
+      record.type === "user" ||
+      record.type === "assistant" ||
+      record.type === "note" ||
+      record.type === "tool_result"
+    ) {
+      if (record.seq === seq) index = length;
+      length += 1;
+    }
+  }
+  return index;
+}
+
 /** Calls of the view's last assistant message that have no result after it, in call order. */
 export function danglingCalls(view: readonly Message[]): ToolCall[] {
   for (let i = view.length - 1; i >= 0; i--) {

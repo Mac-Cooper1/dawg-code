@@ -16,7 +16,7 @@ import {
   unreadableProseCallMessage,
 } from "./errors.ts";
 import { type ArgumentsParse, parseToolArguments, type RepairKind } from "./json-parse.ts";
-import { resolveToolName } from "./names.ts";
+import { MCP_DISPATCHER, resolveToolName } from "./names.ts";
 import { type ProseFormat, type RecoveredCall, recoverProseCalls } from "./prose.ts";
 import { validateToolInput } from "./validate.ts";
 import { serializeArguments } from "./values.ts";
@@ -188,6 +188,19 @@ function prepareOne(p: Pending, id: string, tools: readonly ToolSchema[]): Prepa
   const resolved = resolveToolName(p.name, tools);
   if (!resolved.found) {
     const parsed = parseToolArguments(p.arguments);
+    // An MCP tool called by its listed name where only the dispatcher is offered goes through it.
+    if (p.name.startsWith("mcp__") && parsed.ok && tools.some((t) => t.name === MCP_DISPATCHER)) {
+      const through = prepareOne(
+        {
+          ...p,
+          name: MCP_DISPATCHER,
+          arguments: JSON.stringify({ name: p.name, arguments: parsed.value }),
+        },
+        id,
+        tools,
+      );
+      return { ...through, fixes: { ...through.fixes, nameCorrectedFrom: p.name } };
+    }
     return {
       status: "unknown_tool",
       call: recordCall(id, p.name, p.arguments, parsed),

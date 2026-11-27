@@ -40,6 +40,8 @@ describe("profileIdFor", () => {
 describe("profileIdForModel", () => {
   it("reads only the last part of a path or server id", () => {
     expect(profileIdForModel("remote:1f3a9c/gpt-oss-120b")).toBe("gpt-oss");
+    // The helper's grant names its catalog id.
+    expect(profileIdForModel("minicpm5-1b-q8")).toBe("minicpm5");
     expect(profileIdForModel("/models/qwen3.8/other.gguf")).toBeNull();
   });
 });

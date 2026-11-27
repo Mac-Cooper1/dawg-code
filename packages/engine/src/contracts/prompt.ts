@@ -73,9 +73,27 @@ export interface PromptAssembler {
    * counters, random ids or machine facts).
    *
    * `instructions` is the already-rendered text of the instruction files (CLAUDE.md and
-   * friends), or an empty string when there are none.
+   * friends), or an empty string when there are none. `skills` is the rendered skill listing
+   * (packages/engine/src/skills), placed before the instruction files; absent or empty when the
+   * session has no skills the agent may load.
    */
-  prefix(input: { tools: readonly AnyTool[]; instructions: string }): PromptPrefix;
+  prefix(input: {
+    tools: readonly AnyTool[];
+    instructions: string;
+    skills?: string;
+    /**
+     * The MCP segment (../mcp): the servers' instructions and, when their tools are searched
+     * for, the listing of those tools; after the skills; absent or empty without MCP servers.
+     */
+    mcp?: string;
+    /** The memory segment (../memory), last; absent or empty when auto memory is off. */
+    memory?: string;
+    /**
+     * A subagent's own instructions (../agents), which take the place of the core instructions;
+     * absent for the main agent.
+     */
+    agent?: string;
+  }): PromptPrefix;
   /** The session-context message: written once at session start and never rewritten. */
   sessionContext(environment: SessionEnvironment): UserMessage;
   /** Renders a note as a message to append to history. */
@@ -100,6 +118,12 @@ export interface CompactionInput {
   client: ModelClient;
   /** What the person asked the summary to concentrate on (`/compact <focus>`), if anything. */
   focus: string | null;
+  /**
+   * Summarise only `history` from this index on (rewind's "summarise from here"): the request
+   * still sends the whole history, so the cache is reused, but asks about that part alone. The
+   * caller keeps the messages before it and uses `summary`; `messages` is then not meaningful.
+   */
+  from?: number;
   tasks: readonly TaskItem[];
   /** Files read most recently, newest first, with their current text. Already capped in size. */
   recentFiles: readonly { path: string; content: string }[];

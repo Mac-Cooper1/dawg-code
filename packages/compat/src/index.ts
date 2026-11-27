@@ -1,4 +1,11 @@
 export const packageName = "@dawg/compat";
+export * from "./agents/index.ts";
+export * from "./fixtures/index.ts";
+export * from "./hooks/index.ts";
 export * from "./instructions/index.ts";
+export * from "./mcp/index.ts";
+export * from "./report/index.ts";
+export * from "./sandbox/index.ts";
 export * from "./settings/index.ts";
+export * from "./skills/index.ts";
 export type * from "./types.ts";

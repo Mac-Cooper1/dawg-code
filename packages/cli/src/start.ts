@@ -1,5 +1,12 @@
 /** Everything a run needs, started in order and stopped in reverse. */
-import type { Engine, EngineHost } from "@dawg/engine";
+import {
+  createSearchProvider,
+  type Engine,
+  type EngineHost,
+  readSearchSettings,
+  type SearchProvider,
+  searchConfigFromEnvironment,
+} from "@dawg/engine";
 import type { Client, ClientCapabilities } from "@dawg/protocol";
 import type { CliOptions } from "./args.ts";
 import { buildEngine, connectInProcess, type Paths, resolvePaths } from "./engine.ts";
@@ -56,7 +63,8 @@ export async function start(
   const { paths, models } = await startModels(options, io, input.verbose);
   let engine: Engine | null = null;
   try {
-    engine = buildEngine({ options, paths, models, generateTitles: input.generateTitles });
+    const search = await searchFromEnvironment(io.env, paths.dawgHome, input.log);
+    engine = buildEngine({ options, paths, models, generateTitles: input.generateTitles, search });
     const { client, host } = await connectInProcess({
       engine,
       options,
@@ -88,4 +96,20 @@ export async function start(
     await models.close();
     throw error;
   }
+}
+
+/**
+ * The search service WebSearch uses on the command line: DAWG_SEARCH_PROVIDER (brave, tavily or
+ * searxng; Brave when only a key is set), DAWG_SEARCH_API_KEY and DAWG_SEARXNG_URL, over the choice saved in
+ * `<data root>/web-search.json` (which never holds a key). Without one, WebSearch is not offered.
+ * A service asked for but unusable (no key) is reported once and left off.
+ */
+export async function searchFromEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+  dawgHome: string,
+  log: (line: string) => void,
+): Promise<SearchProvider | null> {
+  const { config, problem } = searchConfigFromEnvironment(env, await readSearchSettings(dawgHome));
+  if (problem !== null) log(problem);
+  return config === null ? null : createSearchProvider(config);
 }

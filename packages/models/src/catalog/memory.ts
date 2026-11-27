@@ -30,13 +30,19 @@ export function fitsMemoryRule(need: MemoryNeed, memoryBytes: number): boolean {
   return workingSetBytes(need) <= memoryBytes * MEMORY_BUDGET_FRACTION;
 }
 
-/** The largest context (in tokens) the rule allows on a machine, or 0 when the weights do not fit. */
+/**
+ * The largest context (in tokens) the rule allows on a machine, or 0 when the weights do not fit.
+ * `reservedBytes` is memory something else running beside the model (the helper model) takes out
+ * of the same 70% budget.
+ */
 export function maxContextForMemory(
   weightsBytes: number,
   cacheBytesPerToken: number,
   memoryBytes: number,
+  reservedBytes = 0,
 ): number {
-  const room = memoryBytes * MEMORY_BUDGET_FRACTION - weightsBytes - RUNTIME_OVERHEAD_BYTES;
+  const room =
+    memoryBytes * MEMORY_BUDGET_FRACTION - weightsBytes - RUNTIME_OVERHEAD_BYTES - reservedBytes;
   if (room <= 0) return 0;
   return Math.floor(room / cacheBytesPerToken);
 }
@@ -66,7 +72,41 @@ export const CACHE_BYTES_PER_TOKEN: Readonly<Record<string, number>> = {
   // 10 global × 8 KV heads × 128 dim × 2 × 2 B = 40,960 B. (The card mentions an FP8
   // cache; this assumes llama.cpp's f16 default, so it is conservative.)
   "poolside/Laguna-XS-2.1-GGUF": 10 * 8 * 128 * 2 * 2,
+  // MiniCPM5-1B (the helper): 24 layers, all full attention (plain Llama);
+  // 24 × 2 KV heads × 128 dim × 2 × 2 B = 24,576 B. Read from openbmb/MiniCPM5-1B config.json
+  // on 2026-11-27.
+  "openbmb/MiniCPM5-1B-GGUF": 24 * 2 * 128 * 2 * 2,
 };
+
+/**
+ * A helper's own overhead beside its weights and cache: its llama-server process and compute
+ * buffers. The main rule's 2 GiB is sized for large models; a ~1B model's buffers at a 32K
+ * window are a few hundred MiB, so half a GiB is a generous allowance.
+ */
+export const HELPER_OVERHEAD_BYTES = 512 * 1024 ** 2;
+
+/**
+ * Memory a helper uses while it runs: weights, the cache of its slots at `contextTokens` each,
+ * and `HELPER_OVERHEAD_BYTES`. Counted against the same budget as the main model, so the main
+ * model's window is chosen with the helper's share already taken. An unknown cache size counts
+ * as a dense 1B model's (the largest a helper is likely to have), so the estimate stays high.
+ */
+export function helperWorkingSetBytes(
+  entry: CatalogEntry,
+  options: { contextTokens?: number; slots?: number } = {},
+  cacheTable: Readonly<Record<string, number>> = CACHE_BYTES_PER_TOKEN,
+): number {
+  const contextTokens = options.contextTokens ?? entry.context.default;
+  const perToken = cacheTable[entry.source.repo] ?? UNKNOWN_HELPER_CACHE_BYTES_PER_TOKEN;
+  return (
+    entryWeightsBytes(entry) +
+    perToken * contextTokens * (options.slots ?? 1) +
+    HELPER_OVERHEAD_BYTES
+  );
+}
+
+/** A dense model of about 1.7B parameters: 28 layers × 8 KV heads × 128 dim × 2 × 2 B. */
+const UNKNOWN_HELPER_CACHE_BYTES_PER_TOKEN = 28 * 8 * 128 * 2 * 2;
 
 /** Weights loaded for an entry: the model file plus its projector. */
 export function entryWeightsBytes(entry: CatalogEntry): number {

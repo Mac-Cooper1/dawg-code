@@ -5,6 +5,7 @@
  * in @dawg/engine. Change it deliberately.
  */
 import type { PermissionMode } from "@dawg/protocol";
+import type { SandboxSettings } from "./sandbox/settings.ts";
 
 /**
  * Where a setting came from, highest precedence first:
@@ -63,6 +64,11 @@ export interface Settings {
   permissions: PermissionSettings;
   /** Environment variables for the session and its child processes. Higher levels override. */
   env: Record<string, string>;
+  /**
+   * Added (Phase 4, sandbox): the `sandbox` key of every level, merged. Absent where settings
+   * were built by hand; absent means the documented default, the sandbox off.
+   */
+  sandbox?: SandboxSettings;
   /** Every file that was looked at, highest precedence first, whether or not it exists. */
   files: LoadedSettingsFile[];
   problems: SettingsProblem[];

@@ -72,16 +72,42 @@ or forked on this connection; a connection receives events for the sessions it h
 | `session.setEffort` | Change the reasoning effort | `sessionId`, `effort` (null = model default) | `effort` |
 | `session.command` | Run a slash command | `sessionId`, `name` (no slash), `args` (default "") | `output` (Markdown or null), `turnId` (if it started a turn), `openedSession` (if it opened another session, e.g. `/clear`) |
 | `session.replay` | Events after a sequence number, for reconnecting or rebuilding a view | `sessionId`, `afterSeq` (0 = all), `limit?` | `events: {event, payload}[]`, `lastSeq`, `hasMore` |
+| `session.checkpoints` *added* | The checkpoints a session can rewind to: one per prompt, made before it was processed | `sessionId` | `checkpoints: Checkpoint[]` oldest first (`id`, `turnId`, `time`, `prompt` as typed, `tracked` (false once retention dropped its files), `files: {path, change: created/modified, agents: SubagentLabel[]}[]` its turn changed with file tools (with the subagents it started that changed them), `restore: {path, action: write/delete, changedOutside}[]` what restoring files to it would do), `retention` |
+| `session.rewind` *added* | Go back to a checkpoint. Not during a turn (`SessionBusy`), nor while a subagent works in the background (`InvalidState`); an unknown id is `InvalidParams` | `sessionId`, `checkpointId`, `action` (`both`, `conversation`, `files`, `summarize`), `overwrite?` (default false), `instructions?` (for `summarize`) | `outcome` (`done`, or `conflicts` when files changed outside the file tools and `overwrite` was not set: nothing changed), `conflicts: string[]`, `files: {restored, deleted, skipped: {path, reason}[]}` or null, `session` (the fork the conversation goes on in, open on this connection, for `both` and `conversation`) or null, `prompt` (the checkpoint's prompt, to put back in the composer) or null. `summarize` starts a compaction of everything from the prompt on and returns; `compaction.*` events report it |
 | `background.output` | Read a background command's output | `sessionId`, `taskId`, `offset?` (bytes, default 0), `limit?` (bytes, default 256 KiB, at most 1 MiB) | `text` (plain text), `nextOffset`, `totalBytes`, `done` |
 | `background.stop` | Stop a background command | `sessionId`, `taskId` | `stopped` (false if it had ended) |
+| `subagent.stop` *added* | Stop a subagent of the session that is queued or running (Phase 4, subagents) | `sessionId` (the parent), `agentId` | `stopped` (false if it had ended). `InvalidParams` for an unknown agent |
+| `project.skills` *added* | Every skill and custom command a project's sessions get, for Settings → Skills and commands. Read-only | `projectDir` (absolute, or null for only the person's own) | `projectDir`, `skills: SkillInfo[]`, `commands: SkillInfo[]` (`name`, `kind`, `description`, `argumentHint`, `source`, `userInvocable`, `modelInvocable`, `status`, `notes`), those not used and those in folders inside the project included |
+| `project.inspect` *added* | The compatibility report for a project and the person's home, with the consent its code needs. An item that would run but waits for consent is `needs-approval` | `projectDir` (absolute, or null for only the person's own) | `CompatReport`: `projectDir`, `items: CompatItem[]`, `approval` (`CodeApproval`: `hash`, `approved`, `items`; null when nothing needs consent) |
+| `project.trust` *added* | Approve (or take back) the code a project supplies: hooks from its settings files and Claude Code's user settings, its skills and commands with `!` shell or `allowed-tools`, its `.mcp.json` servers | `projectDir`, `hash` (the `approval.hash` the person saw), `approved` | `approved`. `InvalidState` when the hash no longer matches the definitions on disk |
+| `hooks.list` *added* | Every hook that applies, for Settings → Hooks | `projectDir` (absolute, or null) | `projectDir`, `hooks: HookInfo[]` (`id`, `event`, `matcher`, `type`, `command`, `timeout`, `source`, `status`, `notes`, `enabled`), `disabledBy` (the file whose `disableAllHooks` is on, or null) |
+| `hooks.setEnabled` *added* | The person's switch for one hook, kept in dawg's data folder | `projectDir`, `id`, `enabled` | `enabled`. `InvalidParams` for an id no longer in the files |
+| `mcp.list` *added* | The MCP servers a project's sessions get, for Settings → MCP servers | `projectDir` (absolute, or null for only the person's own) | `projectDir`, `servers: McpServerInfo[]` (`name`, `scope` session/local/project/user, `source`, `transport` stdio/http/sse or null, `target`, `state` connected/starting/failed/needs-approval/needs-sign-in/off, `reason`, `tools`, `prompts`, `resources`, `enabled`, `notes`), `importable` (Claude Code's servers not in dawg yet) |
+| `mcp.restart` *added* | Stops a server and starts it again; one no session uses is started to check it | `projectDir`, `name` | `server: McpServerInfo`. `InvalidParams` for a name not defined |
+| `mcp.setEnabled` *added* | The person's switch for one server, kept in dawg's data folder; off stops it | `projectDir`, `name`, `enabled` | `enabled` |
+| `mcp.importPreview` *added* | What importing Claude Code's servers (`~/.claude.json`) into `~/.dawg/mcp.json` would copy, secrets named but not shown | `{}` | `McpImportPlan`: `from`, `to`, `hash` (null when nothing to copy), `items` (`name`, `project`, `transport`, `target`, `secrets`, `action` copy/skip, `reason`) |
+| `mcp.import` *added* | Copies the plan the person saw | `hash` | `imported`, `path`. `InvalidState` when Claude Code's file changed since |
+| `mcp.session` *added* | What a session's connected servers offer the composer now | `sessionId` | `resources: McpResourceInfo[]` (`server`, `uri`, `name`, `description`, `mimeType`, `mention`), `prompts: CommandInfo[]` (`/mcp__server__prompt`) |
 | `permission.respond` | Answer a permission request | `sessionId`, `requestId`, `response` (`allow {scope: once/always, rules?}` or `deny {message?}`) | `{}` |
 | `question.respond` | Answer an ask-the-user question | `sessionId`, `requestId`, `response` (`answered {answers: QuestionAnswer[]}` or `dismissed {message?}`) | `{}` |
 | `plan.respond` | Approve or reject a proposed plan | `sessionId`, `requestId`, `response` (`approve {mode?}` or `reject {message?}`) | `{}` |
 
 `SessionSnapshot` is `session: SessionSummary`, `modelInfo`, `additionalDirectories`, `tasks`,
 `usage` (null before the first request), `pending` (unanswered permission/question/plan requests,
-oldest first), `activeTurnId`, `commands` (`{name, description, argumentHint}` for the `/`
-menu), and `background` (the session's background commands, oldest first).
+oldest first), `activeTurnId`, `commands` (`{name, description, argumentHint, source?, kind?}`
+for the `/` menu: `source` is builtin, user or project, `kind` command or skill; missing means a
+built-in command; the session's own skills and custom commands are in it), and `background` (the
+session's background commands, oldest first). A turn a skill or custom command started has
+`turn.started.command` set, and its `prompt` is the command as typed; the model was sent its
+expansion.
+
+A subagent is a child session: `session.replay` with its `sessionId` returns its events
+(read-only: it is never opened on a connection, no live events are pushed for it, and
+`session.list` leaves it out). Its permission prompts are raised in the parent session with
+`PermissionRequest.agent` (`SubagentLabel`: `agentId`, `sessionId`, `agentType`,
+`description`) set; their `toolCallId` is a call in the agent's session and their `turnId` may be
+one of its turns. When a background agent ends while its parent is idle, the engine starts a
+parent turn whose prompt begins "Background agent".
 
 `SessionSummary` is `id`, `title` (null until generated), `cwd`, `projectDir`, `createdAt`,
 `lastActivityAt`, `status`, `queuePosition` (see `session.status`), `mode`, `model`, `effort`,
@@ -133,13 +159,16 @@ table; each exists because a client cannot otherwise rebuild the view from event
 | `reasoning.delta` | Reasoning text to append | `turnId`, `messageId`, `text` |
 | `tool.started` | A tool call, with its parsed arguments | `turnId`, `messageId`, `toolCallId`, `toolName`, `input` |
 | `tool.progress` | Live output or a status line | `turnId`, `toolCallId`, `progress` (`output {stream, text}` or `status {message}`) |
-| `tool.finished` | The call's result | `turnId`, `toolCallId`, `toolName`, `outcome` (success, error, denied, invalid, interrupted), `content` (what the model was given), `display` (`ToolDisplay`: diff, file, command, search) or null, `durationMs`. A command's display carries `output` (what it printed, plain text) and `notes` (the sentences added for the model after it, without the exit code), so a client never has to take the model's text apart. |
+| `tool.finished` | The call's result | `turnId`, `toolCallId`, `toolName`, `outcome` (success, error, denied, invalid, interrupted), `content` (what the model was given), `display` (`ToolDisplay`: diff, file, command, search, web-fetch, web-search, mcp) or null, `durationMs`. A command's display carries `output` (what it printed, plain text) and `notes` (the sentences added for the model after it, without the exit code), so a client never has to take the model's text apart. |
 | `permission.requested` | A tool call needs permission | `turnId`, `request: PermissionRequest` (requestId, toolCallId, toolName, input, title, reason, suggestions, display?) |
 | `question.asked` | The model asks the person questions | `turnId`, `requestId`, `toolCallId`, `questions: Question[]` |
 | `plan.proposed` | A plan awaits approval | `turnId`, `requestId`, `toolCallId`, `plan` (Markdown), `planPath`, `modeBeforePlan` (the mode approving returns to unless the answer names one) |
 | `request.resolved` *added* | A pending request is no longer pending. Needed so every client (and a replay) can close the card, including when the turn ended without an answer. | `kind` (permission/question/plan), `turnId`, `requestId`, `outcome` (answered/cancelled), `response` (the answer, or null) |
 | `tasks.updated` | The whole task list | `tasks: TaskItem[]` |
+| `hook.ran` *added* | One hook handler ran, for the transcript | `turnId` (null at session start and end, and for a refused prompt), `toolCallId` (PreToolUse, PostToolUse), `hook` (`event`, `matcher`, `type`, `command`, `source`), `outcome` (success, blocked, error, timeout), `exitCode`, `durationMs`, `decision` (allow, deny, ask, block, or null), `message` |
+| `hook.skipped` *added* | Hooks were held back because they wait for consent; once per session for each state of the definitions | `turnId`, `projectDir`, `sources: CompatSource[]` |
 | `background.updated` *added* | A background command started, ended or was stopped. Without it a client never learns that a command the model left running has finished. | `task: BackgroundTask` (`taskId`, `command`, `description`, `cwd`, `status` running/completed/failed/stopped, `exitCode`, `signal`, `stopReason`, `startedAt`, `endedAt`, `outputBytes`) |
+| `subagent.updated` *added* | A subagent of this session was started, queued, moved on or ended (`subagents.ts`). Sent whole on the parent, stored; the latest per `agentId` is its state | `agent: SubagentInfo` (`agentId`, `sessionId` of its own session, `agentType`, `description`, `toolCallId` and `turnId` of the parent call that started its current task, `fork`, `background`, `status` queued/running/completed/failed/stopped, `queuePosition`, `worktree`, `startedAt`, `endedAt`, `toolUses`, `activity`, `result`, `error`) |
 | `usage.updated` | Context and token counts | `usage: Usage` |
 | `prompt.progress` | How much of the prompt the model has read | `turnId`, `total`, `cached`, `processed` |
 | `compaction.started` | Context is being summarised | `compactionId`, `trigger` (auto/manual), `turnId` or null, `contextUsed`, `contextWindow`, `focus` |

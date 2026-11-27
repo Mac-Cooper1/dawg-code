@@ -87,13 +87,17 @@ describe("the palette's rows", () => {
 
   it("explains an action that cannot run when it is searched for", () => {
     const { store } = sessionsStore();
-    const rows = paletteSections(buildSource(store.getState(), NOW), "stop", []).flatMap(
-      (section) => section.rows,
-    );
-    const stop = rows.find((row) => row.title === "Stop the running turn");
+    const sections = paletteSections(buildSource(store.getState(), NOW), "stop", []);
+    const stop = sections
+      .flatMap((section) => section.rows)
+      .find((row) => row.title === "Stop the running turn");
     expect(stop).toMatchObject({ disabled: "Nothing is running", detail: "Nothing is running" });
-    // Below the ones that can run.
-    expect(rows.indexOf(stop as never)).toBe(rows.length - 1);
+    // Below the ones that can run in its group (other groups keep their own order).
+    const section = sections.find((candidate) => candidate.rows.includes(stop as never));
+    expect(section?.rows.at(-1)).toBe(stop);
+    expect(section?.rows.slice(0, -1).every((row) => !("disabled" in row) || !row.disabled)).toBe(
+      true,
+    );
   });
 
   it("puts the action above untitled sessions for “new session”", () => {

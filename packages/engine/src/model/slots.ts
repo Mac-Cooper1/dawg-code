@@ -41,6 +41,11 @@ export interface SlotRequest {
   signal?: AbortSignal;
   /** Told the place in line (1 = next) when the request starts to wait and each time it moves. */
   onQueue?: (position: number) => void;
+  /**
+   * Another owner whose last slot this one would like when it has none of its own yet: a fork's
+   * parent, whose prompt cache holds the fork's start.
+   */
+  prefer?: string;
 }
 
 export interface SlotLease {
@@ -92,7 +97,8 @@ export class SlotScheduler {
     if (signal?.aborted) return Promise.reject(abortedWhileWaiting());
     // The queue only holds requests while every slot is taken.
     if (this.#queue.length === 0 && this.#free.size > 0) {
-      return Promise.resolve(this.#lease(request.owner, this.#pick(request.owner)));
+      const slot = this.#pick(request.owner, request.prefer);
+      return Promise.resolve(this.#lease(request.owner, slot));
     }
     return new Promise<SlotLease>((resolve, reject) => {
       const onAbort = () => {
@@ -142,7 +148,7 @@ export class SlotScheduler {
     let granted = false;
     while (this.#free.size > 0 && this.#queue.length > 0) {
       const next = this.#queue.shift() as Waiter;
-      next.grant(this.#pick(next.request.owner));
+      next.grant(this.#pick(next.request.owner, next.request.prefer));
       granted = true;
     }
     if (granted) this.#announce();
@@ -164,9 +170,12 @@ export class SlotScheduler {
   }
 
   /** A free slot for an owner: its last one when free, else the free slot used longest ago. */
-  #pick(owner: string): number {
+  #pick(owner: string, prefer?: string): number {
     const last = this.#lastSlot.get(owner);
     if (last !== undefined && this.#free.has(last)) return last;
+    const preferred =
+      last === undefined && prefer !== undefined ? this.#lastSlot.get(prefer) : undefined;
+    if (preferred !== undefined && this.#free.has(preferred)) return preferred;
     let best: number | null = null;
     let bestUse = Number.POSITIVE_INFINITY;
     for (const slot of this.slots) {
@@ -190,6 +199,8 @@ export interface ScheduledClientOptions {
    * waiting (given a slot, or aborted). Never called for a request that did not have to wait.
    */
   onQueue?: (position: number | null) => void;
+  /** See `SlotRequest.prefer`. */
+  prefer?: string;
 }
 
 /**
@@ -221,6 +232,7 @@ async function* streamOnSlot(
   let queued = false;
   const wait = scheduler.acquire({
     owner: options.owner,
+    ...(options.prefer === undefined ? {} : { prefer: options.prefer }),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
     onQueue: (position) => {
       queued = true;

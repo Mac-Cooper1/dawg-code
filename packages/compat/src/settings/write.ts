@@ -343,3 +343,30 @@ async function applyUpdate(
   await writeAtomic(real, data, fileMode);
   return { path, changed: true };
 }
+
+/**
+ * Added (Phase 4, sandbox): changes one of dawg's settings files with `edit`, under the same
+ * rules as `updatePermissionSettings` (dawg's files only, never under `.claude`, never a file it
+ * cannot parse) and through the same per-file queue, so the two never lose each other's writes.
+ * `edit` changes the parsed object in place. Nothing is written when it changes nothing.
+ */
+export async function editDawgSettingsFile(
+  file: string,
+  edit: (data: Record<string, unknown>) => void,
+): Promise<UpdatePermissionSettingsResult> {
+  const path = assertDawgSettingsFile(file);
+  const real = await writeTarget(path);
+  return enqueue(real, async () => {
+    const text = await readIfPresent(real, path);
+    const data = text === null ? {} : parseForEdit(text, path);
+    const before = JSON.stringify(data);
+    edit(data);
+    if (JSON.stringify(data) === before) return { path, changed: false };
+    const fileMode = await stat(real).then(
+      (info) => info.mode & 0o777,
+      () => 0o600,
+    );
+    await writeAtomic(real, data, fileMode);
+    return { path, changed: true };
+  });
+}

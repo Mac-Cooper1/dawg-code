@@ -99,12 +99,15 @@ describe("registry", () => {
       "export",
       "help",
       "init",
+      "mcp",
+      "memory",
       "mode",
       "model",
       "permissions",
       "plan",
       "rename",
       "resume",
+      "rewind",
       "status",
     ]);
   });

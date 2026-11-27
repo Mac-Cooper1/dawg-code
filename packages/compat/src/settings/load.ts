@@ -1,6 +1,7 @@
 import { join, resolve } from "node:path";
 import type { PermissionMode } from "@dawg/protocol";
 import { resolveUserPath } from "../internal/paths.ts";
+import { mergeSandboxSettings } from "../sandbox/settings.ts";
 import type {
   LoadedSettingsFile,
   PermissionRule,
@@ -206,6 +207,14 @@ export function mergeSettings(input: MergeSettingsInput): Settings {
   }
   const env: Record<string, string> = Object.fromEntries(merged);
 
+  const sandbox = mergeSandboxSettings({
+    files: specs.map((spec, i) => ({ ...spec, settings: parsed[i]?.sandbox ?? null })),
+    projectDir,
+    homeDir,
+    flagEnabled: flags.sandbox === true,
+    flagsPath: FLAGS_PROBLEM_PATH,
+  });
+
   return {
     permissions: {
       allow: lists.allow,
@@ -216,6 +225,7 @@ export function mergeSettings(input: MergeSettingsInput): Settings {
       bypassDisabled,
     },
     env,
+    sandbox,
     files,
     problems,
   };

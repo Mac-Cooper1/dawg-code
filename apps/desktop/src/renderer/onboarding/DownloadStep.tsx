@@ -4,7 +4,13 @@ import { formatBytes } from "../lib/format.ts";
 import { CancelDownloadDialog } from "../models/CancelDownloadDialog.tsx";
 import { ProgressBar } from "../models/ProgressBar.tsx";
 import { downloadAnnouncement, downloadLine, downloadPercent } from "../models/text.ts";
-import { findCatalogEntry, findDownload, isRunningDownload, modelName } from "../state/models.ts";
+import {
+  findCatalogEntry,
+  findDownload,
+  helperDownload,
+  isRunningDownload,
+  modelName,
+} from "../state/models.ts";
 import { Button, Icon, Spinner } from "../ui/index.ts";
 import styles from "./FirstRun.module.css";
 
@@ -31,6 +37,40 @@ function startingDownload(modelId: string, total: number): DownloadState {
     secondsLeft: null,
     error: null,
   };
+}
+
+/**
+ * The helper model's download, queued after the chosen model's: one line under it. It goes on in
+ * the background after the chosen model starts; Settings → Models shows it from then on.
+ */
+function HelperLine(props: { state: ModelsState }) {
+  const { state } = props;
+  const helper = state.helper;
+  const download = helperDownload(state);
+  if (!helper || !download) return null;
+  let line: string;
+  switch (download.phase) {
+    case "queued":
+      line = `Waits for this download · ${formatBytes(download.bytesTotal || helper.sizeBytes)}`;
+      break;
+    case "paused":
+      line = `Paused at ${downloadPercent(download)}`;
+      break;
+    case "failed":
+      line = download.error ?? "The download stopped. Try again in Settings → Models.";
+      break;
+    case "done":
+      line = "Downloaded";
+      break;
+    default:
+      line = `${downloadPercent(download)} · ${downloadLine(download)}`;
+  }
+  return (
+    <p className={styles.helperLine}>
+      <span className={styles.helperName}>Then {helper.displayName}</span>
+      <span>for titles and page summaries · {line}</span>
+    </p>
+  );
 }
 
 /** Downloading the chosen model: progress, speed and time left; pause, resume, cancel, retry. */
@@ -109,6 +149,7 @@ export function DownloadStep(props: DownloadStepProps) {
             </>
           )}
         </div>
+        <HelperLine state={state} />
       </section>
       <CancelDownloadDialog
         download={confirming}

@@ -2,6 +2,7 @@
  * The engine: opens, lists and manages sessions, and holds what they share. A protocol server and
  * the command-line tool both sit on this API. See README.md in this folder.
  */
+
 import { randomUUID } from "node:crypto";
 import { open as openFile, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
@@ -12,10 +13,14 @@ import type {
   SessionSummary as ProtocolSummary,
   SessionStatus,
 } from "@dawg/protocol";
+import { childPaths, parentOfChild } from "../agents/store.ts";
+import { CheckpointStore, DEFAULT_CHECKPOINT_RETENTION } from "../checkpoints/index.ts";
 import { DEFAULT_TOOL_LIMITS } from "../contracts/tools.ts";
 import { DEFAULT_LOOP_LIMITS, type IdKind } from "../loop/types.ts";
+import { McpManager } from "../mcp/manager.ts";
 import { type SlotPool, SlotScheduler } from "../model/slots.ts";
 import { createPermissionEngine } from "../permissions/index.ts";
+import { SandboxHost } from "../sandbox/runtime.ts";
 import {
   type SessionRecord,
   SessionStore,
@@ -23,8 +28,9 @@ import {
   type SessionWriter,
   type SessionSummary as StoredSummary,
 } from "../session/index.ts";
-import { CORE_TOOLS } from "../tools/index.ts";
+import { CORE_TOOLS, WEB_TOOLS } from "../tools/index.ts";
 import { INTERACTIVE_TOOLS } from "../tools/interactive/index.ts";
+import { type CodeTrust, NO_CODE_TRUST } from "../trust/index.ts";
 import type { EngineContext } from "./context.ts";
 import { gatherEnvironment } from "./environment.ts";
 import { RuntimeError } from "./errors.ts";
@@ -60,7 +66,8 @@ export class Engine {
 
   constructor(options: EngineOptions) {
     const clock = options.clock ?? Date.now;
-    const tools = options.tools ?? [...CORE_TOOLS, ...INTERACTIVE_TOOLS];
+    const tools = options.tools ?? [...CORE_TOOLS, ...INTERACTIVE_TOOLS, ...WEB_TOOLS];
+    const webSearch = options.webSearch ?? (() => null);
     const toolMap = new Map(tools.map((t) => [t.name, t]));
     if (toolMap.size !== tools.length) throw new Error("Two tools share a name.");
     const profile = options.profile;
@@ -93,6 +100,17 @@ export class Engine {
       externalImports: options.externalImports ?? "block",
       ripgrepPath: options.ripgrepPath ?? null,
       generateTitles: options.generateTitles ?? true,
+      trust: options.trust ?? NO_CODE_TRUST,
+      subagents: options.subagents ?? true,
+      checkpointRetention: options.checkpointRetention ?? DEFAULT_CHECKPOINT_RETENTION,
+      autoMemory: options.autoMemory ?? false,
+      sandbox: new SandboxHost(),
+      mcp: new McpManager({
+        homeDir: options.homeDir,
+        storeRoot: options.storeRoot,
+        trust: options.trust ?? NO_CODE_TRUST,
+        ...options.mcp,
+      }),
       clock,
       newId: options.newId ?? defaultNewId,
       environment: options.environment ?? gatherEnvironment,
@@ -116,6 +134,7 @@ export class Engine {
       onClosed: (runtime) => {
         if (this.#open.get(runtime.id) === runtime) this.#open.delete(runtime.id);
       },
+      services: () => ({ searchProvider: webSearch() }),
     };
   }
 
@@ -125,6 +144,16 @@ export class Engine {
     return () => {
       this.#listeners.delete(listener);
     };
+  }
+
+  /** Consent for the code a setup supplies (hooks, MCP servers). */
+  get trust(): CodeTrust {
+    return this.#ctx.trust;
+  }
+
+  /** The MCP servers every session shares (../mcp). */
+  get mcp(): McpManager {
+    return this.#ctx.mcp;
   }
 
   /** An open session, or undefined. */
@@ -137,7 +166,11 @@ export class Engine {
   }
 
   /** Creates a session in a directory and opens it. */
-  async createSession(options: NewSessionOptions): Promise<SessionRuntime> {
+  async createSession(
+    options: NewSessionOptions,
+    /** For SessionStart hooks: "clear" when `/clear` made it. */
+    startSource: "startup" | "clear" = "startup",
+  ): Promise<SessionRuntime> {
     const ctx = this.#ctx;
     const cwd = path.resolve(options.cwd);
     await assertDirectory(cwd);
@@ -192,11 +225,13 @@ export class Engine {
       initialMessages: [{ ...contextMessage, kind: "note" }],
     });
     return this.#start(writer, cwd, {
+      ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
       settings,
       settingsStamp,
       instructions,
       connection,
       capabilities: options.capabilities,
+      startSource,
       sidecar: {
         v: 1,
         lastSeq: 0,
@@ -245,6 +280,17 @@ export class Engine {
     const parentTitle = parent.snapshot.state.title;
     const title = options.title ?? (parentTitle === null ? null : `${parentTitle} (fork)`);
     const id = await this.store.fork(cwd, sessionId, { atSeq, title });
+    // The fork's file history is its parent's: turns it did not copy come along hidden, so
+    // restoring files still undoes them (../checkpoints).
+    await live?.checkpointsIdle();
+    await CheckpointStore.copy(
+      path.join((await this.store.paths(cwd, sessionId)).dir, "file-history"),
+      path.join((await this.store.paths(cwd, id)).dir, "file-history"),
+      (turnId) => {
+        const seq = promptSeqOf(turnId);
+        return seq !== null && seq <= atSeq;
+      },
+    ).catch(() => {});
     // A fork belongs to its parent's project.
     const parentProject =
       live?.projectDir ??
@@ -353,6 +399,8 @@ export class Engine {
   async replay(sessionId: string, afterSeq: number, limit?: number): Promise<ReplayPage> {
     const live = this.#open.get(sessionId);
     if (live !== undefined) return live.eventsAfter(afterSeq, limit);
+    const child = await this.#replayChild(sessionId, afterSeq, limit);
+    if (child !== null) return child;
     const cwd = await this.#locate(sessionId);
     const paths = await this.store.paths(cwd, sessionId);
     const file = path.join(paths.dir, EVENTS_FILE);
@@ -392,13 +440,16 @@ export class Engine {
       ...(model === null ? {} : { model }),
       ...(effort === null ? {} : { effort }),
     };
-    await old.close();
-    return this.createSession(options);
+    await old.close("clear");
+    return this.createSession(options, "clear");
   }
 
   /** Closes every open session. */
   async close(): Promise<void> {
     await Promise.all([...this.#open.values()].map((s) => s.close()));
+    await this.#ctx.mcp.close();
+    // The sandbox's proxy stops once no engine in the process uses it.
+    await this.#ctx.sandbox.close();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -448,6 +499,7 @@ export class Engine {
         instructions,
         connection,
         capabilities: options.capabilities,
+        startSource: forkPoint === null ? "resume" : "fork",
         sidecar,
       });
     } catch (error) {
@@ -466,6 +518,10 @@ export class Engine {
       connection: Awaited<ReturnType<EngineContext["models"]["connect"]>>;
       capabilities: Partial<ClientCapabilities> | undefined;
       sidecar: Sidecar;
+      /** Why it opened, for SessionStart hooks. */
+      startSource: "startup" | "resume" | "clear" | "fork";
+      /** The session's own MCP servers. */
+      mcpServers?: Readonly<Record<string, unknown>>;
     },
   ): Promise<SessionRuntime> {
     const ctx = this.#ctx;
@@ -492,6 +548,8 @@ export class Engine {
         capabilities: { ...ctx.capabilities, ...init.capabilities },
         sessionDir: paths.dir,
         sidecar: init.sidecar,
+        startSource: init.startSource,
+        ...(init.mcpServers === undefined ? {} : { mcpServers: init.mcpServers }),
       });
       this.#open.set(sessionId, runtime);
       return runtime;
@@ -506,6 +564,33 @@ export class Engine {
     if (this.#deleting.has(sessionId)) {
       throw new RuntimeError("InvalidState", "This session is being deleted.");
     }
+  }
+
+  /**
+   * A subagent's events (../agents): read-only, from its runtime while it works, else from its
+   * log in its parent's `subagents/` folder. Null when the id is not a subagent's.
+   */
+  async #replayChild(id: string, afterSeq: number, limit?: number): Promise<ReplayPage | null> {
+    const parent = parentOfChild(id);
+    if (parent === null) return null;
+    const live = this.#open.get(parent.parentId)?.agents?.runtimeOf(id);
+    if (live !== undefined) return live.eventsAfter(afterSeq, limit);
+    let dir: string;
+    try {
+      const cwd = await this.#locate(parent.parentId);
+      dir = (await this.store.paths(cwd, parent.parentId)).dir;
+    } catch {
+      return null;
+    }
+    const paths = childPaths(dir, id);
+    const file = path.join(paths.dir, EVENTS_FILE);
+    if (EventLog.hasEvents(file)) return EventLog.read(file, afterSeq, limit);
+    const exists = await stat(paths.file).then(
+      () => true,
+      () => false,
+    );
+    if (!exists) return null;
+    return { events: [], lastSeq: 0, hasMore: false };
   }
 
   /** The working directory a stored session is filed under. */

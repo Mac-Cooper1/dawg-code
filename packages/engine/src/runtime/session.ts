@@ -21,6 +21,7 @@ import {
 } from "@dawg/compat";
 import {
   type BackgroundTask,
+  type Checkpoint,
   type ClientCapabilities,
   type ContentPart,
   type ContextBreakdown,
@@ -38,19 +39,34 @@ import {
   type QuestionResponse,
   type SessionStatus,
   type TaskItem,
+  type ToolDisplay,
 } from "@dawg/protocol";
+import {
+  AGENTS_STATE_KEY,
+  type AgentHost,
+  openChildRuntime,
+  SubagentManager,
+  type SubagentRole,
+} from "../agents/index.ts";
+import { CheckpointStore, type Present, type RestoreOutcome } from "../checkpoints/index.ts";
+import { partialSummaryNote } from "../context/summary.ts";
 import type { Message } from "../contracts/messages.ts";
 import type { ModelClient, ModelReply, ModelRequest } from "../contracts/model.ts";
 import type { PermissionState } from "../contracts/permissions.ts";
 import type { ModelProfile, PromptPrefix, SystemNote } from "../contracts/prompt.ts";
 import type {
+  AnyTool,
   SessionServices,
   SessionStateBag,
   ToolContext,
   ToolProbeContext,
 } from "../contracts/tools.ts";
+import type { UtilityModel } from "../contracts/web.ts";
+import { ifRuleMatches } from "../hooks/if-rule.ts";
+import { type HookEffects, SessionHooks } from "../hooks/session-hooks.ts";
+import { toolResponse } from "../hooks/tool-response.ts";
 import { errorInfo, errorInfoFrom } from "../loop/errors.ts";
-import type { ExecutedCall } from "../loop/executor.ts";
+import type { ExecutedCall, HookedCall, ToolHookVerdict } from "../loop/executor.ts";
 import {
   type ResumedBatch,
   type RoomCheck,
@@ -59,9 +75,26 @@ import {
   type TurnHost,
 } from "../loop/turn.ts";
 import type { Emit, LoopResult } from "../loop/types.ts";
+import { MCP_STATE_KEY, type McpDecision, SessionMcp } from "../mcp/index.ts";
+import {
+  autoMemoryEnabled,
+  loadMemoryIndex,
+  type MemoryIndex,
+  memoryDirectory,
+  renderMemoryPrompt,
+} from "../memory/index.ts";
 import { scheduledClient } from "../model/slots.ts";
 import { readDeniedBy } from "../permissions/index.ts";
+import { toToolSchema } from "../prompt/assembler.ts";
+import { SANDBOX_STATE_KEY, SessionSandbox } from "../sandbox/session.ts";
 import type { SessionRecord, SessionWriter, StateChanges } from "../session/index.ts";
+import {
+  SessionSkills,
+  SKILLS_STATE_KEY,
+  type SkillPromptOptions,
+  skillTool,
+  withSkillsReattached,
+} from "../skills/index.ts";
 import {
   type BackgroundTaskInfo,
   getBackgroundTasks,
@@ -82,9 +115,11 @@ import {
   danglingCalls,
   firstPromptText,
   modeBeforePlan,
+  promptSeqOf,
   touchedSinceCompaction,
   turnIdFor,
   usageFromRecords,
+  viewIndexOfRecord,
 } from "./transcript.ts";
 import type { CompactionOutcome, ModelConnection, TurnOutcome } from "./types.ts";
 import { UsageTracker } from "./usage.ts";
@@ -107,6 +142,27 @@ const MIN_GROWTH_BEFORE_RECOMPACTION = 0.1;
 /** History smaller than this share of the window is not worth compacting automatically. */
 const MIN_HISTORY_SHARE = 0.1;
 
+/** How long the first prompt waits for SessionStart hooks before it goes ahead without them. */
+const SESSION_START_WAIT_MS = 10_000;
+
+/** Resolves when `promise` settles or `ms` pass, whichever is first. Never rejects. */
+function settledWithin(promise: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+    void promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
+
 /** The summary a trim writes in its compact record; it marks the record as a trim on resume. */
 export const TRIM_SUMMARY = "The largest tool result was shortened to fit the context window.";
 
@@ -128,6 +184,23 @@ export interface RuntimeInit {
   /** The session's side folder (tool results, events, runtime.json). */
   sessionDir: string;
   sidecar: Sidecar | null;
+  /** The session's skills and custom commands; loaded from its folders when left out. */
+  skills?: SessionSkills;
+  /**
+   * Why the session opened, for SessionStart hooks (`source`): new, resumed, `/clear`, forked.
+   * Default "resume".
+   */
+  startSource?: "startup" | "resume" | "clear" | "fork";
+  /** The session's file history (../checkpoints); opened from `sessionDir` when left out. */
+  checkpoints?: CheckpointStore;
+  /** MEMORY.md as the session opened (../memory); null when auto memory is off. */
+  memory?: MemoryIndex | null;
+  /** The session's own MCP servers (an `mcpServers` object), over every other definition. */
+  mcpServers?: Readonly<Record<string, unknown>>;
+  /** Set when this session is a subagent of another (../agents): what makes it one. */
+  subagent?: SubagentRole;
+  /** A main session's subagents; loaded from its folders when left out. */
+  agents?: SubagentManager;
 }
 
 interface PendingEntry {
@@ -221,6 +294,44 @@ export class SessionRuntime {
   /** The instruction files as rendered into the prefix, for the context breakdown. */
   #instructionsText: string;
   #prefix: PromptPrefix;
+  /**
+   * The tools this session offers, decided once when it opens (`ToolDefinition.offered`): the
+   * tool list is part of the cached prefix.
+   */
+  #tools: readonly AnyTool[];
+  /** The tools calls are run with: the engine's, and Skill when this session offers it. */
+  #toolMap: ReadonlyMap<string, AnyTool>;
+  /**
+   * The session's MCP servers (../mcp). Their tools join the list once, before the first
+   * request (`#settleMcp`), and the list never changes after that.
+   */
+  #mcp: SessionMcp;
+  /** The prefix's MCP segment, fixed once decided. */
+  #mcpSegment = "";
+  #mcpSettled = false;
+  /** Set when this session is a subagent (../agents). */
+  readonly #role: SubagentRole | null;
+  /** A main session's subagents (../agents); null in a subagent. */
+  #agents: SubagentManager | null = null;
+  /** The tools a subagent's subset is taken from: those offered before the agent tools. */
+  #baseTools: readonly AnyTool[] = [];
+  /** Skills and custom commands (../skills), read when the session opened. */
+  readonly #skills: SessionSkills;
+  /** The session's hooks (../hooks): tier 1 events, reloaded with the settings. */
+  readonly #hooks: SessionHooks;
+  /** Files as they were before each prompt, for rewinding them (../checkpoints). */
+  readonly #checkpoints: CheckpointStore;
+  /** The project's memory as the session opened, or null when auto memory is off (../memory). */
+  readonly #memory: MemoryIndex | null;
+  /** The memory segment of the prefix: fixed for the session's life, so the cache holds. */
+  readonly #memoryPrompt: string;
+  #checkpointErrorShown = false;
+  /** SessionStart hooks, started when the session opened; the first prompt waits for them. */
+  #sessionStart: Promise<void> = Promise.resolve();
+  /** Fires the idle Notification hooks a while after a turn ends, unless another starts. */
+  #idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A hook said `continue: false` this turn: it ends at the next safe point. */
+  #hookStop = false;
   #connection: ModelConnection;
   /** Where conversation requests go: the connection's client, behind its pool's scheduler. */
   #client!: ModelClient;
@@ -309,6 +420,7 @@ export class SessionRuntime {
     this.cwd = snapshot.meta.cwd;
     this.projectDir = init.sidecar?.projectDir ?? this.cwd;
     this.#settings = init.settings;
+    this.#role = init.subagent ?? null;
     this.#settingsReloader = new SettingsReloader(
       {
         projectDir: this.cwd,
@@ -319,6 +431,28 @@ export class SessionRuntime {
       },
       init.settingsStamp ?? null,
     );
+    this.#hooks = new SessionHooks({
+      sessionId: this.id,
+      cwd: this.cwd,
+      projectDir: this.projectDir,
+      homeDir: ctx.homeDir,
+      // The transcript sits beside the side folder: `<id>.jsonl` next to `<id>/`.
+      transcriptPath: `${init.sessionDir}.jsonl`,
+      trust: ctx.trust,
+      env: () => this.#settings.env,
+      mode: () => this.#mode,
+      emit: (event, fields) => this.#emit(event, fields),
+      queueNote: (text) => this.#queuedNotes.push({ type: "text", text }),
+      now: ctx.clock,
+      ...(this.#role === null
+        ? {}
+        : {
+            subagent: {
+              agentId: this.#role.label.agentId,
+              agentType: this.#role.label.agentType,
+            },
+          }),
+    });
     this.#rules = {
       allow: [...init.settings.permissions.allow],
       ask: [...init.settings.permissions.ask],
@@ -326,7 +460,64 @@ export class SessionRuntime {
     };
     this.#instructions = init.instructions;
     this.#instructionsText = renderInstructions(init.instructions.files);
-    this.#prefix = ctx.assembler.prefix({ tools: ctx.tools, instructions: this.#instructionsText });
+    const services = ctx.services();
+    this.#tools = ctx.tools.filter((t) => t.offered === undefined || t.offered(services));
+    // Skills (../skills): the Skill tool when the agent may load one, and their listing.
+    this.#skills = init.skills ?? new SessionSkills([], null);
+    this.#bindSkills();
+    // The sandbox (../sandbox) reads the settings and rules in force at each call.
+    this.#bag.get(
+      SANDBOX_STATE_KEY,
+      () =>
+        new SessionSandbox({
+          host: ctx.sandbox,
+          settings: () => this.#settings.sandbox,
+          rules: () => this.#rules,
+          homeDir: ctx.homeDir,
+          // Hosts a project's files list wait for the person's approval, like its hooks.
+          allows: (source) => ctx.trust.allows(source, this.projectDir),
+        }),
+    );
+    this.#toolMap = ctx.toolMap;
+    if (this.#skills.offersTool && !this.#tools.some((t) => t.name === skillTool.name)) {
+      this.#tools = [...this.#tools, skillTool];
+      this.#toolMap = new Map([...ctx.toolMap, [skillTool.name, skillTool]]);
+    }
+    // Subagents (../agents): a subagent gets its role's tools and no MCP tools (a fork its
+    // parent's exactly); a main session gets the Agent and SendMessage tools.
+    this.#baseTools = this.#tools;
+    const role = this.#role;
+    if (role !== null) {
+      this.#mcpSettled = true;
+      if (role.fork !== null) {
+        this.#tools = role.fork.tools;
+        this.#toolMap = role.fork.toolMap;
+      } else {
+        this.#tools = role.tools(this.#tools);
+        this.#toolMap = new Map(this.#tools.map((t) => [t.name, t] as const));
+      }
+    } else if (init.agents !== undefined) {
+      const agents = init.agents;
+      this.#agents = agents;
+      this.#bag.get(AGENTS_STATE_KEY, () => agents);
+      this.#tools = [...this.#tools, ...agents.tools];
+      this.#toolMap = new Map([...this.#toolMap, ...agents.tools.map((t) => [t.name, t] as const)]);
+    }
+    this.#memory = init.memory ?? null;
+    this.#memoryPrompt = this.#memory === null ? "" : renderMemoryPrompt(this.#memory);
+    // Always given by `start`, which opens it from the session's folder.
+    this.#checkpoints = init.checkpoints as CheckpointStore;
+    this.#mcp = SessionMcp.none({ sessionId: this.id, cwd: this.cwd, projectDir: this.projectDir });
+    this.#prefix =
+      role?.fork?.prefix ??
+      ctx.assembler.prefix({
+        tools: this.#tools,
+        instructions: this.#instructionsText,
+        skills: this.#skills.listing,
+        mcp: this.#mcpSegment,
+        memory: this.#memoryPrompt,
+        ...this.#agentPrefix(),
+      });
     this.#connection = init.connection;
     this.#useConnection(init.connection);
     this.#profile = ctx.profileFor(init.connection.client.endpoint);
@@ -374,8 +565,63 @@ export class SessionRuntime {
 
   /** Opens a runtime on a writer the engine has prepared. Repairs what a crash left behind. */
   static async start(init: RuntimeInit): Promise<SessionRuntime> {
-    const runtime = new SessionRuntime(init);
+    const cwd = init.writer.snapshot.meta.cwd;
+    const skills =
+      init.skills ??
+      (await SessionSkills.load({
+        homeDir: init.ctx.homeDir,
+        cwd,
+        projectDir: init.sidecar?.projectDir ?? cwd,
+        contextWindow: init.connection.client.endpoint.contextWindow,
+      }));
+    const sessionId = init.writer.sessionId;
+    let opened: SessionRuntime | null = null;
+    const checkpoints =
+      init.checkpoints ??
+      (await CheckpointStore.open({
+        dir: path.join(init.sessionDir, "file-history"),
+        sessionId,
+        retention: init.ctx.checkpointRetention,
+        clock: init.ctx.clock,
+        onError: (message, error) => {
+          if (opened !== null) opened.#checkpointError(message, error);
+        },
+      }));
+    const memory =
+      init.memory !== undefined
+        ? init.memory
+        : await SessionRuntime.#loadMemory(init, init.sidecar?.projectDir ?? cwd);
+    const agents =
+      init.subagent !== undefined || !init.ctx.subagents
+        ? undefined
+        : (init.agents ??
+          (await SubagentManager.load({
+            homeDir: init.ctx.homeDir,
+            cwd,
+            projectDir: init.sidecar?.projectDir ?? cwd,
+          })));
+    const runtime = new SessionRuntime({
+      ...init,
+      skills,
+      checkpoints,
+      memory,
+      ...(agents === undefined ? {} : { agents }),
+    });
+    runtime.#bindAgents();
+    opened = runtime;
+    // MCP servers start with the session; its first request waits a little for them.
+    runtime.#mcp = await SessionMcp.open(init.ctx.mcp, {
+      sessionId,
+      cwd,
+      projectDir: runtime.projectDir,
+      settingsEnv: () => runtime.#settings.env,
+      ...(init.mcpServers === undefined ? {} : { sessionServers: init.mcpServers }),
+    }).catch(() => runtime.#mcp);
+    runtime.#bag.get(MCP_STATE_KEY, () => runtime.#mcp);
     await runtime.#prepare(init.records);
+    await runtime.#hooks.reload();
+    // SessionStart hooks run on while the session is handed back; the first prompt waits.
+    runtime.#sessionStart = runtime.#runSessionStart(init.startSource ?? "resume");
     return runtime;
   }
 
@@ -383,7 +629,11 @@ export class SessionRuntime {
     // The instruction files earlier calls made relevant were already given to the model.
     for (const file of touchedSinceCompaction(records, (s) => s === TRIM_SUMMARY)) {
       await this.#instructions.forFile(file);
+      // Skills of folders inside the project, likewise (the note about them is in history).
+      await this.#skills.forFile(file);
     }
+    // Skill bodies already in the model's view, for "already loaded" and re-attachment.
+    this.#skills.restore(this.#writer.snapshot.view);
     // A turn that stopped while it waited on the person waits on: answering carries it on.
     const waiting = findWaitingTurn(
       this.#log.all(),
@@ -763,9 +1013,9 @@ export class SessionRuntime {
   /**
    * Starts a turn and resolves with its id as soon as the prompt is in the transcript. The turn
    * runs on; follow it through events or `waitForIdle`. Rejects with SessionBusy while a turn or
-   * a compaction runs.
+   * a compaction runs. `options` is for a skill or custom command the person ran (../skills).
    */
-  async prompt(input: PromptInput): Promise<{ turnId: string }> {
+  async prompt(input: PromptInput, options: SkillPromptOptions = {}): Promise<{ turnId: string }> {
     this.#assertOpen();
     if (this.#busy !== null) throw new RuntimeError("SessionBusy", "A turn is already running.");
     const prompt = PromptSchema.parse(input);
@@ -781,6 +1031,14 @@ export class SessionRuntime {
     try {
       // Settings edited since the last turn apply from this one.
       await this.#reloadSettings();
+      // SessionStart hooks' context goes in before the first prompt; a slow hook does not hold
+      // the prompt for long, and what it adds later waits for the next safe point.
+      await settledWithin(this.#sessionStart, SESSION_START_WAIT_MS);
+      // Servers approved since the last turn start now; the first turn decides the MCP tools.
+      await this.#mcp.refresh();
+      await this.#settleMcp();
+      // UserPromptSubmit hooks see the prompt first and may refuse it (it is then never written).
+      const promptNotes = await this.#promptHooks(prompt, options, controller.signal);
       // The start of a turn is a safe point for notes: they go before the prompt.
       await this.#flushNotes();
       const content = await this.#promptContent(prompt);
@@ -789,6 +1047,12 @@ export class SessionRuntime {
       const record = await this.#writer.appendMessage(message);
       turnId = turnIdFor(record.seq);
       busy.promptSeq = record.seq;
+      // A checkpoint opens before the prompt is processed (../checkpoints).
+      await this.#checkpoints.open(turnId);
+      // What the hooks added goes with the prompt ("added to Claude's context alongside it").
+      for (const text of promptNotes) await this.#appendNote({ type: "text", text });
+      // The person's message ends the last skill's grants; a skill they ran grants its own.
+      this.#skills.startTurn(promptText(prompt.content) ?? "", options.invocation ?? null);
     } catch (error) {
       this.#busy = null;
       release();
@@ -799,7 +1063,21 @@ export class SessionRuntime {
     this.#firstPrompt ??= promptText(prompt.content);
     this.#lastTurnFailed = false;
     this.#refreshStatus();
-    this.#emit("turn.started", { turnId, prompt, command: null });
+    const command = options.command ?? null;
+    // A command's turn shows the command as typed; the model was given what it expands to.
+    const shown =
+      command === null
+        ? prompt
+        : {
+            content: [
+              {
+                type: "text" as const,
+                text: `/${command.name}${command.args === "" ? "" : ` ${command.args}`}`,
+              },
+            ],
+            mentions: [],
+          };
+    this.#emit("turn.started", { turnId, prompt: shown, command });
     void this.#runTurn(turnId, controller, startedAt).finally(release);
     return { turnId };
   }
@@ -835,6 +1113,8 @@ export class SessionRuntime {
   ): Promise<void> {
     let result: LoopResult;
     try {
+      // A turn brought back after a restart may be the session's first to send a request.
+      if (resume !== undefined) await this.#settleMcp();
       result = await runTurn(this.#turnHost(), {
         turnId,
         signal: controller.signal,
@@ -869,6 +1149,7 @@ export class SessionRuntime {
     }
     void this.#saveSidecar();
     this.#maybeGenerateTitle();
+    this.#scheduleIdleNotification();
   }
 
   /** After a failure inside the loop: give every call left without a result one. */
@@ -1091,9 +1372,24 @@ export class SessionRuntime {
       // Listed as waiting even if the process ends before the answer (see waiting-turn.ts).
       void this.#saveSidecar();
       switch (ask.kind) {
-        case "permission":
+        case "permission": {
           this.#emit("permission.requested", { turnId: ask.turnId, request: ask.request });
+          // Notification hooks fire if the request is still waiting after a few seconds.
+          if (this.#hooks.has("Notification")) {
+            const { toolName } = ask.request;
+            const timer = setTimeout(() => {
+              if (this.#pending.has(requestId)) {
+                this.#notify(
+                  "permission_prompt",
+                  `dawg needs your permission to use ${toolName}`,
+                  ask.turnId,
+                );
+              }
+            }, this.#ctx.limits.permissionNotificationMs);
+            timer.unref?.();
+          }
           break;
+        }
         case "question":
           this.#emit("question.asked", {
             turnId: ask.turnId,
@@ -1147,11 +1443,201 @@ export class SessionRuntime {
     }
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Checkpoints and rewind (../checkpoints, ./rewind.ts)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * One checkpoint per prompt in the conversation, oldest first: when it was sent, what it said,
+   * the files its turn changed, and what restoring files to it would do (`session.checkpoints`).
+   */
+  async checkpoints(): Promise<{ checkpoints: Checkpoint[]; retention: number }> {
+    await this.#checkpoints.idle();
+    const seen = new Map<string, Present>();
+    const out: Checkpoint[] = [];
+    for (const turn of this.#turnsStarted()) {
+      const { tracked, files } = this.#checkpoints.filesOf(turn.turnId);
+      const steps = tracked ? await this.#checkpoints.plan(turn.turnId, seen) : [];
+      out.push({
+        id: turn.turnId,
+        turnId: turn.turnId,
+        time: turn.time,
+        prompt: turn.prompt,
+        tracked,
+        files,
+        restore: steps.map((step) => ({
+          path: step.path,
+          action: step.action,
+          changedOutside: step.changedOutside,
+        })),
+      });
+    }
+    return { checkpoints: out, retention: this.#checkpoints.retention };
+  }
+
+  /** A checkpoint's turn and prompt; `InvalidParams` when the conversation has no such prompt. */
+  checkpoint(checkpointId: string): { turnId: string; prompt: string; time: number } {
+    const turn = this.#turnsStarted().find((t) => t.turnId === checkpointId);
+    if (turn === undefined) {
+      throw new RuntimeError(
+        "InvalidParams",
+        `This conversation has no checkpoint ${checkpointId}; list them again.`,
+      );
+    }
+    return turn;
+  }
+
+  /** The person's prompts, as `turn.started` gave them, oldest first. */
+  #turnsStarted(): { turnId: string; prompt: string; time: number }[] {
+    const turns: { turnId: string; prompt: string; time: number }[] = [];
+    for (const event of this.#log.all()) {
+      if (event.event !== "turn.started") continue;
+      const payload = event.payload as unknown as { turnId: string; time: number; prompt: Prompt };
+      turns.push({
+        turnId: payload.turnId,
+        prompt: promptText(payload.prompt.content) ?? "",
+        time: payload.time,
+      });
+    }
+    return turns;
+  }
+
+  /**
+   * Puts the files back as they were at a checkpoint (rewind's "restore files"). With files
+   * changed outside the file tools since and no `overwrite`, changes nothing and names them.
+   * The model is told at the next safe point which files changed under it.
+   */
+  async restoreFiles(checkpointId: string, overwrite: boolean): Promise<RestoreOutcome> {
+    this.assertRewindable();
+    const turn = this.checkpoint(checkpointId);
+    const outcome = await this.#checkpoints.restore(turn.turnId, { overwrite });
+    const changed = [...outcome.restored, ...outcome.deleted];
+    if (outcome.outcome === "done" && changed.length > 0) {
+      const start = turn.prompt.length > 200 ? `${turn.prompt.slice(0, 199)}…` : turn.prompt;
+      this.#queuedNotes.push({
+        type: "text",
+        text: `The person put files back as they were before their message "${start.replace(/\s+/g, " ").trim()}". These files changed: ${changed.join(", ")}. Read a file again before you edit it; your earlier reads of it are out of date.`,
+      });
+    }
+    return outcome;
+  }
+
+  /**
+   * Summarises the conversation from a checkpoint's prompt on, keeping what is before it (rewind's
+   * "summarise from here"). Starts it and returns; `compaction.*` events report it, and the
+   * session is busy meanwhile. `InvalidState` when an earlier compaction already took that prompt
+   * out of the model's view.
+   */
+  async summarizeFrom(checkpointId: string, focus: string | null): Promise<void> {
+    this.assertRewindable();
+    const turn = this.checkpoint(checkpointId);
+    const seq = promptSeqOf(turn.turnId);
+    const { records } = await this.#ctx.store.read(this.cwd, this.id);
+    const from = seq === null ? null : viewIndexOfRecord(records, seq);
+    const message = from === null ? undefined : this.#writer.snapshot.view[from];
+    if (from === null || message?.role !== "user" || message.kind !== "prompt") {
+      throw new RuntimeError(
+        "InvalidState",
+        "That point was already summarised by an earlier compaction; choose a later one.",
+      );
+    }
+    if (this.#busy !== null) throw new RuntimeError("SessionBusy", "A turn is running.");
+    const controller = new AbortController();
+    let release = () => {};
+    const done = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#busy = { kind: "compaction", controller, done };
+    this.#refreshStatus();
+    void this.#compactNow({
+      trigger: "manual",
+      focus: focus === null || focus.trim() === "" ? null : focus.trim(),
+      turnId: null,
+      signal: controller.signal,
+      from,
+    })
+      .catch(() => {})
+      .finally(() => {
+        this.#busy = null;
+        release();
+        this.#refreshStatus();
+        void this.#saveSidecar();
+      });
+  }
+
+  /**
+   * Rewinding waits for the session to be still: no turn (`SessionBusy`), and no subagent left
+   * working in the background (`InvalidState`), since its changes count in the checkpoints and it
+   * would go on changing files after the rewind. The person stops it, or lets it finish, first.
+   */
+  assertRewindable(): void {
+    this.#assertOpen();
+    if (this.#busy !== null) {
+      throw new RuntimeError("SessionBusy", "Rewinding has to wait until the current turn ends.");
+    }
+    const working = (this.#agents?.list() ?? []).filter(
+      (a) => a.status === "queued" || a.status === "running",
+    );
+    if (working.length > 0) {
+      const names = working.map((a) => `${a.agentId} (${a.agentType})`).join(", ");
+      throw new RuntimeError(
+        "InvalidState",
+        `${working.length === 1 ? "A subagent is" : "Subagents are"} still working in the background: ${names}. Stop ${working.length === 1 ? "it" : "them"} or let ${working.length === 1 ? "it" : "them"} finish, then rewind.`,
+      );
+    }
+  }
+
+  /** Resolves once the file history has saved everything asked of it (before a fork copies it). */
+  checkpointsIdle(): Promise<void> {
+    return this.#checkpoints.idle();
+  }
+
+  /** The session's file history, for tests. */
+  get fileHistory(): CheckpointStore {
+    return this.#checkpoints;
+  }
+
+  /** The project's memory as this session loaded it, or null when auto memory is off. */
+  get memory(): MemoryIndex | null {
+    return this.#memory;
+  }
+
+  /** A failure to save a checkpoint: said once per session, since it repeats. */
+  #checkpointError(message: string, error: unknown): void {
+    if (this.#checkpointErrorShown || this.#closed) return;
+    this.#checkpointErrorShown = true;
+    this.#emit("error", {
+      turnId: this.activeTurnId,
+      error: errorInfo(
+        "storage",
+        `${message} Rewinding may not restore files changed from here on.`,
+        error instanceof Error ? error.message : String(error),
+        false,
+      ),
+    });
+  }
+
+  /** MEMORY.md for a session about to open, or null when auto memory is off for it. */
+  static async #loadMemory(init: RuntimeInit, projectDir: string): Promise<MemoryIndex | null> {
+    if (!init.ctx.autoMemory) return null;
+    if (!(await autoMemoryEnabled(init.settings.files))) return null;
+    try {
+      return await loadMemoryIndex(await memoryDirectory(init.ctx.storeRoot, projectDir));
+    } catch {
+      return null;
+    }
+  }
+
   async #compactNow(input: {
     trigger: "auto" | "manual";
     focus: string | null;
     turnId: string | null;
     signal: AbortSignal;
+    /**
+     * Summarise only the view from this index on, keeping what is before it word for word
+     * (rewind's "summarise from here"). Absent: the whole conversation.
+     */
+    from?: number;
   }): Promise<CompactionOutcome> {
     const ctx = this.#ctx;
     const compactionId = ctx.newId("compaction");
@@ -1180,6 +1666,7 @@ export class SessionRuntime {
         focus: input.focus,
         tasks: this.tasks,
         recentFiles: await this.#recentFiles(),
+        ...(input.from === undefined ? {} : { from: input.from }),
         ...(options.sampling === undefined ? {} : { sampling: options.sampling }),
         ...(options.reasoningEffort === undefined
           ? {}
@@ -1195,9 +1682,21 @@ export class SessionRuntime {
       if (result.usage !== null) this.#usage.recordSide(result.usage);
       // Instruction files are picked up again after compaction (spec, prompt assembly).
       await this.#reloadInstructions();
+      // So are the skills loaded so far, within a budget (../skills).
+      // From a point: the view before it stays as it is, and the summary replaces the rest.
+      const view =
+        input.from === undefined
+          ? result.messages
+          : [
+              ...this.#writer.snapshot.view.slice(0, input.from),
+              partialSummaryNote(result.summary, this.tasks),
+            ];
+      const messages = withSkillsReattached(view, this.#skills, (text) =>
+        ctx.assembler.note({ type: "text", text }),
+      );
       const after = Math.round(
         ctx.estimator.estimate({
-          messages: [this.#prefix.system, ...result.messages],
+          messages: [this.#prefix.system, ...messages],
           tools: this.#prefix.tools,
         }),
       );
@@ -1205,7 +1704,7 @@ export class SessionRuntime {
         trigger: input.trigger,
         ...(input.focus === null ? {} : { focus: input.focus }),
         summary: result.summary,
-        messages: result.messages,
+        messages,
         tokensBefore: before,
         tokensAfter: after,
       });
@@ -1219,6 +1718,9 @@ export class SessionRuntime {
         error: null,
       });
       this.#emitUsage();
+      // SessionStart hooks run again after a compaction (source "compact"); their context
+      // waits for the next safe point.
+      await this.#runSessionStart("compact");
       return { outcome: "completed", summary: result.summary, error: null };
     } catch (error) {
       const interrupted = input.signal.aborted;
@@ -1401,7 +1903,86 @@ export class SessionRuntime {
       externalImports: ctx.externalImports,
     });
     this.#instructionsText = renderInstructions(this.#instructions.files);
-    this.#prefix = ctx.assembler.prefix({ tools: ctx.tools, instructions: this.#instructionsText });
+    this.#prefix = ctx.assembler.prefix({
+      tools: this.#tools,
+      instructions: this.#instructionsText,
+      skills: this.#skills.listing,
+      mcp: this.#mcpSegment,
+      // Memory stays as the session opened, so a compaction keeps the cached prefix.
+      memory: this.#memoryPrompt,
+      ...this.#agentPrefix(),
+    });
+  }
+
+  /**
+   * Decides the session's MCP tools once, before its first request: waits a few seconds for
+   * servers still starting, then adds their tools (or ToolSearch and CallMcpTool) to the list and
+   * their instructions to the prefix. Nothing was sent with the old prefix yet, so no cache is
+   * lost; afterwards the list never changes (../mcp/session-mcp.ts).
+   */
+  async #settleMcp(): Promise<void> {
+    if (this.#mcpSettled) return;
+    this.#mcpSettled = true;
+    const ctx = this.#ctx;
+    const empty = ctx.estimator.estimate({ messages: [], tools: [] });
+    let decision: McpDecision;
+    try {
+      decision = await this.#mcp.decide({
+        contextWindow: this.#contextWindow(),
+        estimate: (tools) =>
+          ctx.estimator.estimate({ messages: [], tools: tools.map(toToolSchema) }) - empty,
+        env: { ...process.env, ...this.#settings.env },
+      });
+    } catch {
+      return; // A failure here leaves the session without MCP tools, not without a turn.
+    }
+    const added = decision.tools.filter((t) => !this.#toolMap.has(t.name));
+    if (added.length === 0 && decision.segment === "") return;
+    this.#tools = [...this.#tools, ...added];
+    this.#toolMap = new Map([...this.#toolMap, ...added.map((t) => [t.name, t] as const)]);
+    this.#mcpSegment = decision.segment;
+    this.#prefix = ctx.assembler.prefix({
+      tools: this.#tools,
+      instructions: this.#instructionsText,
+      skills: this.#skills.listing,
+      mcp: this.#mcpSegment,
+      memory: this.#memoryPrompt,
+    });
+  }
+
+  /** The session's MCP servers: `/mcp`, the composer's resources and prompts. */
+  get mcp(): SessionMcp {
+    return this.#mcp;
+  }
+
+  /** Lends the session's skills what they need: permissions, settings, the window. */
+  #bindSkills(): void {
+    const ctx = this.#ctx;
+    this.#bag.get(SKILLS_STATE_KEY, () => this.#skills);
+    this.#skills.bind({
+      sessionId: this.id,
+      cwd: this.cwd,
+      projectDir: this.projectDir,
+      homeDir: ctx.homeDir,
+      permissions: ctx.permissions,
+      permissionState: () => this.#permissionState(),
+      env: () => this.#settings.env,
+      effort: () => this.#effort,
+      limits: ctx.toolLimits,
+      tokens: (text) =>
+        ctx.estimator.estimate({
+          messages: [{ role: "user", kind: "note", content: [{ type: "text", text }] }],
+          tools: [],
+        }),
+      contextWindow: () => this.#contextWindow(),
+      // Project code in skills runs only with the person's approval (principle 3).
+      allows: (source) => ctx.trust.allows(source, this.projectDir),
+    });
+  }
+
+  /** The session's skills and custom commands, for its slash commands. */
+  get skills(): SessionSkills {
+    return this.#skills;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1412,9 +1993,11 @@ export class SessionRuntime {
    * Stops the running turn, stops background commands, flushes and releases the session file.
    * Safe to call more than once.
    */
-  close(): Promise<void> {
+  close(reason: "clear" | "other" = "other"): Promise<void> {
     if (this.#closing !== null) return this.#closing;
     this.#closing = (async () => {
+      // Its subagents stop first; their requests waiting on the person go with them.
+      await this.#agents?.close().catch(() => {});
       const waitingOn = this.#firstPending()?.ask.kind ?? null;
       if (this.#restoredTurn?.running === false) {
         // Still waiting since it was brought back: it waits on for the next open, as it is.
@@ -1430,6 +2013,11 @@ export class SessionRuntime {
         this.#busy.controller.abort();
         await this.waitForIdle();
       }
+      // SessionEnd hooks, within their documented budget; then background hooks are stopped.
+      this.#clearIdleTimer();
+      if (this.#hooks.has("SessionEnd")) await this.#hooks.sessionEnd(reason).catch(() => {});
+      this.#hooks.close();
+      await this.#mcp.close();
       this.#closed = true;
       if (this.#titleJob !== null) {
         this.#titleJob.controller.abort();
@@ -1495,6 +2083,8 @@ export class SessionRuntime {
     }
     const fresh = check.settings;
     this.#settings = fresh;
+    // Hooks come from the same files, so they change with them (from this turn on).
+    await this.#hooks.reload();
     const listed = new Set(fresh.permissions.allow.map((r) => r.rule));
     this.#rules = {
       allow: [...this.#unsavedAllow.filter((r) => !listed.has(r.rule)), ...fresh.permissions.allow],
@@ -1564,6 +2154,8 @@ export class SessionRuntime {
         : scheduledClient(connection.client, this.#ctx.slots(pool), {
             owner: this.id,
             onQueue: (position) => this.#queued(position),
+            // A fork's first request goes to its parent's slot, where its start is cached.
+            ...(this.#role?.preferSlotOf ? { prefer: this.#role.preferSlotOf } : {}),
           });
     const utility = connection.utility ?? { client: connection.client };
     this.#utility =
@@ -1595,7 +2187,10 @@ export class SessionRuntime {
     let prefix = this.#prefixTokens;
     if (prefix === null || prefix.prefix !== this.#prefix) {
       const system = cost([this.#prefix.system]);
-      const text = this.#instructionsText;
+      // The memory segment counts with the instruction files: both are the project's notes.
+      const text = [this.#instructionsText, this.#memoryPrompt]
+        .filter((t) => t.trim() !== "")
+        .join("\n\n");
       const instructions =
         text === ""
           ? 0
@@ -1699,13 +2294,57 @@ export class SessionRuntime {
 
   /** The oldest request waiting on the person, if any. */
   #firstPending(): PendingEntry | undefined {
-    return this.#pending.values().next().value as PendingEntry | undefined;
+    // A subagent's request is not the session's own turn waiting (it ends with the agent).
+    for (const entry of this.#pending.values()) {
+      if (entry.ask.kind === "permission" && entry.ask.request.agent !== undefined) continue;
+      return entry;
+    }
+    return undefined;
+  }
+
+  /**
+   * One-off requests to the utility model for tools (WebFetch's question about a page): its own
+   * messages and no tools, on the side slot titles use, so the conversation's history and cache
+   * are untouched. Usage is counted as side usage, like titles'.
+   */
+  #utilityModel(): UtilityModel {
+    const target = this.#utility;
+    const endpoint = target.client.endpoint;
+    const weakest = endpoint.template?.reasoningEffortLevels?.[0];
+    const kwargs = this.#ctx.profileFor(endpoint).chatTemplateKwargs;
+    return {
+      contextWindow: Math.max(0, Math.round(endpoint.contextWindow)),
+      complete: async (request) => {
+        let text = "";
+        for await (const event of target.client.stream({
+          messages: [
+            { role: "system", content: request.system },
+            { role: "user", kind: "prompt", content: [{ type: "text", text: request.prompt }] },
+          ],
+          tools: [],
+          maxOutputTokens: request.maxOutputTokens,
+          sampling: { temperature: 0.2 },
+          ...(target.slot === undefined ? {} : { slot: target.slot }),
+          ...(weakest === undefined ? {} : { reasoningEffort: weakest }),
+          ...(kwargs === null ? {} : { extraBody: { chat_template_kwargs: kwargs } }),
+          signal: request.signal,
+        })) {
+          if (event.type === "finished") {
+            text = event.reply.content;
+            this.#usage.recordSide(event.reply.usage);
+          }
+        }
+        return text;
+      },
+    };
   }
 
   #maybeGenerateTitle(): void {
     if (!this.#ctx.generateTitles || this.#titleStarted || this.#closed || this.#closing !== null) {
       return;
     }
+    // A subagent is named by its task's description.
+    if (this.#role !== null) return;
     const text = this.#firstPrompt;
     if (text === null) return;
     this.#titleStarted = true;
@@ -1742,6 +2381,16 @@ export class SessionRuntime {
     const content: ContentPart[] = prompt.content.map((p) => ({ ...p }));
     for (const mention of prompt.mentions) {
       content.push({ type: "text", text: await this.#mentionText(mention) });
+    }
+    // MCP resources mentioned as `@server:scheme://…` are read from their servers.
+    const typed = prompt.content.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
+    const signal = AbortSignal.timeout(this.#mcp.mentionTimeoutMs);
+    for (const text of await this.#mcp.mentionTexts(
+      typed,
+      signal,
+      this.#ctx.limits.mentionMaxChars,
+    )) {
+      content.push({ type: "text", text });
     }
     return content;
   }
@@ -1836,6 +2485,172 @@ export class SessionRuntime {
         }
       }
     }
+    // Skills of folders inside the project load once the agent works there (../skills).
+    for (const e of executed) {
+      for (const file of [...e.touched.read, ...e.touched.written]) {
+        const skills = await this.#skills.forFile(file);
+        if (skills.length > 0) {
+          await this.#appendNote({ type: "text", text: this.#skills.nestedNote(skills) });
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Internals: hooks (../hooks)
+  // -------------------------------------------------------------------------------------------
+
+  /** Notes and requests hooks left: notes for the next safe point, a stop, a new title. */
+  #applyHookEffects(effects: HookEffects): void {
+    for (const text of effects.notes) this.#queuedNotes.push({ type: "text", text });
+    if (effects.stop !== null) this.#hookStop = true;
+    if (effects.title !== null && effects.title !== this.#title && !this.#closed) {
+      void this.rename(effects.title).catch(() => {});
+    }
+  }
+
+  /** SessionStart hooks; their context waits for the first prompt. Never throws. */
+  async #runSessionStart(
+    source: "startup" | "resume" | "clear" | "fork" | "compact",
+  ): Promise<void> {
+    try {
+      if (!this.#hooks.has("SessionStart")) return;
+      const effects = await this.#hooks.sessionStart({ source, model: this.#model });
+      // A stop asked for at session start has no turn to end.
+      this.#applyHookEffects({ ...effects, stop: null });
+    } catch {
+      // A hook that cannot run is reported by its own event; the session carries on.
+    }
+  }
+
+  /**
+   * UserPromptSubmit hooks: the notes they add, or a RuntimeError when one refuses the prompt.
+   * A command arrives as typed ("/deploy staging"), as documented.
+   */
+  async #promptHooks(
+    prompt: Prompt,
+    options: SkillPromptOptions,
+    signal: AbortSignal,
+  ): Promise<string[]> {
+    this.#clearIdleTimer();
+    this.#hookStop = false;
+    this.#hooks.turnStarted();
+    if (!this.#hooks.has("UserPromptSubmit")) return [];
+    const command = options.command ?? null;
+    const text =
+      command === null
+        ? (promptText(prompt.content) ?? "")
+        : `/${command.name}${command.args === "" ? "" : ` ${command.args}`}`;
+    const verdict = await this.#hooks.userPromptSubmit({ text, signal });
+    if (verdict.blocked !== null) {
+      throw new RuntimeError(
+        "InvalidState",
+        `A UserPromptSubmit hook blocked this prompt${verdict.blocked.reason === null ? "." : `: ${verdict.blocked.reason}`}`,
+      );
+    }
+    if (verdict.title !== null && verdict.title !== this.#title) {
+      void this.rename(verdict.title).catch(() => {});
+    }
+    return verdict.notes;
+  }
+
+  /** Whether a handler's `if` rule matches a call, judged as a permission rule. */
+  #ifMatches(toolName: string, input: Record<string, unknown>): (rule: string) => boolean {
+    return (rule) => {
+      const tool = this.#toolMap.get(toolName);
+      if (tool === undefined) return false;
+      try {
+        const subject = tool.permission(input, this.#probeContext());
+        return ifRuleMatches(rule, { toolName, subject }, this.#permissionState());
+      } catch {
+        // The call cannot be judged; the hook runs, as one whose input cannot be split does.
+        return true;
+      }
+    };
+  }
+
+  async #preToolUseHooks(call: HookedCall, signal: AbortSignal): Promise<ToolHookVerdict> {
+    // The model called a tool: the Stop hooks' count of continuations starts again.
+    this.#hooks.toolsRan();
+    if (!this.#hooks.has("PreToolUse")) return { decision: null, reason: null, updatedInput: null };
+    const verdict = await this.#hooks.preToolUse({
+      turnId: call.turnId,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      toolInput: call.input,
+      signal,
+      ifMatches: this.#ifMatches(call.toolName, call.input),
+    });
+    this.#applyHookEffects(verdict);
+    return {
+      decision: verdict.decision,
+      reason: verdict.reason,
+      updatedInput: verdict.updatedInput,
+    };
+  }
+
+  async #postToolUseHooks(
+    call: HookedCall & {
+      content: ContentPart[];
+      display: ToolDisplay | null;
+      durationMs: number | null;
+    },
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!this.#hooks.has("PostToolUse")) return;
+    const effects = await this.#hooks.postToolUse({
+      turnId: call.turnId,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      toolInput: call.input,
+      toolResponse: toolResponse(call.content, call.display),
+      durationMs: call.durationMs,
+      signal,
+      ifMatches: this.#ifMatches(call.toolName, call.input),
+    });
+    this.#applyHookEffects(effects);
+  }
+
+  /** Stop hooks: true when they keep the turn going, with what they said appended. */
+  async #stopHooks(turn: {
+    turnId: string;
+    lastText: string | null;
+    signal: AbortSignal;
+  }): Promise<boolean> {
+    if (this.#hookStop) return false;
+    const note = await this.#hooks.stop({
+      turnId: turn.turnId,
+      lastMessage: turn.lastText,
+      signal: turn.signal,
+    });
+    if (note === null || turn.signal.aborted) return false;
+    // No calls wait for results here, so this is a safe point for the note.
+    await this.#appendNote({ type: "text", text: note });
+    return true;
+  }
+
+  /**
+   * Notification hooks when dawg needs the person: a permission request still unanswered after a
+   * few seconds ("permission_prompt"), or no new prompt a while after a turn ("idle_prompt").
+   */
+  #notify(type: "permission_prompt" | "idle_prompt", message: string, turnId: string | null): void {
+    if (this.#closed || !this.#hooks.has("Notification")) return;
+    void this.#hooks.notification({ type, message, title: "dawg", turnId }).catch(() => {});
+  }
+
+  #clearIdleTimer(): void {
+    if (this.#idleTimer !== null) clearTimeout(this.#idleTimer);
+    this.#idleTimer = null;
+  }
+
+  #scheduleIdleNotification(): void {
+    this.#clearIdleTimer();
+    if (this.#closed || this.#closing !== null || !this.#hooks.has("Notification")) return;
+    this.#idleTimer = setTimeout(() => {
+      this.#idleTimer = null;
+      if (this.#busy === null) this.#notify("idle_prompt", "dawg is waiting for your input", null);
+    }, this.#ctx.limits.idleNotificationMs);
+    this.#idleTimer.unref?.();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1844,11 +2659,15 @@ export class SessionRuntime {
 
   #permissionState(): PermissionState {
     return {
-      mode: this.#mode,
-      rules: this.#rules,
+      // A subagent is judged by its parent's mode and rules, live (../agents).
+      mode: this.#role?.mode() ?? this.#mode,
+      // A skill's allowed and disallowed tools hold until the person's next message.
+      rules: this.#skills.withGrants(this.#role?.rules() ?? this.#rules),
       cwd: this.cwd,
       workingDirectories: [this.cwd, ...this.#dirs],
       homeDir: this.#ctx.homeDir,
+      // The file tools keep the project's memory folder without asking (../memory).
+      memoryDirectories: this.#memory === null ? [] : [this.#memory.directory],
     };
   }
 
@@ -1945,6 +2764,8 @@ export class SessionRuntime {
         });
       },
       saveOutput: (name, content) => this.#writer.saveOutput(name, content),
+      services: this.#ctx.services(),
+      utility: this.#utilityModel(),
     };
     if (state.rules.deny.length === 0) return ctx;
     return { ...ctx, readDenied: (file: string) => readDeniedBy(file, state) !== null };
@@ -2031,18 +2852,25 @@ export class SessionRuntime {
     const ctx = this.#ctx;
     const writer = this.#writer;
     return {
-      tools: ctx.toolMap,
+      tools: this.#toolMap,
       permissions: ctx.permissions,
       limits: ctx.limits,
-      loopLimits: ctx.limits,
+      loopLimits:
+        this.#role?.maxTurns != null
+          ? { ...ctx.limits, maxRequestsPerTurn: this.#role.maxTurns }
+          : ctx.limits,
       emit: this.#emit,
       now: ctx.clock,
       newId: ctx.newId,
       permissionState: () => this.#permissionState(),
       probeContext: () => this.#probeContext(),
-      canAskPermission: () => this.#capabilities.permissionPrompts,
+      canAskPermission: () =>
+        this.#role?.canAskPermission() ?? this.#capabilities.permissionPrompts,
+      // A subagent's prompts are raised in its parent, labelled with it.
       askPermission: (request, turnId, signal) =>
-        this.#raise<PermissionResponse>({ kind: "permission", turnId, request }, signal),
+        this.#role !== null
+          ? this.#role.askPermission(request, turnId, signal)
+          : this.#raise<PermissionResponse>({ kind: "permission", turnId, request }, signal),
       restoredPermission: (toolCallId) => {
         const restored = this.#takeRestored("permission", toolCallId);
         if (restored === null || restored.ask.kind !== "permission") return null;
@@ -2051,7 +2879,8 @@ export class SessionRuntime {
           wait: (signal) => this.#awaitRestored<PermissionResponse>(restored, signal),
         };
       },
-      allowAlways: (rules) => this.#allowAlways(rules),
+      allowAlways: (rules) =>
+        this.#role !== null ? this.#role.allowAlways(rules) : this.#allowAlways(rules),
       toolContext: (call) => this.#toolContext(call),
       appendResult: async (message, extras) => {
         if (this.#frozen) return;
@@ -2075,7 +2904,133 @@ export class SessionRuntime {
       recordUsage: (reply, malformed, length) => this.#recordUsage(reply, malformed, length),
       makeRoom: (turnId, signal, check) => this.#makeRoom(turnId, signal, check),
       sleep,
+      preToolUse: (call, signal) => this.#preToolUseHooks(call, signal),
+      postToolUse: (call, signal) => this.#postToolUseHooks(call, signal),
+      onStop: (turn) =>
+        this.#role !== null ? this.#subagentStopHooks(this.#role, turn) : this.#stopHooks(turn),
+      hookStopRequested: () => this.#hookStop,
+      // A subagent's changes go to its parent's checkpoint (../agents/role.ts).
+      fileChanges:
+        this.#role?.fileChanges === undefined
+          ? {
+              before: (turnId, paths) => this.#checkpoints.beforeChange(turnId, paths),
+              after: (_turnId, paths) => this.#checkpoints.afterChange(paths),
+            }
+          : {
+              before: (_turnId, paths) =>
+                this.#role?.fileChanges?.before(paths) ?? Promise.resolve(),
+              after: (_turnId, paths) => this.#role?.fileChanges?.after(paths) ?? Promise.resolve(),
+            },
     };
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Internals: subagents (../agents)
+  // -------------------------------------------------------------------------------------------
+
+  /** The session's subagents; null in a subagent's own session. */
+  get agents(): SubagentManager | null {
+    return this.#agents;
+  }
+
+  /** A subagent's system message replaces the core instructions with its own (../agents). */
+  #agentPrefix(): { agent?: string } {
+    const text = this.#role?.systemText ?? null;
+    return text === null ? {} : { agent: text };
+  }
+
+  /** SubagentStop hooks (fired by the parent) when a subagent ends a reply: true keeps it going. */
+  async #subagentStopHooks(
+    role: SubagentRole,
+    turn: { turnId: string; lastText: string | null; signal: AbortSignal },
+  ): Promise<boolean> {
+    const note = await role.onStop(turn);
+    if (note === null || turn.signal.aborted) return false;
+    // No calls wait for results here, so this is a safe point for the note.
+    await this.#appendNote({ type: "text", text: note });
+    return true;
+  }
+
+  /** Lends a main session's subagents what they need of it. */
+  #bindAgents(): void {
+    const agents = this.#agents;
+    if (agents === null) return;
+    const ctx = this.#ctx;
+    const host: AgentHost = {
+      sessionId: this.id,
+      cwd: this.cwd,
+      projectDir: this.projectDir,
+      sessionDir: this.#sessionDir,
+      hooks: this.#hooks,
+      emit: this.#emit,
+      now: ctx.clock,
+      mode: () => this.#mode,
+      modeAllowed: (mode) => this.#modeAllowed(mode),
+      permissionState: () => this.#permissionState(),
+      canAskPermission: () => this.#capabilities.permissionPrompts,
+      askPermission: (request, turnId, signal) =>
+        this.#raise<PermissionResponse>({ kind: "permission", turnId, request }, signal),
+      allowAlways: (rules) => this.#allowAlways(rules),
+      activeTurnId: () => this.activeTurnId,
+      busy: () => this.#busy !== null,
+      closed: () => this.#closed || this.#closing !== null,
+      queueNote: (text) => {
+        this.#queuedNotes.push({ type: "text", text });
+      },
+      wake: async (text) => {
+        await this.prompt({ content: [{ type: "text", text }] });
+      },
+      subscribe: (listener) => this.#log.subscribe(listener),
+      storedEvents: () => this.#log.all(),
+      allows: (source) => ctx.trust.allows(source, this.projectDir),
+      scheduler: () =>
+        this.#connection.pool === undefined ? null : ctx.slots(this.#connection.pool),
+      forkBasis: () => ({
+        prefix: this.#prefix,
+        tools: this.#tools,
+        toolMap: this.#toolMap,
+        view: this.#writer.snapshot.view,
+      }),
+      offeredTools: () => this.#baseTools,
+      skills: () => this.#skills,
+      sessionContext: async (cwd) => ({
+        ...ctx.assembler.sessionContext(
+          await ctx.environment({ cwd, additionalDirectories: this.#dirs, now: ctx.clock() }),
+        ),
+        kind: "note" as const,
+      }),
+      note: (text) => ctx.assembler.note({ type: "text", text }),
+      fileChanges: (turnId, agent) => ({
+        before: (paths) => this.#checkpoints.beforeChange(turnId, paths, agent),
+        after: (paths) => this.#checkpoints.afterChange(paths),
+      }),
+      open: (input) =>
+        openChildRuntime({
+          ctx,
+          start: (init) => SessionRuntime.start(init),
+          parent: {
+            sessionId: this.id,
+            sessionDir: this.#sessionDir,
+            projectDir: this.projectDir,
+            model: this.#model,
+            effort: this.#effort,
+            additionalDirectories: this.#dirs,
+          },
+          connection: this.#connection,
+          // Its permission prompts go to whoever answers the parent's; nobody answers its
+          // questions or plans (the tools that ask are not given to it).
+          capabilities: {
+            permissionPrompts: this.#capabilities.permissionPrompts,
+            questions: false,
+            planApproval: false,
+          },
+          childId: input.childId,
+          cwd: input.cwd,
+          create: input.create,
+          role: input.role,
+        }),
+    };
+    agents.bind(host);
   }
 
   /** Reads the session's runtime.json, for tests and tools. */

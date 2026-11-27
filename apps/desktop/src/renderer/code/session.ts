@@ -25,6 +25,8 @@ export interface SessionFolders {
   cwd: string;
   projectDir: string;
   additionalDirectories: string[];
+  /** Also the project's memory folder, since `/memory` asked for it (main finds where it is). */
+  memory?: boolean;
 }
 
 const NO_DIRECTORIES: string[] = [];
@@ -36,6 +38,7 @@ export function useSessionFolders(sessionId: SessionId): SessionFolders | null {
   const additionalDirectories = useAppStore(
     (state) => state.sessions[sessionId]?.additionalDirectories ?? NO_DIRECTORIES,
   );
+  const memory = useAppStore((state) => state.ui.memoryShown[sessionId] === true);
   const memo = useRef<SessionFolders | null>(null);
   if (cwd === null || projectDir === null) return null;
   const previous = memo.current;
@@ -43,11 +46,12 @@ export function useSessionFolders(sessionId: SessionId): SessionFolders | null {
     previous &&
     previous.cwd === cwd &&
     previous.projectDir === projectDir &&
-    previous.additionalDirectories === additionalDirectories
+    previous.additionalDirectories === additionalDirectories &&
+    (previous.memory ?? false) === memory
   ) {
     return previous;
   }
-  memo.current = { cwd, projectDir, additionalDirectories };
+  memo.current = { cwd, projectDir, additionalDirectories, ...(memory ? { memory } : {}) };
   return memo.current;
 }
 
@@ -82,6 +86,7 @@ export function useWorkspace(
         cwd: folders.cwd,
         projectDir: folders.projectDir,
         additionalDirectories: folders.additionalDirectories,
+        ...(folders.memory ? { memory: true } : {}),
       })
       .then(
         (info) => {

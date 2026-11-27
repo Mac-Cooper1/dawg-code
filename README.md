@@ -11,6 +11,13 @@ A Mac desktop coding agent that runs local models. Download a model with one cli
 
 dawg-code reads Claude Code configuration files (`CLAUDE.md`, `.claude/skills`, `.claude/agents`, `.claude/commands`, hooks and `.mcp.json`) so an existing setup carries over.
 
+Where a project's own files could widen what dawg may do, dawg is stricter than Claude Code on purpose. The sandbox for shell commands (`sandbox` in settings) is one such place:
+
+- A project's shared settings (`.claude/settings.json`, `.dawg/settings.json`) cannot let sandboxed commands run without asking, cannot loosen the sandbox's isolation (local ports, sockets, system services, weaker network or nested isolation), and can open writes only inside the project. Your own settings, and the project's personal file, can.
+- Hosts a project's files let sandboxed commands reach (`sandbox.network.allowedDomains`, and `WebFetch(domain:…)` allow rules), in the shared or the personal file, wait for your approval of the project's setup, like its hooks and MCP servers. Your own settings' hosts do not.
+
+`dawg compat` names each setting dawg ignores, and why.
+
 This project is independent. It is not affiliated with, endorsed by, or sponsored by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic, PBC.
 
 ## Development

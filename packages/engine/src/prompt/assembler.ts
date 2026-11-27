@@ -4,7 +4,11 @@
  *
  *   1. core instructions        (core.ts; changes only with an app update)
  *   2. tool guidance            (guidance.ts; changes only when the tool set changes)
- *   3. instruction files        (the caller's rendered text; absent when empty)
+ *   3. skill listing            (../skills/listing.ts; fixed for a session; absent when empty)
+ *   3b. MCP servers             (../mcp/prompt.ts; fixed for a session; absent without servers)
+ *   4. instruction files        (the caller's rendered text; absent when empty)
+ *   5. memory                   (../memory: how to keep it, and MEMORY.md as the session opened;
+ *                                fixed for a session; absent when auto memory is off)
  *
  * Segments are joined by one blank line. The output depends only on the tools (names,
  * descriptions, schemas, in the order given) and the instruction text: nothing is read from the
@@ -47,16 +51,25 @@ export function toToolSchema(tool: AnyTool): ToolSchema {
 export function buildPromptPrefix(input: {
   tools: readonly AnyTool[];
   instructions: string;
+  skills?: string;
+  mcp?: string;
+  memory?: string;
+  /** A subagent's own instructions, in place of the core instructions (../agents). */
+  agent?: string;
 }): PromptPrefix {
   const seen = new Set<string>();
   for (const tool of input.tools) {
     if (seen.has(tool.name)) throw new TypeError(`Two tools are named ${tool.name}.`);
     seen.add(tool.name);
   }
-  const segments = [CORE_INSTRUCTIONS];
+  const agent = input.agent ?? "";
+  const segments = [agent !== "" ? agent : CORE_INSTRUCTIONS];
   const guidance = renderToolGuidance(seen);
   if (guidance !== "") segments.push(guidance);
+  if (input.skills !== undefined && input.skills.trim() !== "") segments.push(input.skills);
+  if (input.mcp !== undefined && input.mcp.trim() !== "") segments.push(input.mcp);
   if (input.instructions.trim() !== "") segments.push(input.instructions);
+  if (input.memory !== undefined && input.memory.trim() !== "") segments.push(input.memory);
   return {
     system: { role: "system", content: segments.join(SEGMENT_SEPARATOR) },
     tools: input.tools.map(toToolSchema),

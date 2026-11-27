@@ -1,8 +1,10 @@
+import { Switch } from "radix-ui";
 import { useId, useState } from "react";
 import type {
   AddedModelFile,
   CatalogModel,
   DownloadState,
+  HelperInfo,
   ModelOption,
   ModelsState,
   ServerInfo,
@@ -17,18 +19,24 @@ import {
   catalogFacts,
   downloadAnnouncement,
   downloadLine,
+  downloadPercent,
   originTag,
   serverFacts,
+  shortContext,
 } from "../models/text.ts";
 import {
   findCatalogEntry,
   foundInName,
+  helperDownload,
+  isHelperId,
+  isHelperInstalled,
   isRunningDownload,
   modelName,
   serverName,
 } from "../state/models.ts";
 import type { AppActions } from "../state/types.ts";
 import { Button, ConfirmDialog, Icon, IconButton, Spinner, Tag } from "../ui/index.ts";
+import switches from "./GeneralPage.module.css";
 import styles from "./Settings.module.css";
 
 export type ModelsPageActions = Pick<
@@ -38,6 +46,7 @@ export type ModelsPageActions = Pick<
   | "setDefaultModel"
   | "removeModel"
   | "setIdleUnload"
+  | "setHelperEnabled"
   | "downloadModel"
   | "pauseDownload"
   | "cancelDownload"
@@ -359,6 +368,236 @@ function CatalogRow(props: { entry: CatalogModel; actions: ModelsPageActions }) 
   );
 }
 
+/** The helper's state as a tag: where it stands, in a word or two. */
+function HelperTag(props: { helper: HelperInfo }) {
+  switch (props.helper.state) {
+    case "available":
+      return <Tag>Not downloaded</Tag>;
+    case "downloading":
+      return <Tag tone="accent">Downloading</Tag>;
+    case "paused":
+      return <Tag>Paused</Tag>;
+    case "failed":
+      return <Tag tone="red">Download failed</Tag>;
+    case "ready":
+      return <Tag tone="green">Ready</Tag>;
+    case "starting":
+      return <Tag tone="accent">Starting</Tag>;
+    case "running":
+      return <Tag tone="green">Running</Tag>;
+    case "error":
+      return <Tag tone="red">Could not start</Tag>;
+  }
+}
+
+/** One line on what the helper is doing now, for the states that have more to say. */
+function helperStateLine(helper: HelperInfo): string | null {
+  if (!helper.enabled) {
+    return helper.message ?? "Turned off: the main model answers titles and page summaries.";
+  }
+  switch (helper.state) {
+    case "ready":
+      return "Downloaded. It starts with your model.";
+    case "starting":
+      return helper.message ?? "Loading into memory";
+    case "running":
+      return helper.runtimeMemoryBytes === null
+        ? "Answering titles and page summaries"
+        : `Answering titles and page summaries · using ${formatMemory(helper.runtimeMemoryBytes)} of memory`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Settings → Models' helper section: the tiny model that writes session titles and reads web
+ * pages, so the main model stays on the conversation. Its facts, its state, Download or Remove,
+ * and the switch that sends those side requests to the main model instead.
+ */
+function HelperSection(props: {
+  state: ModelsState;
+  helper: HelperInfo;
+  actions: ModelsPageActions;
+  onCancel(download: DownloadState): void;
+  onRemove(): void;
+}) {
+  const { state, helper, actions } = props;
+  const headingId = useId();
+  const noteId = useId();
+  const switchId = useId();
+  const switchTitleId = useId();
+  const switchDescriptionId = useId();
+  const download = helperDownload(state);
+  const installed = isHelperInstalled(helper);
+  const downloading =
+    !installed &&
+    download !== undefined &&
+    download.phase !== "done" &&
+    helper.state !== "available";
+  const line = helperStateLine(helper);
+  const name = helper.displayName;
+
+  return (
+    <section aria-labelledby={headingId}>
+      <h2 id={headingId} className={styles.h2}>
+        Helper model
+      </h2>
+      <div className={modelStyles.card}>
+        <div className={`${modelStyles.row} ${modelStyles.rowTop}`}>
+          <span className={modelStyles.statusMark} aria-hidden="true">
+            {helper.state === "starting" ? (
+              <Spinner size={10} />
+            ) : (
+              <span
+                className={modelStyles.dot}
+                data-state={
+                  helper.state === "running"
+                    ? "ready"
+                    : helper.state === "error"
+                      ? "error"
+                      : "stopped"
+                }
+              />
+            )}
+          </span>
+          <div className={modelStyles.grow}>
+            <div className={modelStyles.titleLine}>
+              <span className={modelStyles.name}>{name}</span>
+              <HelperTag helper={helper} />
+              {!installed && !helper.fits && <Tag tone="amber">Does not fit</Tag>}
+              {!installed && helper.foundIn !== null && (
+                <Tag>Found in {foundInName(helper.foundIn)}</Tag>
+              )}
+            </div>
+            <p className={modelStyles.meta}>
+              A small model that writes session titles and summarises web pages, so your main model
+              stays free for the conversation.
+            </p>
+            <p className={modelStyles.meta}>
+              {formatBytes(helper.sizeBytes)} · uses about {formatMemory(helper.memoryBytes)} of
+              memory · {shortContext(helper.contextWindow)} tokens · {helper.licence.spdx} ·{" "}
+              <button
+                type="button"
+                className={modelStyles.link}
+                aria-label={`Read the ${helper.licence.spdx} licence of ${name}`}
+                onClick={() => run(actions.openExternal(helper.licence.url))}
+              >
+                Licence
+              </button>
+            </p>
+            {downloading && download && (
+              <>
+                <div className={modelStyles.downloadBar}>
+                  <ProgressBar download={download} label={`Downloading ${name}`} />
+                </div>
+                {download.phase === "failed" ? (
+                  <p className={modelStyles.warning} role="alert">
+                    <Icon name="alert" size={14} />
+                    {downloadLine(download)}
+                  </p>
+                ) : (
+                  <p className={modelStyles.meta}>
+                    {downloadPercent(download)} · {downloadLine(download)}
+                  </p>
+                )}
+                {/* Read out as the phase changes and every ten percent. */}
+                <p className="vh" aria-live="polite">
+                  {download.phase === "failed" ? "" : `${name}: ${downloadAnnouncement(download)}`}
+                </p>
+              </>
+            )}
+            {helper.state === "error" ? (
+              <p className={modelStyles.warning} role="status">
+                <Icon name="alert" size={14} />
+                {helper.message ?? "It could not start, so the main model answers side requests."}
+              </p>
+            ) : (
+              line !== null && <p className={modelStyles.meta}>{line}</p>
+            )}
+            {!installed && !helper.fits && helper.fitNote && (
+              <p id={noteId} className={modelStyles.warning}>
+                {helper.fitNote}
+              </p>
+            )}
+          </div>
+          <div className={modelStyles.buttons}>
+            {installed ? (
+              <Button variant="ghost" aria-label={`Remove ${name}`} onClick={props.onRemove}>
+                Remove
+              </Button>
+            ) : downloading && download ? (
+              <>
+                {isRunningDownload(download) && (
+                  <Button
+                    disabled={download.phase === "verifying"}
+                    aria-label={`Pause downloading ${name}`}
+                    onClick={() => run(actions.pauseDownload(helper.id))}
+                  >
+                    Pause
+                  </Button>
+                )}
+                {(download.phase === "paused" || download.phase === "failed") && (
+                  <Button onClick={() => run(actions.downloadModel(helper.id))}>
+                    {download.phase === "failed" ? "Retry" : "Resume"}
+                  </Button>
+                )}
+                {(isRunningDownload(download) || download.phase === "paused") && (
+                  <Button
+                    variant="ghost"
+                    disabled={download.phase === "verifying"}
+                    onClick={() => props.onCancel(download)}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </>
+            ) : (
+              <>
+                {helper.fits && helper.foundIn !== null && (
+                  <Button onClick={() => run(actions.adoptExistingModel(helper.id))}>
+                    Use the copy from {foundInName(helper.foundIn)}
+                  </Button>
+                )}
+                <Button
+                  disabled={!helper.fits}
+                  aria-label={`Download ${name}, ${formatBytes(helper.sizeBytes)}`}
+                  aria-describedby={!helper.fits && helper.fitNote ? noteId : undefined}
+                  onClick={() => run(actions.downloadModel(helper.id))}
+                >
+                  Download
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+        <div className={modelStyles.row}>
+          {/* The whole text toggles the switch; its name stays the title alone. */}
+          <label htmlFor={switchId} className={switches.switchText}>
+            <span id={switchTitleId} className={switches.switchTitle}>
+              Use the helper for side requests
+            </span>
+            <span id={switchDescriptionId} className={switches.switchDescription}>
+              {helper.enabled
+                ? "Titles and page summaries go to the helper model."
+                : "The main model answers titles and page summaries."}
+            </span>
+          </label>
+          <Switch.Root
+            id={switchId}
+            className={switches.switch}
+            checked={helper.enabled}
+            onCheckedChange={(checked) => run(actions.setHelperEnabled(checked))}
+            aria-labelledby={switchTitleId}
+            aria-describedby={switchDescriptionId}
+          >
+            <Switch.Thumb className={switches.thumb} />
+          </Switch.Root>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 const SERVER_NOTES: Record<ServerInfo["kind"], string> = {
   ollama: "No prompt-cache control, so long sessions answer more slowly",
   lmstudio: "No prompt-cache control, so long sessions answer more slowly",
@@ -444,6 +683,7 @@ export function ModelsPage(props: ModelsPageProps) {
   const [deleting, setDeleting] = useState<ModelOption | null>(null);
   const [removingServer, setRemovingServer] = useState<ServerInfo | null>(null);
   const [cancelling, setCancelling] = useState<DownloadState | null>(null);
+  const [removingHelper, setRemovingHelper] = useState(false);
   const [added, setAdded] = useState<AddedModelFile | null>(null);
 
   if (!state) {
@@ -456,7 +696,11 @@ export function ModelsPage(props: ModelsPageProps) {
   }
 
   const bundled = state.installed.filter((option) => option.source === "bundled");
-  const downloads = state.downloads.filter((download) => download.phase !== "cancelled");
+  // The helper's download shows in its own section.
+  const downloads = state.downloads.filter(
+    (download) => download.phase !== "cancelled" && !isHelperId(state, download.modelId),
+  );
+  const helper = state.helper;
   const available = state.catalog.filter(
     (entry) =>
       entry.state !== "installed" &&
@@ -523,6 +767,16 @@ export function ModelsPage(props: ModelsPageProps) {
           </span>
         </div>
       </div>
+
+      {helper && (
+        <HelperSection
+          state={state}
+          helper={helper}
+          actions={actions}
+          onCancel={setCancelling}
+          onRemove={() => setRemovingHelper(true)}
+        />
+      )}
 
       {downloads.length > 0 && (
         <>
@@ -621,6 +875,25 @@ export function ModelsPage(props: ModelsPageProps) {
         <p>
           dawg forgets the server{removingServer?.hasKey ? " and the key in your Keychain" : ""}.
           Sessions that use its models need another model.
+        </p>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={removingHelper}
+        onOpenChange={(open) => {
+          if (!open) setRemovingHelper(false);
+        }}
+        title={`Remove ${helper?.displayName ?? "the helper model"}?`}
+        confirmLabel="Remove"
+        destructive
+        onConfirm={() => {
+          if (helper) run(actions.removeModel(helper.id));
+          setRemovingHelper(false);
+        }}
+      >
+        <p>
+          {helper?.state === "running" ? "It stops, and the" : "The"} copy dawg downloaded (
+          {formatBytes(helper?.sizeBytes ?? 0)}) is deleted from this Mac. Titles and page summaries
+          go to the main model until you download it again.
         </p>
       </ConfirmDialog>
       <CancelDownloadDialog

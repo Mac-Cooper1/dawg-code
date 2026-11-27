@@ -1,0 +1,173 @@
+/* Settings → Project setup. Colours come only from tokens.css, so both themes follow. */
+
+.page {
+  max-width: 820px;
+}
+
+/* One-line error notice, as on Settings → Permissions. */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin: 16px 0 0;
+  padding: 3px 6px 3px 12px;
+  border-radius: var(--radius);
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: var(--text-sm);
+}
+
+.noticeText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.projectRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 20px;
+}
+
+.fieldLabel {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.select {
+  height: 28px;
+  max-width: 100%;
+  padding: 0 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+/* What the report counts, and the consent the setup's code has. */
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+}
+
+.counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.approval {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.approval svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.approvalText {
+  flex: 1;
+  min-width: 200px;
+}
+
+/* One section of the report: Loaded, Needs approval, and so on. */
+.section {
+  margin-top: 28px;
+}
+
+.h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.count {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.sectionLead {
+  margin: 2px 0 10px;
+  color: var(--ink-2);
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+}
+
+.item + .item {
+  border-top: 1px solid var(--line);
+}
+
+.itemLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.where {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.path {
+  font-size: var(--text-code);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 0;
+  padding: 0 0 0 16px;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.note {
+  overflow-wrap: anywhere;
+}

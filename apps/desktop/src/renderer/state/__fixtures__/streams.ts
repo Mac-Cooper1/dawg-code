@@ -11,6 +11,7 @@ import {
   parseEvent,
   type SessionSnapshot,
   type SessionSummary,
+  type SubagentInfo,
   type Usage,
 } from "@dawg/protocol";
 import { contextBreakdown } from "../../../mock-engine/usage.ts";
@@ -142,6 +143,33 @@ export function makeBackgroundTask(
     startedAt: T0,
     endedAt: null,
     outputBytes: 0,
+    ...overrides,
+  };
+}
+
+/** A subagent as the engine reports it: an Explore agent running for call c1 in turn t1. */
+export function makeSubagent(
+  agentId: string,
+  overrides: Partial<SubagentInfo> = {},
+): SubagentInfo {
+  return {
+    agentId,
+    sessionId: `s1-${agentId}`,
+    agentType: "Explore",
+    description: "Find the config loader",
+    toolCallId: "c1",
+    turnId: "t1",
+    fork: false,
+    background: false,
+    status: "running",
+    queuePosition: null,
+    worktree: null,
+    startedAt: T0,
+    endedAt: null,
+    toolUses: 2,
+    activity: "Read src/config.ts",
+    result: null,
+    error: null,
     ...overrides,
   };
 }

@@ -417,6 +417,16 @@
   font-size: var(--text-code);
 }
 
+/* "personal" or "project" beside a custom command's or skill's name. */
+.commandSource {
+  height: 16px;
+  margin-left: 6px;
+  padding: 0 6px;
+  vertical-align: 1px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 /* Context meter */
 
 .ring {

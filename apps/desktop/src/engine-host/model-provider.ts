@@ -14,9 +14,16 @@
  * - The session's model is the id the grant names ("qwen3.8-27b-q8", "ollama/qwen3:32b"). The
  *   engine reads a session's model id from `client.endpoint.model`, so the client shows the
  *   grant's id there; requests still carry `endpoint.model`, the server's own name for it.
- * - Grants for the bundled runtime carry its slots. Every connection to it gets the same two pool
- *   objects, made from the first such grant and kept for the host's life, so the engine schedules
- *   every session on the same slots. Servers get no pool: their requests go out at once.
+ * - Grants for the bundled runtime carry its slots. Every connection to it gets the same
+ *   conversation pool object, made from the first such grant and kept for the host's life, so the
+ *   engine schedules every session on the same slots. Servers get no pool: their requests go out
+ *   at once.
+ * - Side requests (titles, WebFetch's page summaries) go through `sideClient`: to the helper model
+ *   while the model's latest grant carries one (on the helper's slot), otherwise where they always
+ *   went (the bundled runtime's side slot, or the server). Each request looks at the grant then,
+ *   so a helper that starts later, restarts on another port or is turned off is followed. A helper
+ *   that does not answer is given up on for that request (the main model answers it, and the log
+ *   says so), and the next request asks main where things are.
  */
 import {
   createModelClient,
@@ -28,10 +35,18 @@ import {
   type ModelRequest,
   type ModelStreamEvent,
   RuntimeError,
+  type SideRoute,
   type SlotPool,
+  SlotScheduler,
+  sideClient,
 } from "@dawg/engine";
 import type { Endpoint } from "@dawg/models";
-import type { HostToMain, MainToHost, ModelGrant } from "../shared/engine-host-messages.ts";
+import type {
+  HelperGrant,
+  HostToMain,
+  MainToHost,
+  ModelGrant,
+} from "../shared/engine-host-messages.ts";
 
 /** Fifteen minutes: room to load the largest model the app offers from a slow disk. */
 export const DEFAULT_GRANT_TIMEOUT_MS = 15 * 60_000;
@@ -47,6 +62,8 @@ export interface ParentModelProviderOptions {
   log?(message: string): void;
   /** For tests. Default `createModelClient`. */
   createClient?(endpoint: Endpoint): ModelClient;
+  /** For tests: how long the helper may take to start answering. Default 60 s. */
+  helperFirstEventTimeoutMs?: number;
 }
 
 export interface ParentModelProvider extends ModelProvider {
@@ -56,7 +73,7 @@ export interface ParentModelProvider extends ModelProvider {
   describe(modelId: string): EndpointDescription | null;
   /** The server's own name for a model (its latest grant's `endpoint.model`), or null. */
   serverName(modelId: string): string | null;
-  /** The engine profile main named for a model (a catalog model's), or null. */
+  /** The engine profile main named for a model (a catalog model's, or the helper's), or null. */
   catalogProfile(modelId: string): string | null;
   /** Ends every wait with an error. Later requests fail at once. */
   close(): void;
@@ -89,6 +106,15 @@ interface Held {
   newestAtArrival: number;
   /** A request could not reach the server: ask main again before the next one. */
   unreachable: boolean;
+  /** The helper model, when the grant carries one. */
+  helper: HeldHelper | null;
+}
+
+interface HeldHelper {
+  grant: HelperGrant;
+  /** Its endpoint as the engine sees it, named by the helper's model id. */
+  shown: Endpoint;
+  client: ModelClient;
 }
 
 interface Waiting {
@@ -117,7 +143,14 @@ export function createParentModelProvider(
   const waitingFor = new Map<string, Waiting>();
   /** The clients handed to sessions, one per model id, for the host's life. */
   const clients = new Map<string, ModelClient>();
+  /** The side-request clients handed to sessions, one per model id, for the host's life. */
+  const sideClients = new Map<string, ModelClient>();
+  /** The latest helper grant by the helper's model id, for its profile and server name. */
+  const helpers = new Map<string, HelperGrant>();
   let pools: { conversation: SlotPool; utility: SlotPool } | null = null;
+  /** The bundled runtime's side slot and the helper's slot, scheduled here for every session. */
+  let mainSide: SlotScheduler | null = null;
+  let helperSide: SlotScheduler | null = null;
   let warnedSlots = false;
   let epoch = 0;
   let newest = 0;
@@ -191,6 +224,8 @@ export function createParentModelProvider(
 
   function store(grant: ModelGrant): Held {
     newest = Math.max(newest, grant.generation);
+    const helper = grant.helper;
+    if (helper !== undefined) helpers.set(helper.modelId, helper);
     const entry: Held = {
       grant,
       shown: { ...grant.endpoint, model: grant.modelId },
@@ -198,9 +233,82 @@ export function createParentModelProvider(
       epoch,
       newestAtArrival: newest,
       unreachable: false,
+      helper:
+        helper === undefined
+          ? null
+          : {
+              grant: helper,
+              shown: { ...helper.endpoint, model: helper.modelId },
+              client: makeClient(helper.endpoint),
+            },
     };
     held.set(grant.modelId, entry);
     return entry;
+  }
+
+  /** The scheduler for the helper's slots, made from the first helper grant. */
+  function helperScheduler(helper: HelperGrant): SlotScheduler {
+    helperSide ??= new SlotScheduler(helper.slots);
+    return helperSide;
+  }
+
+  /**
+   * Where a model's side requests go: the helper while its current grant has one, and the main
+   * model's side slot (or its server) as the fallback. The fallback client is the session's own
+   * model client, so it asks main again when its grant is out of date.
+   */
+  function sideClientFor(modelId: string): ModelClient {
+    const existing = sideClients.get(modelId);
+    if (existing !== undefined) return existing;
+    const latest = (): Held => {
+      const entry = held.get(modelId);
+      if (entry === undefined) throw new Error(`No grant for ${modelId}.`);
+      return entry;
+    };
+    const client = sideClient({
+      endpoint: () => {
+        const entry = latest();
+        return entry.helper?.shown ?? entry.shown;
+      },
+      routes: async (signal) => {
+        let entry: Held;
+        try {
+          entry = await obtain(modelId, signal);
+        } catch (error) {
+          throw toModelError(error);
+        }
+        const slots = entry.grant.slots;
+        if (slots !== undefined) mainSide ??= new SlotScheduler(slots.utility);
+        // The grant just obtained, not `clientFor`: a fallback marks it out of date for the next
+        // request, and this one must not wait on main for that.
+        const main: SideRoute = {
+          client: heldClient(entry),
+          ...(slots !== undefined && mainSide !== null ? { scheduler: mainSide } : {}),
+        };
+        const helper = entry.helper;
+        return {
+          helper:
+            helper === null
+              ? null
+              : { client: helper.client, scheduler: helperScheduler(helper.grant) },
+          main,
+        };
+      },
+      onFallback: (problem) => {
+        // Main is asked where the helper is before the next request (it may have restarted on
+        // another port, or stopped for good).
+        const entry = held.get(modelId);
+        if (entry !== undefined) entry.unreachable = true;
+        log(
+          `The helper model did not answer (${problem}); this side request went to ${modelId} instead.`,
+        );
+      },
+      ...(options.helperFirstEventTimeoutMs === undefined
+        ? {}
+        : { firstEventTimeoutMs: options.helperFirstEventTimeoutMs }),
+    });
+    sideClients.set(modelId, client);
+    return client;
   }
 
   function poolsFor(grant: ModelGrant): { conversation: SlotPool; utility: SlotPool } | null {
@@ -261,6 +369,10 @@ export function createParentModelProvider(
     } catch (error) {
       throw toModelError(error);
     }
+    yield* streamHeld(entry, request);
+  }
+
+  async function* streamHeld(entry: Held, request: ModelRequest): AsyncGenerator<ModelStreamEvent> {
     try {
       yield* entry.client.stream(request);
     } catch (error) {
@@ -268,6 +380,15 @@ export function createParentModelProvider(
       if (error instanceof ModelError && error.kind === "connection") entry.unreachable = true;
       throw error;
     }
+  }
+
+  /** A client for one grant as it stands, showing the model id like `clientFor`. */
+  function heldClient(entry: Held): ModelClient {
+    return {
+      endpoint: entry.shown,
+      stream: (request) => streamHeld(entry, request),
+      countTokens: (request) => entry.client.countTokens(request),
+    };
   }
 
   return {
@@ -280,10 +401,11 @@ export function createParentModelProvider(
       }
       const client = clientFor(entry.grant.modelId);
       const shared = poolsFor(entry.grant);
+      // Side requests choose per request between the helper and the main model, and take
+      // their slots in `sideClientFor`, so they need no pool here.
+      const utility = { client: sideClientFor(entry.grant.modelId) };
       const connection: ModelConnection =
-        shared === null
-          ? { client }
-          : { client, pool: shared.conversation, utility: { client, pool: shared.utility } };
+        shared === null ? { client, utility } : { client, pool: shared.conversation, utility };
       return connection;
     },
 
@@ -297,8 +419,9 @@ export function createParentModelProvider(
           const entry = store(message.grant);
           const answered = settle(message.requestId);
           const endpoint = message.grant.endpoint;
+          const helper = message.grant.helper;
           log(
-            `Main granted ${message.grant.modelId} (${endpoint.kind}, generation ${message.grant.generation}) for ${message.requestId}.`,
+            `Main granted ${message.grant.modelId} (${endpoint.kind}, generation ${message.grant.generation}) for ${message.requestId}${helper === undefined ? "" : `, with the helper model ${helper.modelId} for side requests`}.`,
           );
           answered?.resolve(entry);
           return;
@@ -319,11 +442,13 @@ export function createParentModelProvider(
     },
 
     serverName(modelId) {
-      return held.get(modelId)?.grant.endpoint.model ?? null;
+      return (
+        held.get(modelId)?.grant.endpoint.model ?? helpers.get(modelId)?.endpoint.model ?? null
+      );
     },
 
     catalogProfile(modelId) {
-      return held.get(modelId)?.grant.profile ?? null;
+      return held.get(modelId)?.grant.profile ?? helpers.get(modelId)?.profile ?? null;
     },
 
     close() {

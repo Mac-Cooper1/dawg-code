@@ -10,7 +10,7 @@ import { type PermissionMode, PermissionModeSchema } from "@dawg/protocol";
 export type OutputFormat = "text" | "json" | "stream-json";
 
 export interface CliOptions {
-  command: "run" | "serve";
+  command: "run" | "serve" | "compat";
   /** `-p`: one turn, nobody to answer, then exit. */
   print: boolean;
   /** Prompt words given on the command line, joined by spaces; null when none. */
@@ -32,6 +32,17 @@ export interface CliOptions {
   cwd: string | null;
   addDirs: string[];
   verbose: boolean;
+  /**
+   * `--approve-project-code`: approve the hooks, skills and MCP servers the project defines now,
+   * without asking (see trust.ts).
+   */
+  approveProjectCode: boolean;
+  /** Added (Phase 4, sandbox): `--sandbox`, which turns the sandbox on for shell commands. */
+  sandbox: boolean;
+  /** `dawg compat`: the folder to report on (default: the current one). */
+  path: string | null;
+  /** `dawg compat --json`: the report as JSON. */
+  json: boolean;
 }
 
 export type ParsedArgs =
@@ -72,6 +83,9 @@ const FLAGS: Record<string, Spec> = {
   "--cwd": { type: "value", key: "cwd", metavar: "dir" },
   "--add-dir": { type: "list", key: "addDirs", metavar: "dir" },
   "--verbose": { type: "boolean", key: "verbose" },
+  "--approve-project-code": { type: "boolean", key: "approveProjectCode" },
+  "--sandbox": { type: "boolean", key: "sandbox" },
+  "--json": { type: "boolean", key: "json" },
   "-h": { type: "boolean", key: "help" },
   "--help": { type: "boolean", key: "help" },
   "-v": { type: "boolean", key: "version" },
@@ -136,6 +150,8 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     addDirs: [] as string[],
   };
   const flags = new Set<string>();
+  /** Every option as typed, for `dawg compat`, which takes almost none. */
+  const given: string[] = [];
   const positionals: string[] = [];
   let command: CliOptions["command"] = "run";
   let afterDoubleDash = false;
@@ -145,6 +161,10 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     if (afterDoubleDash || !arg.startsWith("-") || arg === "-") {
       if (i === 0 && arg === "serve" && !afterDoubleDash) {
         command = "serve";
+        continue;
+      }
+      if (i === 0 && arg === "compat" && !afterDoubleDash) {
+        command = "compat";
         continue;
       }
       positionals.push(arg);
@@ -159,6 +179,7 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     const inline = eq === -1 ? null : arg.slice(eq + 1);
     const spec = FLAGS[name];
     if (spec === undefined) throw new UsageError(`Unknown option ${name}.`);
+    given.push(name);
     if (spec.type === "boolean") {
       if (inline !== null) throw new UsageError(`${name} takes no value.`);
       flags.add(spec.key);
@@ -189,6 +210,9 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
 
   if (flags.has("help")) return { kind: "help" };
   if (flags.has("version")) return { kind: "version" };
+  if (command === "compat") {
+    return { kind: "options", options: compatOptions(given, flags, positionals) };
+  }
 
   const outputFormat = values.outputFormat ?? "text";
   if (outputFormat !== "text" && outputFormat !== "json" && outputFormat !== "stream-json") {
@@ -226,6 +250,10 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     cwd: values.cwd ?? null,
     addDirs: lists.addDirs,
     verbose: flags.has("verbose"),
+    approveProjectCode: flags.has("approveProjectCode"),
+    sandbox: flags.has("sandbox"),
+    path: null,
+    json: false,
   };
 
   if (options.endpoint !== null && options.modelFile !== null) {
@@ -237,6 +265,7 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
   if (options.continue && options.resume !== null) {
     throw new UsageError("Give --continue or --resume, not both.");
   }
+  if (flags.has("json")) throw new UsageError("--json only applies to dawg compat.");
   if (!options.print && values.outputFormat !== undefined && command === "run") {
     throw new UsageError("--output-format only applies with -p.");
   }
@@ -256,6 +285,43 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
   return { kind: "options", options };
 }
 
+/** `dawg compat [path] [--json]`: a folder, and nothing for sessions or models. */
+function compatOptions(
+  given: readonly string[],
+  flags: ReadonlySet<string>,
+  positionals: readonly string[],
+): CliOptions {
+  const refused = [...new Set(given.filter((name) => name !== "--json" && name !== "--verbose"))];
+  if (refused.length > 0) {
+    throw new UsageError(`dawg compat takes a folder and --json, not ${refused.join(", ")}.`);
+  }
+  if (positionals.length > 1) throw new UsageError("dawg compat takes one folder.");
+  return {
+    command: "compat",
+    print: false,
+    prompt: null,
+    outputFormat: "text",
+    model: null,
+    effort: null,
+    endpoint: null,
+    modelFile: null,
+    contextSize: null,
+    permissionMode: null,
+    allowedTools: [],
+    disallowedTools: [],
+    maxTurns: null,
+    continue: false,
+    resume: null,
+    cwd: null,
+    addDirs: [],
+    verbose: flags.has("verbose"),
+    approveProjectCode: false,
+    sandbox: false,
+    path: positionals[0] ?? null,
+    json: flags.has("json"),
+  };
+}
+
 /** Effort levels come from the model's chat template, so only their shape is checked here. */
 function effortLevel(value: string): string {
   const level = value.trim();
@@ -271,6 +337,8 @@ Usage:
   dawg [options] [prompt]          Start an interactive session (optionally with a first prompt)
   dawg -p [options] [prompt]       Run one turn without asking anything, print the result, exit
   dawg serve [options]             Serve the engine protocol on standard input and output
+  dawg compat [path] [--json]      Show what dawg makes of the Claude Code setup in a folder
+                                   (default: the current one) and your home folder
 
 The prompt for -p comes from the arguments, or from standard input when none is given.
 
@@ -294,6 +362,10 @@ Permissions:
   --dangerously-skip-permissions   Same as --permission-mode bypassPermissions
   --allowedTools <rules...>        Allow rules, e.g. "Bash(npm test *)" Edit Read
   --disallowedTools <rules...>     Deny rules, in the same form
+  --sandbox                        Run shell commands in the sandbox (macOS): they may write
+                                   only in the working directories and temp, and reach only
+                                   the hosts in sandbox.network.allowedDomains. Same as
+                                   "sandbox": { "enabled": true } in a settings file
 
 Session:
   -c, --continue                   Continue the most recent session in the working directory
@@ -301,6 +373,14 @@ Session:
   --cwd <dir>                      Working directory (default: the current one)
   --add-dir <dir...>               More directories the agent may read and edit
   --max-turns <n>                  Most model requests in one turn
+  --approve-project-code           Approve the hooks, skills and MCP servers the project
+                                   defines now, without asking (otherwise -p never runs
+                                   them until they are approved)
+
+Web search (WebSearch is offered only when a service is set; WebFetch needs nothing):
+  DAWG_SEARCH_PROVIDER             brave (the default with a key), tavily or searxng
+  DAWG_SEARCH_API_KEY              Your key for Brave Search or Tavily
+  DAWG_SEARXNG_URL                 A SearXNG instance's address
 
 Other:
   --verbose                        Diagnostics on standard error

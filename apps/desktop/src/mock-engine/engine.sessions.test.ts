@@ -139,7 +139,14 @@ describe("opening sessions", () => {
     expect(snapshot.usage).toBeNull();
     expect(snapshot.pending).toEqual([]);
     expect(snapshot.activeTurnId).toBeNull();
-    expect(snapshot.commands.map((c) => c.name)).toEqual(["help", "context", "compact", "clear"]);
+    expect(snapshot.commands.map((c) => c.name)).toEqual([
+      "help",
+      "context",
+      "compact",
+      "clear",
+      "rewind",
+      "memory",
+    ]);
     const other = await peer.request("session.create", {
       cwd: "/work/app/.dawg/worktrees/x",
       projectDir: "/work/app",
@@ -425,7 +432,7 @@ describe("commands", () => {
     expect(help.turnId).toBeNull();
     expect(help.openedSession).toBeNull();
     expect(help.output).toContain("| `/compact [focus]` |");
-    expect(help.output?.split("\n").filter((l) => l.startsWith("| `/"))).toHaveLength(4);
+    expect(help.output?.split("\n").filter((l) => l.startsWith("| `/"))).toHaveLength(6);
     const one = await peer.request("session.command", {
       sessionId: "fix-split",
       name: "help",

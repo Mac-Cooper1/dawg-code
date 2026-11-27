@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { type PermissionMode, PermissionModeSchema } from "@dawg/protocol";
+import { parseSandboxSettings, type SandboxFileSettings } from "../sandbox/settings.ts";
 import type { SettingsOrigin, SettingsProblem } from "../types.ts";
 
 /** The parts of one settings file this version uses, after lenient validation. */
@@ -12,6 +13,8 @@ export interface ParsedSettings {
   additionalDirectories: string[];
   bypassDisabled: boolean;
   env: Record<string, string>;
+  /** Added (Phase 4, sandbox): the file's `sandbox` key, or null when it has none. */
+  sandbox: SandboxFileSettings | null;
   ignoredKeys: string[];
   problems: SettingsProblem[];
 }
@@ -45,6 +48,7 @@ function emptyParsed(): ParsedSettings {
     additionalDirectories: [],
     bypassDisabled: false,
     env: {},
+    sandbox: null,
     ignoredKeys: [],
     problems: [],
   };
@@ -216,7 +220,11 @@ export function parseSettingsText(
   for (const [key, value] of Object.entries(data)) {
     if (key === "permissions") parsePermissions(value, path, out);
     else if (key === "env") parseEnv(value, path, origin, out);
-    else if (!METADATA_KEYS.has(key)) out.ignoredKeys.push(key);
+    else if (key === "sandbox") {
+      const read = parseSandboxSettings(value, path);
+      out.sandbox = read.settings;
+      out.problems.push(...read.problems);
+    } else if (!METADATA_KEYS.has(key)) out.ignoredKeys.push(key);
   }
   return out;
 }

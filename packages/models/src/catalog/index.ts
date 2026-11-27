@@ -12,6 +12,8 @@ export {
   entryMemoryNeed,
   entryWeightsBytes,
   fitsMemoryRule,
+  HELPER_OVERHEAD_BYTES,
+  helperWorkingSetBytes,
   MEMORY_BUDGET_FRACTION,
   type MemoryNeed,
   maxContextForMemory,
@@ -19,12 +21,22 @@ export {
   requiredMemoryBytes,
   workingSetBytes,
 } from "./memory.ts";
-export { fitsMachine, recommend } from "./recommend.ts";
+export {
+  catalogHelper,
+  fitsMachine,
+  helperEntries,
+  isHelperEntry,
+  mainEntries,
+  recommend,
+  recommendHelper,
+} from "./recommend.ts";
 export {
   type Catalog,
   CatalogEntrySchema,
   CatalogFileSchema,
+  CatalogRoleSchema,
   CatalogSchema,
   ChipClassSchema,
   describeIssues,
+  HELPER_MAX_CONTEXT,
 } from "./schema.ts";

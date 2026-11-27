@@ -5,11 +5,14 @@
  * accepted; the turn's progress and end arrive as events carrying its `turnId`.
  */
 import { z } from "zod";
+import * as checkpoints from "./checkpoints.ts";
 import {
   BackgroundTaskSchema,
   CommandInfoSchema,
+  CompatReportSchema,
   EffortSchema,
   ForkPointSchema,
+  HookInfoSchema,
   ModelInfoSchema,
   PermissionModeSchema,
   PermissionResponseSchema,
@@ -18,10 +21,13 @@ import {
   QuestionResponseSchema,
   SessionIdSchema,
   SessionSummarySchema,
+  SkillInfoSchema,
   TaskItemSchema,
   UsageSchema,
 } from "./common.ts";
 import { PendingRequestSchema, ReplayedEventsSchema } from "./events.ts";
+import * as mcp from "./mcp.ts";
+import * as subagents from "./subagents.ts";
 
 const IdSchema = z.string().min(1);
 const AbsolutePathSchema = z.string().min(1);
@@ -307,6 +313,73 @@ export const BackgroundStopResultSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------------------------
+// Projects: what a Claude Code setup holds, and consent for the code it supplies (Phase 4)
+// ---------------------------------------------------------------------------------------------
+
+export const ProjectInspectParamsSchema = z.object({
+  /** An absolute folder, or null for only the person's own setup (their home). */
+  projectDir: z.string().min(1).nullable(),
+});
+
+export const ProjectTrustParamsSchema = z.object({
+  projectDir: z.string().min(1),
+  /**
+   * The `approval.hash` of the report the person looked at. The engine refuses a hash that no
+   * longer matches the definitions on disk, so consent never covers code nobody saw.
+   */
+  hash: z.string().min(1),
+  /** True to let the code run; false to take consent back. */
+  approved: z.boolean(),
+});
+
+export const ProjectTrustResultSchema = z.object({
+  approved: z.boolean(),
+});
+
+/** Settings → Hooks: every hook that applies to a project, or to the person's own files. */
+export const HooksListParamsSchema = z.object({
+  /** An absolute folder, or null for only the person's own settings files. */
+  projectDir: z.string().min(1).nullable(),
+});
+
+export const HooksListResultSchema = z.object({
+  projectDir: z.string().nullable(),
+  /** In the order the settings files are read: the project's personal and shared files, then the person's. */
+  hooks: z.array(HookInfoSchema),
+  /** The settings file whose `disableAllHooks: true` turns every hook off, or null. */
+  disabledBy: z.string().nullable(),
+});
+
+/** Turns one hook off or back on. Kept in dawg's data folder, never in a settings file. */
+export const HooksSetEnabledParamsSchema = z.object({
+  projectDir: z.string().min(1).nullable(),
+  /** A `HookInfo.id` from `hooks.list`. An id that no longer names a hook is InvalidParams. */
+  id: z.string().min(1),
+  enabled: z.boolean(),
+});
+
+export const HooksSetEnabledResultSchema = z.object({
+  enabled: z.boolean(),
+});
+
+/** Settings → Skills and commands: every skill and custom command a project's sessions get. */
+export const ProjectSkillsParamsSchema = z.object({
+  /** An absolute folder, or null for only the person's own (`~/.claude`, `~/.dawg`). */
+  projectDir: z.string().min(1).nullable(),
+});
+
+export const ProjectSkillsResultSchema = z.object({
+  projectDir: z.string().nullable(),
+  /**
+   * `skills/<name>/SKILL.md` files, those inside the project's folders and those not used
+   * included, sorted by name, then where they come from (the person's first).
+   */
+  skills: z.array(SkillInfoSchema),
+  /** Files under `commands/`, in the same order. */
+  commands: z.array(SkillInfoSchema),
+});
+
+// ---------------------------------------------------------------------------------------------
 // Replay
 // ---------------------------------------------------------------------------------------------
 
@@ -354,11 +427,43 @@ export const methods = {
   },
   "session.command": { params: SessionCommandParamsSchema, result: SessionCommandResultSchema },
   "session.replay": { params: SessionReplayParamsSchema, result: SessionReplayResultSchema },
+  "session.checkpoints": {
+    params: checkpoints.SessionCheckpointsParamsSchema,
+    result: checkpoints.SessionCheckpointsResultSchema,
+  },
+  "session.rewind": {
+    params: checkpoints.SessionRewindParamsSchema,
+    result: checkpoints.sessionRewindResultSchema(SessionSnapshotSchema),
+  },
   "background.output": {
     params: BackgroundOutputParamsSchema,
     result: BackgroundOutputResultSchema,
   },
   "background.stop": { params: BackgroundStopParamsSchema, result: BackgroundStopResultSchema },
+  "subagent.stop": {
+    params: subagents.SubagentStopParamsSchema,
+    result: subagents.SubagentStopResultSchema,
+  },
+  "project.inspect": { params: ProjectInspectParamsSchema, result: CompatReportSchema },
+  "project.trust": { params: ProjectTrustParamsSchema, result: ProjectTrustResultSchema },
+  "hooks.list": { params: HooksListParamsSchema, result: HooksListResultSchema },
+  "hooks.setEnabled": {
+    params: HooksSetEnabledParamsSchema,
+    result: HooksSetEnabledResultSchema,
+  },
+  "project.skills": { params: ProjectSkillsParamsSchema, result: ProjectSkillsResultSchema },
+  "mcp.list": { params: mcp.McpListParamsSchema, result: mcp.McpListResultSchema },
+  "mcp.restart": { params: mcp.McpRestartParamsSchema, result: mcp.McpRestartResultSchema },
+  "mcp.setEnabled": {
+    params: mcp.McpSetEnabledParamsSchema,
+    result: mcp.McpSetEnabledResultSchema,
+  },
+  "mcp.importPreview": {
+    params: mcp.McpImportPreviewParamsSchema,
+    result: mcp.McpImportPlanSchema,
+  },
+  "mcp.import": { params: mcp.McpImportParamsSchema, result: mcp.McpImportResultSchema },
+  "mcp.session": { params: mcp.McpSessionParamsSchema, result: mcp.McpSessionResultSchema },
   "permission.respond": { params: PermissionRespondParamsSchema, result: EmptyResultSchema },
   "question.respond": { params: QuestionRespondParamsSchema, result: EmptyResultSchema },
   "plan.respond": { params: PlanRespondParamsSchema, result: EmptyResultSchema },

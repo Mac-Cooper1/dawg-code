@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { DownloadState, ModelsState, ResolvedTheme } from "../../shared/bridge.ts";
+import type { DownloadState, HelperInfo, ModelsState, ResolvedTheme } from "../../shared/bridge.ts";
 import { mockModelsState } from "../../shared/mock-models.ts";
 import { renderInTheme, THEMES } from "../test/render.tsx";
 import { ModelsPage, type ModelsPageActions } from "./ModelsPage.tsx";
@@ -16,6 +16,7 @@ function fakeActions(): {
     setDefaultModel: vi.fn(done),
     removeModel: vi.fn(done),
     setIdleUnload: vi.fn(done),
+    setHelperEnabled: vi.fn(done),
     downloadModel: vi.fn(done),
     pauseDownload: vi.fn(done),
     cancelDownload: vi.fn(done),
@@ -52,6 +53,15 @@ function download(patch: Partial<DownloadState>): DownloadState {
     error: null,
     ...patch,
   };
+}
+
+const HELPER_ID = "minicpm5-1b-q8";
+const HELPER_NAME = "MiniCPM5 1B (8-bit)";
+
+/** A models state whose helper differs from the mock's by `patch`. */
+function withHelper(state: ModelsState, patch: Partial<HelperInfo>): ModelsState {
+  if (!state.helper) throw new Error("The mock state has no helper");
+  return { ...state, helper: { ...state.helper, ...patch } };
 }
 
 function setup(theme: ResolvedTheme, state: ModelsState | null = mockModelsState()) {
@@ -299,6 +309,186 @@ describe.each(THEMES)("Settings → Models (%s)", (theme) => {
     expect(await within(form).findByRole("alert")).toHaveTextContent(
       "Could not reach it: connection refused.",
     );
+  });
+
+  it("shows the helper model running beside the main model, with its switch", async () => {
+    const { actions, user } = setup(theme);
+    const region = screen.getByRole("region", { name: "Helper model" });
+    const helper = section("Helper model");
+    expect(within(helper).getByText(HELPER_NAME)).toBeInTheDocument();
+    expect(within(helper).getByText("Running")).toBeInTheDocument();
+    expect(helper).toHaveTextContent(
+      "A small model that writes session titles and summarises web pages, so your main model stays free for the conversation.",
+    );
+    expect(helper).toHaveTextContent(
+      "1.2 GB · uses about 2.3 GB of memory · 32K tokens · Apache-2.0",
+    );
+    expect(helper).toHaveTextContent(
+      "Answering titles and page summaries · using 1.8 GB of memory",
+    );
+    await user.click(
+      within(helper).getByRole("button", { name: `Read the Apache-2.0 licence of ${HELPER_NAME}` }),
+    );
+    expect(actions.openExternal).toHaveBeenCalledWith(
+      "https://github.com/OpenBMB/MiniCPM/blob/main/LICENSE",
+    );
+
+    // The switch: named by its title, described by what it does now, reachable by keyboard.
+    const toggle = within(region).getByRole("switch", { name: "Use the helper for side requests" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(toggle).toHaveAccessibleDescription("Titles and page summaries go to the helper model.");
+    toggle.focus();
+    await user.keyboard(" ");
+    expect(actions.setHelperEnabled).toHaveBeenCalledWith(false);
+
+    // Remove asks first, as the other deletions do.
+    await user.click(within(helper).getByRole("button", { name: `Remove ${HELPER_NAME}` }));
+    const dialog = await screen.findByRole("alertdialog", { name: `Remove ${HELPER_NAME}?` });
+    expect(dialog).toHaveTextContent(
+      "It stops, and the copy dawg downloaded (1.2 GB) is deleted from this Mac. Titles and page summaries go to the main model until you download it again.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+    expect(actions.removeModel).toHaveBeenCalledWith(HELPER_ID);
+  });
+
+  it("offers the helper for download, or the copy another app has", async () => {
+    const { actions, user } = setup(theme, withHelper(mockModelsState("empty"), {}));
+    const helper = section("Helper model");
+    expect(within(helper).getByText("Not downloaded")).toBeInTheDocument();
+    await user.click(
+      within(helper).getByRole("button", { name: `Download ${HELPER_NAME}, 1.2 GB` }),
+    );
+    expect(actions.downloadModel).toHaveBeenCalledWith(HELPER_ID);
+    expect(within(helper).queryByRole("button", { name: /Remove/ })).not.toBeInTheDocument();
+  });
+
+  it("uses another app's copy of the helper instead of downloading it", async () => {
+    const { actions, user } = setup(
+      theme,
+      withHelper(mockModelsState("empty"), { foundIn: "lmstudio" }),
+    );
+    const helper = section("Helper model");
+    expect(within(helper).getByText("Found in LM Studio")).toBeInTheDocument();
+    await user.click(within(helper).getByRole("button", { name: "Use the copy from LM Studio" }));
+    expect(actions.adoptExistingModel).toHaveBeenCalledWith(HELPER_ID);
+  });
+
+  it("says why the helper does not fit, and keeps Download off", () => {
+    setup(theme, mockModelsState("small"));
+    const helper = section("Helper model");
+    expect(within(helper).getByText("Does not fit")).toBeInTheDocument();
+    const button = within(helper).getByRole("button", { name: `Download ${HELPER_NAME}, 1.2 GB` });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription("Needs 48 GB of memory; this Mac has 16 GB.");
+  });
+
+  it("shows the helper's download in its own section, with pause and cancel", async () => {
+    const state = withHelper(mockModelsState("empty"), { state: "downloading" });
+    const { actions, user } = setup(theme, {
+      ...state,
+      downloads: [
+        download({
+          modelId: HELPER_ID,
+          bytesDone: 576_764_608,
+          bytesTotal: 1_153_529_216,
+          bytesPerSecond: 50_000_000,
+          secondsLeft: 12,
+        }),
+      ],
+    });
+    const helper = section("Helper model");
+    expect(within(helper).getByText("Downloading")).toBeInTheDocument();
+    expect(
+      within(helper).getByRole("progressbar", { name: `Downloading ${HELPER_NAME}` }),
+    ).toHaveAttribute("aria-valuenow", "50");
+    expect(helper).toHaveTextContent("50.0% · 577 MB of 1.2 GB");
+    // Not listed again under Downloads.
+    expect(screen.queryByRole("heading", { level: 2, name: "Downloads" })).not.toBeInTheDocument();
+    await user.click(
+      within(helper).getByRole("button", { name: `Pause downloading ${HELPER_NAME}` }),
+    );
+    expect(actions.pauseDownload).toHaveBeenCalledWith(HELPER_ID);
+    await user.click(within(helper).getByRole("button", { name: "Cancel" }));
+    const dialog = await screen.findByRole("alertdialog", {
+      name: `Cancel the download of ${HELPER_NAME}?`,
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel download" }));
+    expect(actions.cancelDownload).toHaveBeenCalledWith(HELPER_ID);
+  });
+
+  it.each([
+    ["paused", "Paused", "Resume"],
+    ["failed", "Download failed", "Retry"],
+  ] as const)("a %s helper download can carry on", async (phase, tag, button) => {
+    const state = withHelper(mockModelsState("empty"), { state: phase });
+    const { actions, user } = setup(theme, {
+      ...state,
+      downloads: [
+        download({
+          modelId: HELPER_ID,
+          phase,
+          bytesDone: 300_000_000,
+          bytesTotal: 1_153_529_216,
+          error: phase === "failed" ? "Hugging Face did not answer." : null,
+        }),
+      ],
+    });
+    const helper = section("Helper model");
+    expect(within(helper).getByText(tag)).toBeInTheDocument();
+    await user.click(within(helper).getByRole("button", { name: button }));
+    expect(actions.downloadModel).toHaveBeenCalledWith(HELPER_ID);
+  });
+
+  it.each([
+    ["ready", "Ready", "Downloaded. It starts with your model."],
+    ["starting", "Starting", "Loading into memory"],
+  ] as const)("says the helper is %s", (helperState, tag, line) => {
+    setup(theme, withHelper(mockModelsState(), { state: helperState, runtimeMemoryBytes: null }));
+    const helper = section("Helper model");
+    expect(within(helper).getByText(tag)).toBeInTheDocument();
+    expect(helper).toHaveTextContent(line);
+  });
+
+  it("says why the helper could not start", () => {
+    setup(
+      theme,
+      withHelper(mockModelsState(), {
+        state: "error",
+        runtimeMemoryBytes: null,
+        message: "The helper model could not start, so the main model answers side requests.",
+      }),
+    );
+    const helper = section("Helper model");
+    expect(within(helper).getByText("Could not start")).toBeInTheDocument();
+    expect(within(helper).getByRole("status")).toHaveTextContent(
+      "The helper model could not start, so the main model answers side requests.",
+    );
+  });
+
+  it("turned off, the main model answers side requests", async () => {
+    const { actions, user } = setup(
+      theme,
+      withHelper(mockModelsState(), {
+        state: "ready",
+        enabled: false,
+        runtimeMemoryBytes: null,
+        message: "Turned off: the main model answers titles and page summaries",
+      }),
+    );
+    const helper = section("Helper model");
+    expect(helper).toHaveTextContent(
+      "Turned off: the main model answers titles and page summaries",
+    );
+    const toggle = within(helper).getByRole("switch", { name: "Use the helper for side requests" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAccessibleDescription("The main model answers titles and page summaries.");
+    await user.click(toggle);
+    expect(actions.setHelperEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("has no helper section when the catalog has no helper", () => {
+    setup(theme, { ...mockModelsState(), helper: null });
+    expect(screen.queryByRole("heading", { name: "Helper model" })).not.toBeInTheDocument();
   });
 
   it("says it is looking while the models state loads", () => {
