@@ -2,27 +2,43 @@
  * Where the model comes from: a remote OpenAI-compatible endpoint (probed for its real context
  * window), or a local model file run by the bundled llama-server under the supervisor.
  *
+ * Side requests (session titles, WebFetch's page summaries) go to the helper model when the app
+ * has downloaded it into the shared Hugging Face cache and the person has not turned it off
+ * (`<data root>/helper-model.json`): a second bundled llama-server, started beside the model
+ * whatever the model is. Until it is ready, or when it fails, they go where they always did.
+ *
  * The API key comes from `DAWG_API_KEY` only. It is handed to the HTTP client and nowhere else:
  * never printed, logged or written.
  */
 import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import {
   createModelClient,
   type EndpointDescription,
+  type ModelClient,
   type ModelConnection,
   type ModelProvider,
   RuntimeError,
+  type SideRoute,
+  SlotScheduler,
+  sideClient,
 } from "@dawg/engine";
 import {
   connectRemote,
   type DiscoveredModel,
   type DiscoveredServer,
   type Endpoint,
+  findDownloadedHelper,
+  helperPaths,
+  helperRuntimeConfig,
+  loadCatalog,
   probeLmStudio,
   probeOllama,
   RuntimeSupervisor,
+  readHelperEnabled,
   requestJson,
+  resolveHubCacheDir,
   resolveRuntimeBinary,
   RuntimeError as SupervisorError,
   toEndpoint,
@@ -46,7 +62,7 @@ export interface ModelSetup {
   defaultModel: string;
   /** For `/status`: where a model's requests go. */
   describe(modelId: string): EndpointDescription | null;
-  /** Stops the bundled runtime, if one was started. Safe to call more than once. */
+  /** Stops the bundled runtime and the helper model, if started. Safe to call more than once. */
   close(): Promise<void>;
 }
 
@@ -84,10 +100,117 @@ export function safeUrl(url: string): string {
 }
 
 export async function setupModels(options: ModelSetupOptions): Promise<ModelSetup> {
-  if (options.modelFile !== null) return setupModelFile(options, options.modelFile);
-  const url = options.endpoint ?? nonEmpty(options.env.DAWG_ENDPOINT);
-  if (url === null) throw new ModelSetupError("usage", NO_MODEL_MESSAGE);
-  return setupEndpoint(options, url);
+  const url =
+    options.modelFile !== null ? null : (options.endpoint ?? nonEmpty(options.env.DAWG_ENDPOINT));
+  if (options.modelFile === null && url === null) {
+    throw new ModelSetupError("usage", NO_MODEL_MESSAGE);
+  }
+  // Started first and never waited for: it loads while the model does (or while the server is
+  // asked), and side requests use it from the moment it is ready.
+  const helper = await startHelper(options);
+  try {
+    return options.modelFile !== null
+      ? await setupModelFile(options, options.modelFile, helper)
+      : await setupEndpoint(options, url as string, helper);
+  } catch (error) {
+    await helper?.close();
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The helper model
+// ---------------------------------------------------------------------------------------------
+
+interface HelperRuntime {
+  /** Where side requests go while the helper is ready; null while it starts, restarts or failed. */
+  route(): SideRoute | null;
+  endpoint(): Endpoint | null;
+  close(): Promise<void>;
+}
+
+/**
+ * Starts the helper model when the app has downloaded it and it is on. Anything in the way (no
+ * catalog, no file, no runtime) means no helper: side requests then use the model, as before.
+ */
+async function startHelper(options: ModelSetupOptions): Promise<HelperRuntime | null> {
+  let catalog: Awaited<ReturnType<typeof loadCatalog>>["catalog"];
+  try {
+    catalog = (await loadCatalog()).catalog;
+  } catch {
+    return null;
+  }
+  const home = nonEmpty(options.env.HOME) ?? homedir();
+  const found = await findDownloadedHelper({
+    catalog,
+    hubDir: resolveHubCacheDir(options.env, home),
+  });
+  if (found === null) return null;
+  if (!(await readHelperEnabled(options.dawgHome))) {
+    options.log("The helper model is turned off; the model answers titles and page summaries.");
+    return null;
+  }
+  let binary: string;
+  try {
+    binary = (await resolveRuntimeBinary({ env: options.env })).binary;
+  } catch {
+    options.log("The bundled runtime is missing, so the helper model cannot run.");
+    return null;
+  }
+  const { slotIds, ...config } = helperRuntimeConfig({
+    entry: found.entry,
+    modelPath: found.modelPath,
+  });
+  // Its own supervisor and watchdog: its own port, key file, logs (helper-*.log) and slot.
+  const supervisor = new RuntimeSupervisor({
+    binary,
+    ...config,
+    paths: helperPaths(options.dawgHome),
+    env: options.env,
+  });
+  const scheduler = new SlotScheduler(slotIds);
+  let client: { endpoint: Endpoint; client: ModelClient } | null = null;
+  supervisor.on("ready", (endpoint) =>
+    options.log(
+      `Helper model ${endpoint.model} ready for side requests, context window ${endpoint.contextWindow} tokens.`,
+    ),
+  );
+  supervisor.on("failure", (error) =>
+    options.log(
+      `The helper model stopped (${error.message.split("\n")[0]}); the model answers side requests. Its log is in ${supervisor.logPath}.`,
+    ),
+  );
+  // A failure to start is reported by the "failure" event above.
+  supervisor.start().catch(() => {});
+  let stopped: Promise<void> | null = null;
+  return {
+    route() {
+      const endpoint = supervisor.endpoint;
+      if (endpoint === undefined) return null;
+      // A restart moves it to another port with another key: a new client for the new endpoint.
+      if (client?.endpoint !== endpoint) client = { endpoint, client: createModelClient(endpoint) };
+      return { client: client.client, scheduler };
+    },
+    endpoint: () => supervisor.endpoint ?? null,
+    close() {
+      stopped ??= supervisor.stop().catch(() => {});
+      return stopped;
+    },
+  };
+}
+
+/** Side requests: the helper while it is ready, else `main`. */
+function sideRequests(
+  helper: HelperRuntime | null,
+  main: SideRoute,
+  log: (line: string) => void,
+): ModelClient {
+  return sideClient({
+    routes: async () => ({ helper: helper?.route() ?? null, main }),
+    endpoint: () => helper?.endpoint() ?? main.client.endpoint,
+    onFallback: (problem) =>
+      log(`The helper model did not answer (${problem}); the model answered this side request.`),
+  });
 }
 
 function nonEmpty(value: string | undefined): string | null {
@@ -219,7 +342,11 @@ async function endpointFor(
   return endpoint;
 }
 
-async function setupEndpoint(options: ModelSetupOptions, url: string): Promise<ModelSetup> {
+async function setupEndpoint(
+  options: ModelSetupOptions,
+  url: string,
+  helper: HelperRuntime | null,
+): Promise<ModelSetup> {
   const apiKey = nonEmpty(options.env.DAWG_API_KEY) ?? undefined;
   const first = await endpointFor(url, options.model, apiKey);
   if (options.log !== undefined) {
@@ -230,10 +357,11 @@ async function setupEndpoint(options: ModelSetupOptions, url: string): Promise<M
   const endpoints = new Map<string, Endpoint>([[first.model, first]]);
   const connections = new Map<string, Promise<ModelConnection>>();
   // No slot pool: the server's slots are not ours to schedule (other programs may use them), so
-  // requests go out at once and the server orders them.
+  // requests go out at once and the server orders them. Side requests go to the helper model
+  // when there is one, else to the server too.
   const connectionFor = (endpoint: Endpoint): ModelConnection => {
     const client = createModelClient(endpoint);
-    return { client };
+    return { client, utility: { client: sideRequests(helper, { client }, options.log) } };
   };
   connections.set(first.model, Promise.resolve(connectionFor(first)));
   return {
@@ -267,7 +395,9 @@ async function setupEndpoint(options: ModelSetupOptions, url: string): Promise<M
         ? null
         : { kind: endpoint.kind, url: safeUrl(endpoint.baseUrl) };
     },
-    close: async () => {},
+    close: async () => {
+      await helper?.close();
+    },
   };
 }
 
@@ -275,7 +405,11 @@ async function setupEndpoint(options: ModelSetupOptions, url: string): Promise<M
 // A local model file, run by the bundled runtime
 // ---------------------------------------------------------------------------------------------
 
-async function setupModelFile(options: ModelSetupOptions, file: string): Promise<ModelSetup> {
+async function setupModelFile(
+  options: ModelSetupOptions,
+  file: string,
+  helper: HelperRuntime | null,
+): Promise<ModelSetup> {
   const modelPath = path.resolve(file);
   const info = await stat(modelPath).catch(() => null);
   if (info === null || !info.isFile()) {
@@ -320,7 +454,7 @@ async function setupModelFile(options: ModelSetupOptions, file: string): Promise
   });
   let stopped: Promise<void> | null = null;
   const close = () => {
-    stopped ??= supervisor.stop().catch(() => {});
+    stopped ??= Promise.all([supervisor.stop().catch(() => {}), helper?.close()]).then(() => {});
     return stopped;
   };
   options.log(`Starting the bundled runtime with ${path.basename(modelPath)}...`);
@@ -339,14 +473,20 @@ async function setupModelFile(options: ModelSetupOptions, file: string): Promise
     `Model ${endpoint.model} ready on the bundled runtime, context window ${endpoint.contextWindow} tokens.`,
   );
   const client = createModelClient(endpoint);
-  // Every session gets these same two pools, so the engine schedules them: sessions running at
-  // once take turns on the conversation slot, and the one waiting shows as queued. One
-  // conversation slot keeps each session's whole window and gives a running turn the full speed
-  // of the machine.
+  // Every session gets this same pool, so the engine schedules it: sessions running at once take
+  // turns on the conversation slot, and the one waiting shows as queued. One conversation slot
+  // keeps each session's whole window and gives a running turn the full speed of the machine.
+  // Side requests go to the helper model when it is ready, else to the side slot.
   const connection: ModelConnection = {
     client,
     pool: { slots: [...layout.slotIds.conversation] },
-    utility: { client, pool: { slots: [...layout.slotIds.utility] } },
+    utility: {
+      client: sideRequests(
+        helper,
+        { client, scheduler: new SlotScheduler(layout.slotIds.utility) },
+        options.log,
+      ),
+    },
   };
   return {
     defaultModel: endpoint.model,

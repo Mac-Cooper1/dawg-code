@@ -1,0 +1,60 @@
+/* The sandbox's marks on command and permission cards. Status colours as text on the card's
+   panel, the pairs contrast.test.ts checks in both themes. */
+
+.mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.icon {
+  flex: none;
+}
+
+.inside {
+  color: var(--ink-3);
+}
+
+.outside,
+.outsideText {
+  color: var(--amber);
+}
+
+.blocked {
+  color: var(--red);
+}
+
+.details {
+  margin: 0;
+  padding: 6px 12px 8px;
+  font-size: var(--text-xs);
+}
+
+.blockedHeading {
+  margin: 0 0 2px;
+  font-weight: 600;
+  color: var(--red);
+}
+
+.list {
+  margin: 0;
+  padding-left: 16px;
+  font-family: var(--mono);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  margin: 4px 0 0;
+  color: var(--ink-3);
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: var(--text-sm);
+}

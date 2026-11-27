@@ -1,0 +1,19 @@
+/* Settings → Permissions → Sandbox. Colours come only from tokens.css, so both themes follow. */
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: var(--text-sm);
+  color: var(--amber);
+}

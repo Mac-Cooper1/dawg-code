@@ -15,6 +15,7 @@ import type {
   SessionId,
   SessionSnapshot,
   SessionSummary,
+  SubagentInfo,
 } from "@dawg/protocol";
 import { basename } from "../lib/format.ts";
 import {
@@ -109,6 +110,7 @@ function newSession(summary: SessionSummary, open: boolean): MutableSession {
     additionalDirectories: [],
     tasks: [],
     background: [],
+    subagents: [],
     usage: null,
     commands: [],
     activeTurnId: null,
@@ -373,6 +375,10 @@ function applyEvent(draft: Draft, event: EngineEvent, live: boolean): void {
     case "background.updated":
       session.background = withBackgroundTask(session.background, event.payload.task);
       return;
+    case "subagent.updated":
+      session.subagents = withSubagent(session.subagents, event.payload.agent);
+      items.subagentUpdated(draft, session, event.payload);
+      return;
     case "usage.updated": {
       const { usage } = event.payload;
       session.usage = usage;
@@ -400,6 +406,12 @@ function applyEvent(draft: Draft, event: EngineEvent, live: boolean): void {
       touch(session, event.payload.time);
       items.errorRaised(draft, session, event.payload);
       return;
+    case "hook.ran":
+      items.hookRan(draft, session, event.payload);
+      return;
+    case "hook.skipped":
+      items.hookSkipped(draft, session, event.payload);
+      return;
   }
 }
 
@@ -411,6 +423,13 @@ function withBackgroundTask(list: BackgroundTask[], task: BackgroundTask): Backg
   const index = list.findIndex((candidate) => candidate.taskId === task.taskId);
   if (index === -1) return [...list, task];
   return list.map((candidate, i) => (i === index ? task : candidate));
+}
+
+/** The list with `agent` in it, as `withBackgroundTask` does for commands (by `agentId`). */
+function withSubagent(list: SubagentInfo[], agent: SubagentInfo): SubagentInfo[] {
+  const index = list.findIndex((candidate) => candidate.agentId === agent.agentId);
+  if (index === -1) return [...list, agent];
+  return list.map((candidate, i) => (i === index ? agent : candidate));
 }
 
 function clearPromptProgress(session: MutableSession): void {

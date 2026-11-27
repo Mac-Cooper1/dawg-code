@@ -77,6 +77,8 @@ export class CommandRegistry {
       name: c.name,
       description: c.description,
       argumentHint: c.argumentHint,
+      source: c.source ?? "builtin",
+      kind: c.kind ?? "command",
     }));
   }
 

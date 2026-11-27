@@ -52,6 +52,11 @@ export interface SupervisorPaths {
   logDir: string;
   /** Parent directory for the per-launch key files. Defaults to the OS temp directory. */
   keyDir?: string;
+  /**
+   * Put before both log files' names, so a second runtime (the helper model's) keeps logs of its
+   * own in the same folder: "helper-" gives helper-runtime.log and helper-llama-server.log.
+   */
+  logPrefix?: string;
 }
 
 export interface SupervisorTiming {
@@ -201,10 +206,13 @@ export class RuntimeSupervisor extends EventEmitter<SupervisorEvents> {
       settings: options.settings,
     };
     this.timing = { ...defaultTiming, ...options.timing };
-    this.log = new RotatingLog(join(options.paths.logDir, "runtime.log"), {
-      maxBytes: options.log?.maxBytes ?? 5 * 1024 * 1024,
-      files: options.log?.files ?? 3,
-    });
+    this.log = new RotatingLog(
+      join(options.paths.logDir, `${options.paths.logPrefix ?? ""}runtime.log`),
+      {
+        maxBytes: options.log?.maxBytes ?? 5 * 1024 * 1024,
+        files: options.log?.files ?? 3,
+      },
+    );
     // Fail fast on a bad configuration, before anything is spawned.
     this.validate(this.config);
   }
@@ -586,7 +594,7 @@ export class RuntimeSupervisor extends EventEmitter<SupervisorEvents> {
       paths: {
         apiKeyFile: key.path,
         slotSaveDir: paths.slotSaveDir,
-        logFile: join(paths.logDir, "llama-server.log"),
+        logFile: join(paths.logDir, `${paths.logPrefix ?? ""}llama-server.log`),
       },
     });
     const id = ++this.launchCount;

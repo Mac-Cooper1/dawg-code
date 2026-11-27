@@ -31,9 +31,19 @@ export interface CatalogFile {
   sizeBytes: number;
 }
 
+/**
+ * What an entry is for. "main" (the default when omitted) is a model a person chats with.
+ * "helper" is a tiny model that answers side requests (session titles, WebFetch's page
+ * summaries) beside the main model, so those never take the main model's time or slots. A
+ * helper is never recommended or offered as a main model.
+ */
+export type CatalogRole = "main" | "helper";
+
 export interface CatalogEntry {
   /** Stable identifier, for example "qwen3.8-27b-q8". */
   id: string;
+  /** Omitted means "main". */
+  role?: CatalogRole;
   displayName: string;
   licence: { spdx: string; url: string };
   /** `revision` is a commit hash, never a branch, so an entry always means the same bytes. */

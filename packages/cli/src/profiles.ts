@@ -6,6 +6,8 @@ const FAMILIES: [RegExp, string][] = [
   [/qwen3\.6/, "qwen3.6"],
   [/laguna[-_. ]?xs[-_. ]?2\.1/, "laguna-xs-2.1"],
   [/gpt-oss/, "gpt-oss"],
+  // The catalog's helper model, which answers side requests (titles, page summaries).
+  [/minicpm5/, "minicpm5"],
 ];
 
 /**

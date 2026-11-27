@@ -1,0 +1,45 @@
+/* WebFetch and WebSearch card bodies. Colours come only from tokens.css, so both themes follow. */
+
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+}
+
+.line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 8px 12px 10px 32px;
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-wrap: anywhere;
+}
+
+.host {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  color: var(--ink-3);
+}
+
+.snippet {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}

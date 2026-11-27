@@ -166,6 +166,27 @@ export function twoSlotLayout(
   };
 }
 
+/** How dawg lays out the helper model's llama-server: one slot with a cache of its own. */
+export interface HelperSlotLayout {
+  /** `-c`: the helper's window, which is also all the cache it has. */
+  contextSize: number;
+  /** `-np`: one slot. Side requests are short and rare; the engine queues the odd overlap. */
+  slots: 1;
+  settings: { kvUnified: false };
+  /** The slot the engine schedules side requests on. */
+  slotIds: number[];
+}
+
+/**
+ * The helper's layout: a single slot of `window` tokens. One slot keeps its cache to one window
+ * (768 MiB for MiniCPM5 1B at 32K); a second would double it for an overlap that is rare and
+ * costs a short wait in the engine's queue.
+ */
+export function helperSlotLayout(window: number): HelperSlotLayout {
+  positiveInt("window", window);
+  return { contextSize: window, slots: 1, settings: { kvUnified: false }, slotIds: [0] };
+}
+
 export class LaunchArgsError extends Error {
   constructor(message: string) {
     super(message);

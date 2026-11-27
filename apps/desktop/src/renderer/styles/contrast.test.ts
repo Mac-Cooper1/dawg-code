@@ -190,6 +190,9 @@ const PAIRS: Pair[] = [
     onEach(status, ["bg", "side", "panel", "panel-2"], TEXT, `${status} status text`),
   ),
   { fg: "amber", bg: "amber-bg over panel", min: TEXT, where: "a decision card's header" },
+  // A command card's body (code): what the sandbox blocked, and a command run outside it.
+  { fg: "red", bg: "code", min: TEXT, where: "what the sandbox blocked" },
+  { fg: "amber", bg: "code", min: TEXT, where: "a command run outside the sandbox" },
   { fg: "red", bg: "red-bg over bg", min: TEXT, where: "an error notice" },
   { fg: "red", bg: "red-bg over panel", min: TEXT, where: "a red tag" },
   { fg: "green", bg: "ok-bg over panel", min: TEXT, where: "a green tag" },

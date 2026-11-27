@@ -26,6 +26,33 @@ const PAGES: readonly { id: SettingsPage; label: string; comingLine: string }[] 
     comingLine: "The default permission mode, and the allow, ask and deny rules for each scope.",
   },
   {
+    id: "setup",
+    label: "Project setup",
+    comingLine:
+      "What dawg found in a project and your home folder, set up for Claude Code, and what it does with each.",
+  },
+  {
+    id: "hooks",
+    label: "Hooks",
+    comingLine:
+      "The hooks in your settings files and the project's, each with its source and a switch.",
+  },
+  {
+    id: "skills",
+    label: "Skills and commands",
+    comingLine: "Skills and custom slash commands from your home folder and the project.",
+  },
+  {
+    id: "mcp",
+    label: "MCP servers",
+    comingLine: "The MCP servers sessions use, their state and tools, and Claude Code's to import.",
+  },
+  {
+    id: "web",
+    label: "Web",
+    comingLine: "Fetching pages, and the search service web search uses.",
+  },
+  {
     id: "shortcuts",
     label: "Shortcuts",
     comingLine: "Every keyboard shortcut in dawg-code, in one list.",
@@ -48,6 +75,16 @@ export interface SettingsViewProps {
   modelsPage?: ReactNode;
   /** Settings → Permissions, connected to the bridge by the container. */
   permissionsPage?: ReactNode;
+  /** Settings → Project setup, connected to the store by the container. */
+  setupPage?: ReactNode;
+  /** Settings → Hooks, connected to the store by the container. */
+  hooksPage?: ReactNode;
+  /** Settings → Skills and commands, connected to the store by the container. */
+  skillsPage?: ReactNode;
+  /** Settings → MCP servers, connected to the store by the container. */
+  mcpPage?: ReactNode;
+  /** Settings → Web, connected to the bridge by the container. */
+  webPage?: ReactNode;
   /** One-line notices (a failed request), above the pages. */
   notices?: ReactNode;
   onSelectPage(page: SettingsPage): void;
@@ -133,6 +170,16 @@ export function SettingsView(props: SettingsViewProps) {
             props.modelsPage
           ) : props.page === "permissions" && props.permissionsPage ? (
             props.permissionsPage
+          ) : props.page === "setup" && props.setupPage ? (
+            props.setupPage
+          ) : props.page === "hooks" && props.hooksPage ? (
+            props.hooksPage
+          ) : props.page === "skills" && props.skillsPage ? (
+            props.skillsPage
+          ) : props.page === "mcp" && props.mcpPage ? (
+            props.mcpPage
+          ) : props.page === "web" && props.webPage ? (
+            props.webPage
           ) : props.page === "shortcuts" ? (
             <ShortcutsPage />
           ) : (

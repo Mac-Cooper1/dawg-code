@@ -22,6 +22,7 @@ export {
   type ToolSchema,
 } from "./model.ts";
 export type {
+  CommandSandboxPlan,
   PermissionDecision,
   PermissionEngine,
   PermissionQuery,
@@ -52,3 +53,12 @@ export {
   type ToolProbeContext,
   type ToolProgress,
 } from "./tools.ts";
+export {
+  type EngineServices,
+  SearchError,
+  type SearchProvider,
+  type SearchQuery,
+  type SearchResult,
+  type UtilityModel,
+  type UtilityRequest,
+} from "./web.ts";

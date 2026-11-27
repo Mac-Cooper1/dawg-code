@@ -2,6 +2,8 @@ export { type ApiKeyFile, createApiKeyFile } from "./api-key.ts";
 export { hostArch, isRuntimeArch, type RuntimeArch } from "./arch.ts";
 export {
   buildLaunchArgs,
+  type HelperSlotLayout,
+  helperSlotLayout,
   LaunchArgsError,
   type LaunchInput,
   type LaunchModel,
@@ -36,6 +38,18 @@ export {
   RuntimeError,
   type RuntimeErrorCode,
 } from "./errors.ts";
+export {
+  type DownloadedHelper,
+  findDownloadedHelper,
+  HELPER_RUNTIME_SETTINGS,
+  HELPER_SETTINGS_FILE,
+  type HelperRuntimeConfig,
+  type HelperRuntimeInput,
+  helperPaths,
+  helperRuntimeConfig,
+  readHelperEnabled,
+  writeHelperEnabled,
+} from "./helper.ts";
 export {
   BINARY_NAME,
   defaultRuntimeDir,

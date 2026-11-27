@@ -17,6 +17,7 @@ import {
   nativeImage,
   nativeTheme,
   type OpenDialogOptions,
+  safeStorage,
   screen,
   shell,
   type WebContents,
@@ -48,6 +49,8 @@ import { installSecurity } from "./security.ts";
 import { createSettingsStore, createWindowStateStore } from "./stores.ts";
 import { createNodePtySpawner } from "./terminal/node-pty.ts";
 import { createTerminalService } from "./terminal/service.ts";
+import { createWebInvokeHandlers } from "./web/ipc.ts";
+import { createWebSettingsService } from "./web/service.ts";
 import {
   initialBounds,
   MIN_WINDOW_SIZE,
@@ -87,6 +90,12 @@ const models = createModelService({
   mainDir: here,
   log: (message) => log(`[models] ${message}`),
 });
+// Settings → Web: the search service WebSearch uses, its key in the Keychain (web/service.ts).
+const web = createWebSettingsService({
+  dataRoot,
+  encryption: safeStorage,
+  log: (message) => log(`[web] ${message}`),
+});
 // The panes' files, git and shells (Changes, Files, Terminal), each limited to a session's folders.
 const workspaceStore = createWorkspaceStore(workspaceFile(dataRoot), (message) =>
   log(`[workspace] ${message}`),
@@ -96,6 +105,9 @@ const workspace = createWorkspaceService({
   log: (message) => log(`[workspace] ${message}`),
   // Lists files for `@` mentions outside git (fetched by `pnpm fetch-ripgrep` in a checkout).
   ripgrepPath: path.join(resourcesDir, "bin", `${process.platform}-${process.arch}`, "rg"),
+  // `/memory` shows the project's memory folder in the Files pane; main works out where it is.
+  memoryDirectory: async (projectDir) =>
+    (await import("@dawg/engine")).memoryDirectory(dataRoot, projectDir),
 });
 const worktrees = createWorktreeService({
   store: workspaceStore,
@@ -226,9 +238,27 @@ async function start(): Promise<void> {
     );
   });
 
+  // The engine host gets the search service first thing, and again whenever it changes.
+  await web.load().catch((error: unknown) => {
+    log(`Web settings did not load: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  web.onChange((search) => {
+    const message: MainToHost = { type: "web-config", search };
+    supervisor?.post(message);
+  });
+
   supervisor = createEngineSupervisor<MessagePortMain>({
-    spawn: () =>
-      spawnEngineHost({ modulePath: engineHostPath, env: engineHostEnv(), log: console.log }),
+    spawn: () => {
+      const child = spawnEngineHost({
+        modulePath: engineHostPath,
+        env: engineHostEnv(),
+        log: console.log,
+      });
+      // Before any window's connection, so every session sees it (messages keep their order).
+      const message: MainToHost = { type: "web-config", search: web.hostConfig() };
+      child.postMessage(message, []);
+      return child;
+    },
     createChannel: () => {
       const { port1, port2 } = new MessageChannelMain();
       return { engineEnd: port1, clientEnd: port2 };
@@ -479,7 +509,10 @@ function registerIpc(): void {
     openExternal: (url) => shell.openExternal(url),
   });
 
-  for (const [channel, handler] of Object.entries(handlers)) {
+  for (const [channel, handler] of Object.entries({
+    ...handlers,
+    ...createWebInvokeHandlers<WebContents>(web),
+  })) {
     ipcMain.handle(channel, (event, ...args: unknown[]) => {
       if (!trusted(event, channel))
         throw new Error("This call is only allowed from the app's own page");

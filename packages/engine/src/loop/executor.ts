@@ -28,7 +28,8 @@ import type {
 } from "../contracts/permissions.ts";
 import type { AnyTool, ToolContext, ToolOutput, ToolProbeContext } from "../contracts/tools.ts";
 import { denialMessage, describePermissionRequest } from "../permissions/index.ts";
-import type { PreparedCall } from "../toolcall/index.ts";
+import { displayForPlan } from "../sandbox/session.ts";
+import { type PreparedCall, validateToolInput } from "../toolcall/index.ts";
 import type { Emit, IdKind, LoopLimits } from "./types.ts";
 
 export interface ExecutorHost {
@@ -73,6 +74,49 @@ export interface ExecutorHost {
    * Applied to every result before it enters history, so no output can pass for a note.
    */
   quote(text: string): string;
+  /**
+   * Checkpoints (Phase 4): told just before a call that changes files runs, with the files its
+   * permission subject names, so their content can be saved first; and again once it has run,
+   * whatever the outcome. Never throws. Absent: nothing is saved.
+   */
+  fileChanges?: {
+    before(turnId: string, paths: readonly string[]): Promise<void>;
+    after(turnId: string, paths: readonly string[]): Promise<void>;
+  };
+  /**
+   * PreToolUse hooks (Phase 4), before the permission check: they may decide the call, give it a
+   * whole new input, or add context (the host keeps that for the next safe point). Absent: none.
+   */
+  preToolUse?(call: HookedCall, signal: AbortSignal): Promise<ToolHookVerdict>;
+  /** PostToolUse hooks, after a call that succeeded. What they say is the host's to keep. */
+  postToolUse?(
+    call: HookedCall & {
+      content: ContentPart[];
+      display: ToolDisplay | null;
+      durationMs: number | null;
+    },
+    signal: AbortSignal,
+  ): Promise<void>;
+}
+
+/** A call as hooks see it. */
+export interface HookedCall {
+  turnId: string;
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * What PreToolUse hooks decided (code.claude.com/docs/en/hooks, PreToolUse decision control):
+ * deny wins over everything; allow skips the permission prompt but not deny rules; ask forces a
+ * prompt, with the hook's reason shown in it.
+ */
+export interface ToolHookVerdict {
+  decision: "allow" | "deny" | "ask" | null;
+  reason: string | null;
+  /** Replaces the whole input; permission rules are judged against it. */
+  updatedInput: Record<string, unknown> | null;
 }
 
 export interface ExecutedCall {
@@ -280,8 +324,8 @@ async function settle(
 ): Promise<Settled> {
   if (prepared.status !== "ready") return textResult(prepared.error, "invalid", true);
   const call = prepared.call;
-  const tool = host.tools.get(prepared.tool.name);
-  if (tool === undefined) {
+  const listed = host.tools.get(prepared.tool.name);
+  if (listed === undefined) {
     return textResult(`The tool ${call.name} is not available in this session.`, "invalid", true);
   }
   if (batch.signal.aborted) {
@@ -291,10 +335,20 @@ async function settle(
       true,
     );
   }
+  // A tool that stands for another (MCP's CallMcpTool) hands the call over: hooks, rules and the
+  // run all see the real tool and its input.
+  const target = listed.resolve?.(prepared.input, host.probeContext()) ?? {
+    tool: listed,
+    input: prepared.input,
+  };
+  if ("error" in target) return textResult(target.error, "invalid", true);
+  const tool = target.tool;
 
   // Permission. An answer given on a card brought back after a restart stands as it is.
   let answer: PermissionResponse | null = null;
   let suggestions: readonly string[] = [];
+  /** The input the call runs with: the model's, or the one a PreToolUse hook gave it. */
+  let input = target.input;
   const restored = host.restoredPermission?.(call.id) ?? null;
   if (restored !== null) {
     suggestions = restored.suggestions;
@@ -309,12 +363,50 @@ async function settle(
       );
     }
   } else {
+    let hook: ToolHookVerdict | null = null;
+    if (host.preToolUse !== undefined) {
+      hook = await host.preToolUse(
+        { turnId: batch.turnId, toolCallId: call.id, toolName: tool.name, input },
+        batch.signal,
+      );
+      if (batch.signal.aborted) {
+        return textResult(
+          "Interrupted: the person stopped the turn before this call ran.",
+          "interrupted",
+          true,
+        );
+      }
+      if (hook.decision === "deny") {
+        return textResult(
+          `Denied: a PreToolUse hook blocked this ${tool.name} call${hook.reason === null ? "." : `: ${hook.reason}`}`,
+          "denied",
+          true,
+        );
+      }
+      if (hook.updatedInput !== null) {
+        const checked = validateToolInput(
+          { name: tool.name, description: tool.description, parameters: tool.inputSchema },
+          hook.updatedInput,
+        );
+        if (!checked.ok) {
+          const issues = checked.issues
+            .map((i) => (i.path === "" ? i.problem : `${i.path}: ${i.problem}`))
+            .join("; ");
+          return textResult(
+            `Error: a PreToolUse hook changed this call's input to one ${tool.name} does not accept (${issues}), so it was not run.`,
+            "error",
+            true,
+          );
+        }
+        input = checked.value;
+      }
+    }
     const state = host.permissionState();
     let query: PermissionQuery;
     try {
       query = {
         toolName: tool.name,
-        subject: tool.permission(prepared.input, host.probeContext()),
+        subject: tool.permission(input, host.probeContext()),
       };
     } catch (error) {
       return textResult(
@@ -323,8 +415,14 @@ async function settle(
         true,
       );
     }
-    const decision: PermissionDecision = host.permissions.decide(query, state);
+    let decision: PermissionDecision = host.permissions.decide(query, state);
     if (decision.behavior === "deny") return textResult(decision.message, "denied", true);
+    // A hook's allow skips the prompt; its ask makes one. Neither gets past a deny.
+    if (hook?.decision === "allow" && decision.behavior === "ask") {
+      decision = { behavior: "allow", reason: decision.reason };
+    } else if (hook?.decision === "ask" && decision.behavior === "allow") {
+      decision = { behavior: "ask", reason: decision.reason, suggestions: [] };
+    }
     if (decision.behavior === "ask") {
       const wording = { cwd: state.cwd, homeDir: state.homeDir };
       if (!host.canAskPermission()) {
@@ -334,16 +432,26 @@ async function settle(
           true,
         );
       }
-      const { title, reason } = describePermissionRequest(query, decision, wording);
+      const described = describePermissionRequest(query, decision, wording);
       const request: PermissionRequest = {
         requestId: host.newId("request"),
         toolCallId: call.id,
         toolName: tool.name,
-        input: prepared.input,
-        title,
-        reason,
+        input,
+        title: described.title,
+        // An ask from a hook shows the hook's reason ("For ask, shown to the user").
+        reason:
+          hook?.decision === "ask" && hook.reason !== null
+            ? `A PreToolUse hook asks you to confirm: ${hook.reason}`
+            : described.reason,
         suggestions: decision.suggestions,
       };
+      // Added (Phase 4, sandbox): where a shell command would run, for the card to say.
+      const sandbox =
+        query.subject.kind === "command"
+          ? displayForPlan(query.subject.sandbox ?? null)
+          : undefined;
+      if (sandbox !== undefined) request.sandbox = sandbox;
       suggestions = decision.suggestions;
       try {
         answer = await host.askPermission(request, batch.turnId, batch.signal);
@@ -380,14 +488,18 @@ async function settle(
       true,
     );
   }
+  // The files a call changes are saved before it runs (checkpoints).
+  const changing = host.fileChanges === undefined ? [] : editedPaths(tool, input, host);
+  if (changing.length > 0) await host.fileChanges?.before(batch.turnId, changing);
   const startedAt = host.now();
   let output: ToolOutput;
   try {
     output = await tool.execute(
-      prepared.input,
+      input,
       host.toolContext({ turnId: batch.turnId, toolCallId: call.id, signal: batch.signal }),
     );
   } catch (error) {
+    if (changing.length > 0) await host.fileChanges?.after(batch.turnId, changing);
     const durationMs = Math.max(0, host.now() - startedAt);
     if (batch.signal.aborted) {
       return textResult(
@@ -404,9 +516,25 @@ async function settle(
       durationMs,
     );
   }
+  if (changing.length > 0) await host.fileChanges?.after(batch.turnId, changing);
   const durationMs = Math.max(0, host.now() - startedAt);
   const isError = output.isError === true;
   const content = await spillIfLarge(output.content, call, host);
+  // PostToolUse runs after calls that succeeded, before the model sees the result.
+  if (!isError && !batch.signal.aborted && host.postToolUse !== undefined) {
+    await host.postToolUse(
+      {
+        turnId: batch.turnId,
+        toolCallId: call.id,
+        toolName: tool.name,
+        input,
+        content,
+        display: output.display ?? null,
+        durationMs,
+      },
+      batch.signal,
+    );
+  }
   return {
     content,
     isError,
@@ -418,6 +546,21 @@ async function settle(
       : { read: output.touched?.read ?? [], written: output.touched?.written ?? [] },
     durationMs,
   };
+}
+
+/** The files a call that can change things says it will change; none for anything else. */
+function editedPaths(
+  tool: AnyTool,
+  input: Record<string, unknown>,
+  host: ExecutorHost,
+): readonly string[] {
+  if (tool.readOnly) return [];
+  try {
+    const subject = tool.permission(input, host.probeContext());
+    return subject.kind === "edit" ? subject.paths : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

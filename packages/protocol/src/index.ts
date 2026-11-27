@@ -1,8 +1,12 @@
 export const packageName = "@dawg/protocol";
+export * from "./checkpoints.ts";
 export * from "./common.ts";
 export * from "./events.ts";
 export * from "./jsonrpc.ts";
+export * from "./mcp.ts";
 export * from "./methods.ts";
 export * from "./peer/index.ts";
+export * from "./sandbox.ts";
+export * from "./subagents.ts";
 export * from "./transport/index.ts";
 export * from "./version.ts";

@@ -5,11 +5,13 @@
  */
 import type { PermissionRequest, PermissionResponse } from "@dawg/protocol";
 import { Fragment, memo, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { agentTitle } from "../lib/agents.ts";
 import { displayPath } from "../lib/format.ts";
 import { TextWithCode } from "../markdown/index.ts";
 import type { PermissionItem } from "../state/types.ts";
 import { DiffView } from "../transcript/DiffView.tsx";
 import type { TranscriptEnv } from "../transcript/env.ts";
+import { SandboxPermissionLine } from "../transcript/Sandbox.tsx";
 import { Button } from "../ui/index.ts";
 import styles from "./DecisionCard.module.css";
 import { DecisionFrame, DecisionRecord, useFocusOnAppear } from "./DecisionFrame.tsx";
@@ -28,11 +30,33 @@ function joinWithAnd(items: readonly ReactNode[]): ReactNode[] {
   ));
 }
 
+/** "Asked by the Explore agent: Find the config loader", for a request a subagent raised. */
+function AgentLine({ request }: { request: PermissionRequest }) {
+  if (!request.agent) return null;
+  return (
+    <p className={styles.agent}>
+      <span className="vh">Asked by </span>
+      {agentTitle(request.agent)}
+    </p>
+  );
+}
+
+/** The card's accessible name: what it asks, and which agent asks when one does. */
+function cardLabel(prefix: string, request: PermissionRequest): string {
+  const who = request.agent ? ` for the ${agentTitle(request.agent)}` : "";
+  return `${prefix}${who}: ${request.title}`;
+}
+
 /** What will run or change: the command, the diff, or the call's input. */
 function Preview({ request, env }: { request: PermissionRequest; env: TranscriptEnv }) {
   const command = request.input.command;
   if (request.toolName === "Bash" && typeof command === "string") {
     return <pre className={styles.command}>{command}</pre>;
+  }
+  // WebFetch: the whole address it will fetch, so the person sees exactly where it goes.
+  const url = request.input.url;
+  if (request.toolName === "WebFetch" && typeof url === "string") {
+    return <pre className={styles.command}>{url}</pre>;
   }
   const display = request.display;
   if (display?.kind === "diff") {
@@ -180,13 +204,15 @@ function PendingPermission({
       icon="shield"
       heading="Permission needed"
       aside={<span className={styles.aside}>{request.toolName}</span>}
-      label={`Permission needed: ${request.title}`}
+      label={cardLabel("Permission needed", request)}
       shortcuts={sent ? null : shortcuts}
     >
+      <AgentLine request={request} />
       <p className={styles.title}>
         <TextWithCode text={request.title} />
       </p>
       <Preview request={request} env={env} />
+      <SandboxPermissionLine sandbox={request.sandbox} />
       {request.reason && (
         <p className={styles.why}>
           <TextWithCode text={request.reason} />
@@ -279,14 +305,16 @@ function AnsweredPermission({ item, env }: { item: PermissionItem; env: Transcri
       icon="shield"
       heading="Permission"
       aside={<span className={styles.aside}>{request.toolName}</span>}
-      label={`Permission, answered: ${request.title}`}
+      label={cardLabel("Permission, answered", request)}
       shortcuts={null}
       readOnly
     >
+      <AgentLine request={request} />
       <p className={styles.title}>
         <TextWithCode text={request.title} />
       </p>
       <Preview request={request} env={env} />
+      <SandboxPermissionLine sandbox={request.sandbox} />
       {request.reason && (
         <p className={styles.why}>
           <TextWithCode text={request.reason} />
@@ -357,7 +385,11 @@ export const PermissionCard = memo(function PermissionCard({
     <div className={styles.answered}>
       <DecisionRecord
         icon="shield"
-        text={permissionRecord(item)}
+        text={
+          item.request.agent
+            ? `${permissionRecord(item)} · ${agentTitle(item.request.agent)}`
+            : permissionRecord(item)
+        }
         shown={shownAgain}
         onShowAgain={(shown) => env.showCardAgain(item.requestId, shown)}
       />

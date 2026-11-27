@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { chatOnce } from "../endpoint/chat.ts";
-import type { Endpoint } from "../types.ts";
+import type { CatalogEntry, Endpoint } from "../types.ts";
 import { isAlive, waitFor } from "./__fixtures__/fake.ts";
+import { twoSlotLayout } from "./args.ts";
+import { helperPaths, helperRuntimeConfig } from "./helper.ts";
 import { ensureTestModel } from "./install.ts";
 import { readRuntimeLock } from "./lock.ts";
 import { resolveRuntimeBinary } from "./resolve.ts";
@@ -195,6 +197,221 @@ describe.skipIf(!enabled)("runtime integration (real llama-server)", () => {
     const running = execFileSync("ps", ["-A", "-o", "pid=,command="], { encoding: "utf8" })
       .split("\n")
       .filter((line) => line.includes(binary) || line.includes(work));
+    expect(running).toEqual([]);
+  }, 60_000);
+});
+
+/** Resident memory of a process in bytes, from `ps`. */
+function residentBytes(pid: number): number {
+  const kib = Number(
+    execFileSync("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" }).trim(),
+  );
+  return kib * 1024;
+}
+
+/**
+ * The helper model's runtime beside a main one, as the app and the command line run them: two
+ * supervisors, each with its own port, key file, logs and slots. The tiny test model stands in
+ * for both models (never a real catalog model in tests).
+ */
+describe.skipIf(!enabled)("helper runtime beside the main runtime (real llama-server)", () => {
+  let work: string;
+  let main: RuntimeSupervisor;
+  let helper: RuntimeSupervisor;
+  let mainEndpoint: Endpoint;
+  let helperEndpoint: Endpoint;
+  let binary: string;
+  const helperStates: RuntimeState[] = [];
+  const mainStates: RuntimeState[] = [];
+  const pids = new Set<number>();
+  const measured: Record<string, number> = {};
+  const question = {
+    role: "user" as const,
+    content: "Write a three-word title for: fix the login bug.",
+  };
+
+  beforeAll(async () => {
+    const lock = await readRuntimeLock();
+    binary = (await resolveRuntimeBinary()).binary;
+    const model = await ensureTestModel({ pin: lock.testModel });
+    work = await mkdtemp(join(tmpdir(), "dawg-helper-it-"));
+    const logDir = process.env.DAWG_RUNTIME_TEST_LOG_DIR ?? join(work, "logs");
+    const timingOptions = {
+      loadTimeoutMs: 180_000,
+      healthIntervalMs: 100,
+      restartBaseDelayMs: 500,
+    };
+    const layout = twoSlotLayout(2048, 1024);
+    main = new RuntimeSupervisor({
+      binary,
+      model: { path: model, sha256: lock.testModel.sha256 },
+      contextSize: layout.contextSize,
+      slots: layout.slots,
+      settings: { cacheRamMiB: 256, ctxCheckpoints: 4, checkpointMinStep: 256, ...layout.settings },
+      paths: { slotSaveDir: join(work, "slots"), logDir, keyDir: join(work, "keys") },
+      timing: timingOptions,
+    });
+    // A stand-in catalog entry: the test model's own file, laid out as the helper.
+    const entry: CatalogEntry = {
+      id: "test-helper",
+      role: "helper",
+      displayName: "Test helper",
+      licence: { spdx: "Apache-2.0", url: "https://example.com/LICENSE" },
+      source: {
+        repo: lock.testModel.repo,
+        revision: lock.testModel.revision,
+        file: lock.testModel.file,
+        sha256: lock.testModel.sha256,
+        sizeBytes: lock.testModel.sizeBytes,
+      },
+      minMemoryBytes: 48 * 1024 ** 3,
+      // The test model was trained on 8K; the real helper's window is 32K.
+      context: { default: 8192, max: 8192 },
+      capabilities: { tools: false, vision: false, reasoning: false },
+      profile: "minicpm5",
+      rank: 1,
+    };
+    const config = helperRuntimeConfig({ entry, modelPath: model });
+    helper = new RuntimeSupervisor({
+      binary,
+      model: config.model,
+      contextSize: config.contextSize,
+      slots: config.slots,
+      settings: config.settings,
+      paths: { ...helperPaths(work), logDir, keyDir: join(work, "keys") },
+      timing: timingOptions,
+    });
+    main.on("state", (s) => mainStates.push(s));
+    helper.on("state", (s) => {
+      helperStates.push(s);
+      if (helper.pid) pids.add(helper.pid);
+    });
+  }, 600_000);
+
+  afterAll(async () => {
+    await Promise.all([helper?.stop(), main?.stop()]);
+    if (work) await rm(work, { recursive: true, force: true });
+    console.log(`[helper integration] measured: ${JSON.stringify(measured)}`);
+  });
+
+  test("both start, on different ports, each with its own window", async () => {
+    const started = performance.now();
+    [mainEndpoint, helperEndpoint] = await Promise.all([
+      main.start(),
+      helper.start().then((endpoint) => {
+        measured.helperStartToReadyMs = Math.round(performance.now() - started);
+        return endpoint;
+      }),
+    ]);
+    for (const pid of [main.pid, helper.pid]) if (pid) pids.add(pid);
+    expect(main.port).not.toBe(helper.port);
+    expect(mainEndpoint.baseUrl).not.toBe(helperEndpoint.baseUrl);
+    expect(mainEndpoint.apiKey).not.toBe(helperEndpoint.apiKey);
+    expect(helperEndpoint.model).toBe("test-helper");
+    expect(helperEndpoint.contextWindow).toBe(8192);
+    expect(helper.serverInfo?.totalSlots).toBe(1);
+    expect(mainEndpoint.contextWindow).toBe(2048);
+    measured.helperResidentBytes = residentBytes(helper.pid as number);
+  }, 300_000);
+
+  test("keeps its own log files beside the main runtime's", async () => {
+    const logs = await readdir(process.env.DAWG_RUNTIME_TEST_LOG_DIR ?? join(work, "logs"));
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        "runtime.log",
+        "llama-server.log",
+        "helper-runtime.log",
+        "helper-llama-server.log",
+      ]),
+    );
+  });
+
+  test("the helper answers a side request with thinking switched off", async () => {
+    const started = performance.now();
+    const reply = await chatOnce(helperEndpoint, {
+      messages: [question],
+      maxTokens: 16,
+      temperature: 0.2,
+      extra: { chat_template_kwargs: { enable_thinking: false }, id_slot: 0 },
+    });
+    measured.helperTitleMs = Math.round(performance.now() - started);
+    expect(reply.content.trim().length).toBeGreaterThan(0);
+    // And a long prompt, a page to summarise (about 4,000 tokens: half the stand-in's window, and
+    // well inside a CPU-only runner's time even when the machine is busy).
+    const page = Array.from(
+      { length: 300 },
+      (_, i) => `Line ${i}: the page says nothing new.`,
+    ).join("\n");
+    const before = performance.now();
+    const summary = await chatOnce(helperEndpoint, {
+      messages: [{ role: "user", content: `Summarise this page in one sentence.\n\n${page}` }],
+      maxTokens: 32,
+      temperature: 0.2,
+      timeoutMs: 240_000,
+      extra: { chat_template_kwargs: { enable_thinking: false } },
+    });
+    measured.helperPageMs = Math.round(performance.now() - before);
+    measured.helperPagePromptTokens = summary.usage?.promptTokens ?? 0;
+    expect(summary.content.trim().length).toBeGreaterThan(0);
+    measured.helperResidentAfterPageBytes = residentBytes(helper.pid as number);
+  }, 300_000);
+
+  test("kill -9 of the helper is recovered on a new port; the main runtime is untouched", async () => {
+    const pid = helper.pid as number;
+    const mainPid = main.pid;
+    const readyBefore = helperStates.filter((s) => s === "ready").length;
+    const killedAt = performance.now();
+    process.kill(pid, "SIGKILL");
+    await waitFor(
+      () => helperStates.filter((s) => s === "ready").length > readyBefore,
+      180_000,
+      50,
+    );
+    measured.helperRecoverAfterKill9Ms = Math.round(performance.now() - killedAt);
+    expect(helperStates.slice(-3)).toEqual(["crashed", "starting", "ready"]);
+    expect(isAlive(pid)).toBe(false);
+    if (helper.pid) pids.add(helper.pid);
+    helperEndpoint = helper.endpoint as Endpoint;
+    expect(main.pid).toBe(mainPid);
+    expect(mainStates).toEqual(["starting", "ready"]);
+    const reply = await chatOnce(helperEndpoint, {
+      messages: [question],
+      maxTokens: 8,
+      temperature: 0,
+    });
+    expect(reply.content.trim().length).toBeGreaterThan(0);
+    const mainReply = await chatOnce(mainEndpoint, {
+      messages: [question],
+      maxTokens: 8,
+      temperature: 0,
+    });
+    expect(mainReply.content.trim().length).toBeGreaterThan(0);
+  }, 300_000);
+
+  test("idle unload: the helper sleeps with the idle setting and wakes on the next side request", async () => {
+    const settings = { ...helper.currentConfig.settings, idleUnloadSeconds: 1 };
+    helperEndpoint = await helper.reconfigure({ settings });
+    if (helper.pid) pids.add(helper.pid);
+    await waitFor(() => helper.isSleeping(), 30_000, 250);
+    measured.helperAsleepResidentBytes = residentBytes(helper.pid as number);
+    const woke = performance.now();
+    const reply = await chatOnce(helperEndpoint, {
+      messages: [question],
+      maxTokens: 8,
+      temperature: 0,
+    });
+    measured.helperWakeAndAnswerMs = Math.round(performance.now() - woke);
+    expect(reply.content.trim().length).toBeGreaterThan(0);
+    expect(await helper.isSleeping()).toBe(false);
+  }, 120_000);
+
+  test("stopping both leaves no process behind", async () => {
+    const watchdogs = [main.processIds.watchdog, helper.processIds.watchdog];
+    await Promise.all([helper.stop(), main.stop()]);
+    for (const pid of [...pids, ...watchdogs]) if (pid) expect(isAlive(pid)).toBe(false);
+    const running = execFileSync("ps", ["-A", "-o", "pid=,command="], { encoding: "utf8" })
+      .split("\n")
+      .filter((line) => line.includes(binary) && line.includes(work));
     expect(running).toEqual([]);
   }, 60_000);
 });

@@ -4,8 +4,11 @@
  * so the rules are tested without rendering.
  */
 import type { ContentPart, DiffHunk, FileDisplay, SearchDisplay } from "@dawg/protocol";
+import { MCP_DISPATCHER } from "../lib/tools.ts";
 import type { ToolCallDisplay, ToolCallItem } from "../state/types.ts";
 import type { IconName } from "../ui/index.ts";
+import { agentHasOutcome, isAgentCall } from "./agentInfo.ts";
+import { webMetaText } from "./webInfo.ts";
 
 /** Tools whose result is a diff. Their cards open by default in "smart" mode. */
 export const EDIT_TOOLS: ReadonlySet<string> = new Set([
@@ -32,8 +35,10 @@ export function toolIcon(toolName: string): IconName {
     case "WebFetch":
     case "WebSearch":
       return "globe";
+    case "ToolSearch":
+      return "search";
     default:
-      return "model";
+      return toolName === MCP_DISPATCHER || toolName.startsWith("mcp__") ? "server" : "model";
   }
 }
 
@@ -59,11 +64,13 @@ export function toolFailed(item: ToolCallItem): boolean {
 /**
  * Whether a card starts open, for the "Tool calls in the transcript" setting. In "smart" mode
  * what needs a look opens: failed calls, edits (to show the diff) and running commands (to show
- * their live output); reads, searches and passing commands stay one line.
+ * their live output); reads, searches and passing commands stay one line. A subagent's card
+ * opens once it has a final message (or an error) to read.
  */
 export function defaultToolOpen(item: ToolCallItem, setting: ToolCallDisplay): boolean {
   if (setting === "open") return true;
   if (setting === "closed") return false;
+  if (isAgentCall(item)) return agentHasOutcome(item);
   if (item.state === "running") return item.toolName === "Bash" || EDIT_TOOLS.has(item.toolName);
   if (toolFailed(item)) return true;
   if (EDIT_TOOLS.has(item.toolName)) return item.state === "success";
@@ -163,6 +170,12 @@ export function toolMeta(item: ToolCallItem): MetaPart[] {
         tone: "neutral",
       },
     ];
+  }
+  if (display?.kind === "web-fetch" || display?.kind === "web-search") {
+    return [{ kind: "text", text: webMetaText(display), tone: "neutral" }];
+  }
+  if (display?.kind === "mcp" && display.savedTo !== null) {
+    return [{ kind: "text", text: "saved to a file", tone: "neutral" }];
   }
   return [];
 }

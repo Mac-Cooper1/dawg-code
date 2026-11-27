@@ -25,8 +25,10 @@ import {
   FileRefSchema,
   FindFilesInputSchema,
   type FindFilesResult,
+  HelperEnabledSchema,
   IdleUnloadSchema,
   IPC,
+  KeyedSearchProviderSchema,
   MenuModelSchema,
   ModelIdSchema,
   type ModelOption,
@@ -53,6 +55,10 @@ import {
   TerminalSizeSchema,
   TrackSessionInputSchema,
   type Unsubscribe,
+  WebCheckInputSchema,
+  type WebCheckResult,
+  WebSettingsInputSchema,
+  type WebSettingsState,
   type WindowState,
   WindowStateSchema,
   type WorkspaceChangedEvent,
@@ -157,6 +163,10 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
       setIdleUnload: async (minutes) => {
         const valid = validate(IdleUnloadSchema, minutes, "idle unload time");
         await ipc.invoke(IPC.modelsSetIdleUnload, valid);
+      },
+      setHelperEnabled: async (enabled) => {
+        const valid = validate(HelperEnabledSchema, enabled, "helper setting");
+        await ipc.invoke(IPC.modelsSetHelperEnabled, valid);
       },
       addModelFile: async () => (await ipc.invoke(IPC.modelsAddFile)) as AddedModelFile | null,
       connectServer: async (input) => {
@@ -292,6 +302,24 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
         IPC.permissionsCheckRule,
         PermissionRuleTextSchema,
         "rule",
+      ),
+    },
+    web: {
+      read: async () => (await ipc.invoke(IPC.webRead)) as WebSettingsState,
+      write: invokeWith<typeof WebSettingsInputSchema, WebSettingsState>(
+        IPC.webWrite,
+        WebSettingsInputSchema,
+        "web settings",
+      ),
+      removeKey: invokeWith<typeof KeyedSearchProviderSchema, WebSettingsState>(
+        IPC.webRemoveKey,
+        KeyedSearchProviderSchema,
+        "search service",
+      ),
+      check: invokeWith<typeof WebCheckInputSchema, WebCheckResult>(
+        IPC.webCheck,
+        WebCheckInputSchema,
+        "web settings",
       ),
     },
     dialogs: {

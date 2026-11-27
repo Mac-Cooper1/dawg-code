@@ -6,14 +6,16 @@
 import type { ContentPart } from "@dawg/protocol";
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { displayPath, formatDuration } from "../lib/format.ts";
-import { toolTarget, toolVerb } from "../lib/tools.ts";
+import { mcpCallOf, toolTarget, toolVerb } from "../lib/tools.ts";
 import type { ToolCallItem } from "../state/types.ts";
 import { Icon, Spinner } from "../ui/index.ts";
 import { DiffView } from "./DiffView.tsx";
 import type { TranscriptEnv } from "./env.ts";
 import { FileLinesView } from "./FileLinesView.tsx";
 import { useNow } from "./hooks.ts";
+import { McpToolBody } from "./McpToolBody.tsx";
 import { OutputLines } from "./OutputLines.tsx";
+import { SandboxDetails, SandboxMark, sandboxMarkText } from "./Sandbox.tsx";
 import styles from "./ToolCard.module.css";
 import {
   commandOutput,
@@ -25,6 +27,7 @@ import {
   toolIcon,
   toolMeta,
 } from "./toolInfo.ts";
+import { WebToolBody } from "./WebToolBodies.tsx";
 
 /** Lines of a Read result shown before "Show all". */
 export const READ_PREVIEW_LINES = 15;
@@ -141,6 +144,7 @@ function BashBody({ item, env }: { item: ToolCallItem; env: TranscriptEnv }) {
           ))}
         </div>
       )}
+      {display?.sandbox && <SandboxDetails sandbox={display.sandbox} />}
       {(otherCwd !== null || display?.outputPath) && (
         <div className={styles.footer}>
           {otherCwd !== null && (
@@ -274,6 +278,18 @@ function ToolBody({ item, env }: { item: ToolCallItem; env: TranscriptEnv }) {
   if (item.toolName === "Read") return <ReadBody item={item} />;
   if (EDIT_TOOLS.has(item.toolName)) return <EditBody item={item} env={env} />;
   if (item.toolName === "Grep" || item.toolName === "Glob") return <TextResultBody item={item} />;
+  // WebFetch and WebSearch: the page or the results, once the call finished with its display.
+  const display = item.display;
+  if (
+    item.state === "success" &&
+    (display?.kind === "web-fetch" || display?.kind === "web-search")
+  ) {
+    return <WebToolBody display={display} env={env} />;
+  }
+  // MCP tools, by their own name or through CallMcpTool: server, tool, arguments and result.
+  if (mcpCallOf(item.toolName, item.input, display) !== null) {
+    return <McpToolBody item={item} env={env} />;
+  }
   return <GenericBody item={item} />;
 }
 
@@ -293,6 +309,7 @@ export const ToolCard = memo(function ToolCard({ item, open, env }: ToolCardProp
     (stringInput(item.input, "description") ?? "");
   const meta = toolMeta(item);
   const isCommand = item.toolName === "Bash" || item.display?.kind === "command";
+  const sandbox = item.display?.kind === "command" ? item.display.sandbox : undefined;
   const duration = isCommand && !running ? toolDurationMs(item) : null;
   const time = running
     ? formatDuration(Math.max(0, now - item.startedAt))
@@ -305,6 +322,7 @@ export const ToolCard = memo(function ToolCard({ item, open, env }: ToolCardProp
     ...meta.map((part) =>
       part.kind === "diff" ? `+${part.additions} −${part.deletions}` : part.text,
     ),
+    sandbox === undefined ? null : sandboxMarkText(sandbox),
     time,
   ]
     .filter(Boolean)
@@ -334,6 +352,7 @@ export const ToolCard = memo(function ToolCard({ item, open, env }: ToolCardProp
           // biome-ignore lint/suspicious/noArrayIndexKey: meta parts are positional
           <MetaView key={index} part={part} />
         ))}
+        {sandbox !== undefined && <SandboxMark sandbox={sandbox} />}
         {time !== null && <span className={styles.meta}>{time}</span>}
         <Icon
           name="chevron-right"

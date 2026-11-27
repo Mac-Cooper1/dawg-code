@@ -27,6 +27,7 @@ import {
 import { PermissionCard } from "../cards/PermissionCard.tsx";
 import { PlanCard } from "../cards/PlanCard.tsx";
 import { QuestionCard } from "../cards/QuestionCard.tsx";
+import { hookLine, hookTone, skippedLine } from "../lib/hooks.ts";
 import { useReducedMotion } from "../markdown/index.ts";
 import type {
   PermissionItem,
@@ -35,13 +36,17 @@ import type {
   TranscriptView,
 } from "../state/types.ts";
 import { Button, Spinner } from "../ui/index.ts";
+import { AgentCard } from "./AgentCard.tsx";
 import { AssistantText } from "./AssistantText.tsx";
+import { isAgentCall } from "./agentInfo.ts";
 import { CommandOutput } from "./CommandOutput.tsx";
 import { CompactionView } from "./CompactionView.tsx";
 import type { TranscriptProps } from "./contract.ts";
 import { Divider } from "./Divider.tsx";
 import { ErrorCard } from "./ErrorCard.tsx";
 import type { TranscriptEnv } from "./env.ts";
+import { ForkMarker, type ForkMarkerView, forkBoundary, turnNumber } from "./ForkMarker.tsx";
+import { HookSkippedView, HookView } from "./HookView.tsx";
 import { NoteView } from "./NoteView.tsx";
 import { PromptProgress } from "./PromptProgress.tsx";
 import { Reasoning } from "./Reasoning.tsx";
@@ -86,6 +91,11 @@ export function announcementFor(item: TranscriptItem): string | null {
       return item.state === "pending" ? "dawg has a plan ready for review." : null;
     case "error":
       return `Error: ${item.error.message}`;
+    case "hook":
+      // A plain run is quiet; a block or a failure is news.
+      return hookTone(item) === "quiet" ? null : hookLine(item);
+    case "hook-skipped":
+      return skippedLine(item.sources);
     default:
       return null;
   }
@@ -135,6 +145,8 @@ interface RowContext {
   queuedTurnIds: TranscriptView["queuedTurnIds"];
   permissions: ReadonlyMap<string, PermissionItem>;
   autoFocusPendingCard: boolean;
+  /** A forked session's marker, and the item it goes before (null: at the end). */
+  fork: { view: ForkMarkerView; beforeItemId: string | null; onOpen: (() => void) | null } | null;
 }
 
 function renderItem(item: TranscriptItem, context: RowContext, env: TranscriptEnv): ReactNode {
@@ -147,6 +159,15 @@ function renderItem(item: TranscriptItem, context: RowContext, env: TranscriptEn
     case "reasoning":
       return <Reasoning item={item} open={opened ?? false} env={env} />;
     case "tool":
+      if (isAgentCall(item)) {
+        return (
+          <AgentCard
+            item={item}
+            open={opened ?? defaultToolOpen(item, context.toolCallDisplay)}
+            env={env}
+          />
+        );
+      }
       return (
         <ToolCard
           item={item}
@@ -200,6 +221,10 @@ function renderItem(item: TranscriptItem, context: RowContext, env: TranscriptEn
       return <ErrorCard item={item} open={opened ?? false} env={env} />;
     case "command-output":
       return <CommandOutput item={item} env={env} />;
+    case "hook":
+      return <HookView item={item} open={opened ?? false} env={env} />;
+    case "hook-skipped":
+      return <HookSkippedView item={item} env={env} />;
   }
 }
 
@@ -216,6 +241,8 @@ const ESTIMATED_HEIGHT: Partial<Record<TranscriptItem["kind"], number>> = {
   note: 24,
   compaction: 24,
   "turn-summary": 24,
+  hook: 24,
+  "hook-skipped": 28,
 };
 const DEFAULT_HEIGHT = 120;
 /** The column's gap between items, as in Transcript.module.css. */
@@ -250,6 +277,15 @@ const RowGroup = memo(
       if (item.kind === "tool" && isToolHidden(item.permissionRequestId, context.permissions)) {
         continue;
       }
+      if (context.fork !== null && context.fork.beforeItemId === item.id) {
+        rows.push(
+          <ForkMarker
+            key={`${item.id}:fork`}
+            view={context.fork.view}
+            onOpen={context.fork.onOpen}
+          />,
+        );
+      }
       if (item.kind === "user" && item.turnId !== null && context.queuedTurnIds[item.turnId]) {
         rows.push(<Divider key={`${item.id}:queued`} text="Queued message sent" />);
       }
@@ -266,6 +302,22 @@ const RowGroup = memo(
   },
   (a, b) => a.context === b.context && a.env === b.env && sameItems(a.items, b.items),
 );
+
+/**
+ * The item a fork's marker goes before: the first message of a turn the fork made itself, or the
+ * first item for a fork from no particular turn. Null: after everything (no such turn yet).
+ */
+function forkPlace(items: readonly TranscriptItem[], fork: ForkMarkerView | null): string | null {
+  if (fork === null) return null;
+  const boundary = forkBoundary(fork.point);
+  if (boundary === null) return items[0]?.id ?? null;
+  for (const item of items) {
+    if (item.kind !== "user") continue;
+    const n = turnNumber(item.turnId);
+    if (n !== null && n >= boundary) return item.id;
+  }
+  return null;
+}
 
 /** Runs `callback` once the window has a moment, or soon anyway. Returns a cancel function. */
 function whenIdle(callback: () => void): () => void {
@@ -341,6 +393,8 @@ export function Transcript(props: TranscriptProps) {
     latest.current = props;
   });
   const hasOpenInChanges = props.onOpenInChanges !== undefined;
+  const hasReview = props.onReviewProjectCode !== undefined;
+  const hasSubagents = props.onOpenSubagent !== undefined;
   const env = useMemo<TranscriptEnv>(
     () => ({
       cwd: view.cwd,
@@ -356,11 +410,29 @@ export function Transcript(props: TranscriptProps) {
       openInChanges: hasOpenInChanges
         ? (filePath) => latest.current.onOpenInChanges?.(filePath)
         : null,
+      reviewProjectCode: hasReview
+        ? (projectDir) => latest.current.onReviewProjectCode?.(projectDir)
+        : null,
+      openSubagent: hasSubagents ? (agentId) => latest.current.onOpenSubagent?.(agentId) : null,
     }),
-    [view.cwd, homeDir, hasOpenInChanges],
+    [view.cwd, homeDir, hasOpenInChanges, hasReview, hasSubagents],
   );
 
   const permissions = usePermissions(view.items);
+  const forkView = props.fork ?? null;
+  const hasOpenOriginal = props.onOpenOriginal !== undefined;
+  const beforeItemId = useMemo(() => forkPlace(view.items, forkView), [view.items, forkView]);
+  const fork = useMemo<RowContext["fork"]>(
+    () =>
+      forkView === null
+        ? null
+        : {
+            view: forkView,
+            beforeItemId,
+            onOpen: hasOpenOriginal ? () => latest.current.onOpenOriginal?.() : null,
+          },
+    [forkView, beforeItemId, hasOpenOriginal],
+  );
   const context = useMemo<RowContext>(
     () => ({
       openItems: view.openItems,
@@ -370,6 +442,7 @@ export function Transcript(props: TranscriptProps) {
       queuedTurnIds: view.queuedTurnIds,
       permissions,
       autoFocusPendingCard,
+      fork,
     }),
     [
       view.openItems,
@@ -379,6 +452,7 @@ export function Transcript(props: TranscriptProps) {
       view.queuedTurnIds,
       permissions,
       autoFocusPendingCard,
+      fork,
     ],
   );
   const first = useFirstRow(view);
@@ -424,6 +498,9 @@ export function Transcript(props: TranscriptProps) {
             <p className={styles.quiet}>Nothing here yet. Send a message below to start.</p>
           ) : (
             groups
+          )}
+          {view.loaded && fork !== null && fork.beforeItemId === null && (
+            <ForkMarker view={fork.view} onOpen={fork.onOpen} />
           )}
           {view.promptProgress && <PromptProgress progress={view.promptProgress} />}
         </div>

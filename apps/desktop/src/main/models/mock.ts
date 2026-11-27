@@ -4,7 +4,12 @@
  * succeed and change nothing, so the end-to-end tour sees the same screens every run.
  */
 import type { CatalogModel, ModelsState, ServerInfo } from "../../shared/bridge.ts";
-import { MOCK_DEFAULT_MODEL_ID, MOCK_MODEL_STATUS, MOCK_MODELS } from "../../shared/mock-models.ts";
+import {
+  MOCK_DEFAULT_MODEL_ID,
+  MOCK_HELPER,
+  MOCK_MODEL_STATUS,
+  MOCK_MODELS,
+} from "../../shared/mock-models.ts";
 import type { ModelService } from "./service.ts";
 
 const GB = 1024 ** 3;
@@ -60,6 +65,7 @@ export function mockModelsState(): ModelsState {
     status: { ...MOCK_MODEL_STATUS },
     defaultModelId: MOCK_DEFAULT_MODEL_ID,
     idleUnloadMinutes: null,
+    helper: { ...MOCK_HELPER, licence: { ...MOCK_HELPER.licence } },
   };
 }
 
@@ -83,6 +89,7 @@ export function createMockModelService(): ModelService {
     stop: done,
     setDefault: done,
     setIdleUnload: done,
+    setHelperEnabled: done,
     addModelFile: async () => null,
     connectServer: async (input) => ({
       id: "remote:mock00",

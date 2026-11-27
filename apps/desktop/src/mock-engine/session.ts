@@ -57,7 +57,7 @@ export interface SessionHooks {
 }
 
 /** The slash commands the mock engine runs, worded as the real engine's. */
-export const COMMANDS: readonly CommandInfo[] = [
+const BUILTIN_COMMANDS: readonly Omit<CommandInfo, "source" | "kind">[] = [
   { name: "help", description: "Show the commands, or details of one", argumentHint: "[command]" },
   { name: "context", description: "Show where the context window is going", argumentHint: null },
   {
@@ -70,7 +70,23 @@ export const COMMANDS: readonly CommandInfo[] = [
     description: "Start a new conversation; the current one stays saved",
     argumentHint: "[name]",
   },
+  {
+    name: "rewind",
+    description: "Go back to an earlier point: restore files, the conversation, or both",
+    argumentHint: null,
+  },
+  {
+    name: "memory",
+    description: "Show the memory folder and instruction files, to edit them",
+    argumentHint: null,
+  },
 ];
+
+export const COMMANDS: readonly CommandInfo[] = BUILTIN_COMMANDS.map((command) => ({
+  ...command,
+  source: "builtin",
+  kind: "command",
+}));
 
 /** How a recorded event is changed to fit what actually happened. */
 export interface RecordedContext {

@@ -3,8 +3,15 @@ import { displayPath } from "../lib/format.ts";
 import { withInlineCode } from "../markdown/index.ts";
 import type { UserMessageItem } from "../state/types.ts";
 import { Chip } from "../ui/index.ts";
+import { Divider } from "./Divider.tsx";
 import type { TranscriptEnv } from "./env.ts";
 import styles from "./UserMessage.module.css";
+
+/** The first line of a turn the engine started for a background agent, short enough for a divider. */
+function noticeLine(text: string): string {
+  const line = text.split("\n", 1)[0]?.trim() ?? "";
+  return line.length > 140 ? `${line.slice(0, 139)}…` : line;
+}
 
 function lineRange(start: number | undefined, end: number | undefined): string {
   if (start === undefined) return "";
@@ -19,6 +26,8 @@ export const UserMessage = memo(function UserMessage({
   item: UserMessageItem;
   env: TranscriptEnv;
 }) {
+  // The engine started this turn for a background agent that ended: no person wrote it.
+  if (item.fromAgent) return <Divider text={noticeLine(item.text)} />;
   const images = item.images.filter((image) => image.mediaType.startsWith("image/"));
   return (
     <article className={styles.message} aria-label="Your message">

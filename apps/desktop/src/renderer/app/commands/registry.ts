@@ -307,6 +307,28 @@ const THIS_SESSION: Command[] = [
     run: onSession((id, { actions }) => run(actions.compact(id))),
   },
   {
+    id: "session.rewind",
+    title: "Rewind to an earlier point…",
+    group: "This session",
+    keywords: ["/rewind", "undo", "checkpoint", "restore", "go back", "esc twice"],
+    when: (state) =>
+      forSession(state, (id) => {
+        const status = selectComposer(state, id)?.status;
+        return status === "idle" || status === "error" || "Wait for the turn to end";
+      }),
+    run: onSession((id, { actions, palette }) =>
+      palette.whenClosed(() => run(actions.openRewind(id))),
+    ),
+  },
+  {
+    id: "session.memory",
+    title: "Open memory",
+    group: "This session",
+    keywords: ["/memory", "MEMORY.md", "remember", "notes", "CLAUDE.md", "instructions"],
+    when: (state) => forSession(state),
+    run: onSession((id, { actions }) => run(actions.openMemory(id))),
+  },
+  {
     id: "session.rename",
     title: "Rename the session…",
     group: "This session",
@@ -392,6 +414,12 @@ const COMPOSER: Command[] = [
       run: onSession((id, { actions }) => run(actions.setMode(id, mode))),
     }),
   ),
+  {
+    id: "composer.rewind",
+    title: "Rewind to an earlier point: press twice, with the field empty and nothing running",
+    group: "Composer",
+    shortcut: handledIn("composer", key("Escape")),
+  },
   {
     id: "composer.commands",
     title: "Show the commands",
@@ -725,6 +753,41 @@ const SETTINGS: Command[] = [
     group: "Settings",
     keywords: ["rules", "allow", "ask", "deny", "default mode", "preferences"],
     run: openSettings("permissions"),
+  },
+  {
+    id: "settings.setup",
+    title: "Settings: Project setup",
+    group: "Settings",
+    keywords: ["claude code", "compatibility", "report", "trust", "approve", "preferences"],
+    run: openSettings("setup"),
+  },
+  {
+    id: "settings.hooks",
+    title: "Settings: Hooks",
+    group: "Settings",
+    keywords: ["hook", "pre tool use", "post tool use", "automation", "preferences"],
+    run: openSettings("hooks"),
+  },
+  {
+    id: "settings.skills",
+    title: "Settings: Skills and commands",
+    group: "Settings",
+    keywords: ["skill", "slash commands", "custom commands", "preferences"],
+    run: openSettings("skills"),
+  },
+  {
+    id: "settings.mcp",
+    title: "Settings: MCP servers",
+    group: "Settings",
+    keywords: ["mcp", "servers", "tools", "import", "claude code", "connectors", "preferences"],
+    run: openSettings("mcp"),
+  },
+  {
+    id: "settings.web",
+    title: "Settings: Web",
+    group: "Settings",
+    keywords: ["web fetch", "web search", "search provider", "internet", "preferences"],
+    run: openSettings("web"),
   },
   {
     id: "settings.shortcuts",

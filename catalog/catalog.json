@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 1,
+  "version": 2,
   "entries": [
     {
       "id": "gpt-oss-20b-q4",
@@ -143,6 +143,27 @@
       "capabilities": { "tools": true, "vision": true, "reasoning": true },
       "profile": "qwen3.8",
       "rank": 50
+    },
+    {
+      "id": "minicpm5-1b-q8",
+      "role": "helper",
+      "displayName": "MiniCPM5 1B (8-bit)",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "url": "https://github.com/OpenBMB/MiniCPM/blob/main/LICENSE"
+      },
+      "source": {
+        "repo": "openbmb/MiniCPM5-1B-GGUF",
+        "revision": "5385560dd3e232bcc3577fd9442c332cad2facbd",
+        "file": "MiniCPM5-1B-Q8_0.gguf",
+        "sha256": "0dc7638539067268774c275a14a6ec9c7e01f7eeb2cff606c8590361fa527e4c",
+        "sizeBytes": 1153529216
+      },
+      "minMemoryBytes": 51539607552,
+      "context": { "default": 32768, "max": 131072 },
+      "capabilities": { "tools": false, "vision": false, "reasoning": true },
+      "profile": "minicpm5",
+      "rank": 10
     }
   ]
 }

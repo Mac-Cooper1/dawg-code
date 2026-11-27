@@ -24,6 +24,7 @@ export {
   addPermissionRules,
   type DawgSettingsScope,
   dawgSettingsPath,
+  editDawgSettingsFile,
   localSettingsPath,
   SettingsWriteError,
   settingsWriteProblem,

@@ -6,6 +6,7 @@
  * apply. Open sessions pick a change up from their next turn: the engine looks at the files at
  * the start of each one.
  */
+import { existsSync } from "node:fs";
 import {
   dawgSettingsPath,
   type PermissionListName,
@@ -15,12 +16,14 @@ import {
   type SettingsProblem,
   SettingsWriteError,
   updatePermissionSettings,
+  updateSandboxSettings,
 } from "@dawg/compat";
 import type { z } from "zod";
 import type {
   PermissionSettingsFile,
   PermissionSettingsState,
   PermissionsWriteInputSchema,
+  SandboxSettingsSummary,
 } from "../shared/bridge.ts";
 import type { PermissionSettingsService } from "./ipc-handlers.ts";
 
@@ -119,15 +122,56 @@ function toFile(checks: RuleChecks, file: SettingsFileState): PermissionSettings
     ask: [...file.ask],
     deny: [...file.deny],
     problems,
+    sandbox:
+      file.sandbox === null
+        ? null
+        : {
+            enabled: file.sandbox.enabled,
+            autoAllowBashIfSandboxed: file.sandbox.autoAllowBashIfSandboxed,
+            allowUnsandboxedCommands: file.sandbox.allowUnsandboxedCommands,
+            allowedDomains: [...file.sandbox.network.allowedDomains],
+            excludedCommands: [...file.sandbox.excludedCommands],
+          },
   };
 }
 
+/**
+ * Whether the engine's sandbox can run here, as the engine host would find it: macOS with its
+ * sandbox-exec. (The engine checks again when it starts the sandbox, and says so in the session.)
+ */
+export function sandboxAvailability(
+  platform: NodeJS.Platform = process.platform,
+  exists: (path: string) => boolean = existsSync,
+): Pick<SandboxSettingsSummary, "available" | "unavailableReason"> {
+  if (platform !== "darwin") {
+    return { available: false, unavailableReason: "The sandbox runs on macOS only in the app." };
+  }
+  if (!exists("/usr/bin/sandbox-exec")) {
+    return {
+      available: false,
+      unavailableReason: "macOS's sandbox-exec is missing from /usr/bin.",
+    };
+  }
+  return { available: true, unavailableReason: null };
+}
+
 function toState(checks: RuleChecks, state: SettingsFilesState): PermissionSettingsState {
+  const sandbox = state.sandbox;
   return {
     projectDir: state.projectDir,
     files: state.files.map((file) => toFile(checks, file)),
     defaultMode: state.defaultMode ?? "default",
     bypassDisabled: state.bypassDisabled,
+    sandbox: {
+      enabled: sandbox.enabled,
+      enabledBy: sandbox.enabledBy,
+      autoAllowBashIfSandboxed: sandbox.autoAllowBashIfSandboxed,
+      allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands,
+      allowedDomains: [...sandbox.network.allowedDomains],
+      deniedDomains: [...sandbox.network.deniedDomains],
+      excludedCommands: [...sandbox.excludedCommands],
+      ...sandboxAvailability(),
+    },
   };
 }
 
@@ -178,12 +222,21 @@ export function createPermissionSettingsService(
       lists[list] = rules;
     }
 
+    if (input.sandbox?.autoAllowBashIfSandboxed === true && input.scope === "project") {
+      throw new Error(
+        "Only your own settings can run sandboxed commands without asking; a project's shared settings cannot.",
+      );
+    }
     try {
-      await updatePermissionSettings({
-        file,
-        ...(input.defaultMode === undefined ? {} : { defaultMode: input.defaultMode }),
-        ...lists,
-      });
+      const permissions = input.defaultMode !== undefined || Object.keys(lists).length > 0;
+      if (permissions || input.sandbox === undefined) {
+        await updatePermissionSettings({
+          file,
+          ...(input.defaultMode === undefined ? {} : { defaultMode: input.defaultMode }),
+          ...lists,
+        });
+      }
+      if (input.sandbox !== undefined) await updateSandboxSettings({ file, ...input.sandbox });
     } catch (error) {
       // Its sentence is the whole story; the class name would only add noise in the notice.
       if (error instanceof SettingsWriteError) throw new Error(error.message);

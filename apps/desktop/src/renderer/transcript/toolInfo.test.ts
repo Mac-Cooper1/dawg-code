@@ -90,7 +90,7 @@ describe("toolMeta", () => {
     expect(toolIcon("Write")).toBe("edit");
     expect(toolIcon("Glob")).toBe("search");
     expect(toolIcon("WebFetch")).toBe("globe");
-    expect(toolIcon("mcp__github__search")).toBe("model");
+    expect(toolIcon("mcp__github__search")).toBe("server");
   });
 });
 

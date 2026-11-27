@@ -630,6 +630,7 @@ function turnIdOf(event: EngineEvent): string | null {
     case "session.deleted":
     case "tasks.updated":
     case "background.updated":
+    case "subagent.updated":
     case "usage.updated":
     case "compaction.finished":
       return null;

@@ -333,6 +333,49 @@ export class FakeEngine {
         open.add(id);
         return this.snapshotOf(id);
       },
+      // A checkpoint per prompt in the session's log; no files (tests override what they need).
+      "session.checkpoints": (params) => ({
+        checkpoints: known(params.sessionId).log.flatMap((event) =>
+          event.event === "turn.started"
+            ? [
+                {
+                  id: event.payload.turnId,
+                  turnId: event.payload.turnId,
+                  time: event.payload.time,
+                  prompt: event.payload.prompt.content
+                    .map((part) => (part.type === "text" ? part.text : ""))
+                    .join(""),
+                  tracked: true,
+                  files: [],
+                  restore: [],
+                },
+              ]
+            : [],
+        ),
+        retention: 100,
+      }),
+      // The conversation goes on in a fork from before the prompt, as the engine does.
+      "session.rewind": (params) => {
+        const parent = known(params.sessionId);
+        const files =
+          params.action === "files" || params.action === "both"
+            ? { restored: [], deleted: [], skipped: [] }
+            : null;
+        if (params.action !== "conversation" && params.action !== "both") {
+          return { outcome: "done", conflicts: [], files, session: null, prompt: null };
+        }
+        const id = this.newId("fork");
+        this.addSession(id, {
+          ...parent.summary,
+          title: `${parent.summary.title ?? "Session"} (rewound)`,
+          forkedFrom: {
+            sessionId: params.sessionId,
+            point: { position: "beforeTurn", turnId: params.checkpointId },
+          },
+        });
+        open.add(id);
+        return { outcome: "done", conflicts: [], files, session: this.snapshotOf(id), prompt: "" };
+      },
       "session.replay": (params) => {
         const session = known(params.sessionId);
         const after = session.log.filter((event) => event.payload.seq > params.afterSeq);
@@ -430,6 +473,48 @@ export class FakeEngine {
       "permission.respond": (params) => this.answer(params.sessionId, params.requestId),
       "question.respond": (params) => this.answer(params.sessionId, params.requestId),
       "plan.respond": (params) => this.answer(params.sessionId, params.requestId),
+      // A setup with nothing that needs consent and no hooks; tests override what they need.
+      "project.inspect": (params) => ({ projectDir: params.projectDir, items: [], approval: null }),
+      "project.trust": (params) => ({ approved: params.approved }),
+      "hooks.list": (params) => ({ projectDir: params.projectDir, hooks: [], disabledBy: null }),
+      "hooks.setEnabled": (params) => ({ enabled: params.enabled }),
+      "project.skills": (params) => ({ projectDir: params.projectDir, skills: [], commands: [] }),
+      "mcp.list": (params) => ({ projectDir: params.projectDir, servers: [], importable: 0 }),
+      "mcp.restart": (params) => ({
+        server: {
+          name: params.name,
+          scope: "user",
+          source: { path: "/Users/me/.dawg/mcp.json", origin: "dawg", scope: "user" },
+          transport: "stdio",
+          target: params.name,
+          state: "connected",
+          reason: null,
+          tools: [],
+          prompts: 0,
+          resources: 0,
+          enabled: true,
+          notes: [],
+        },
+      }),
+      "mcp.setEnabled": (params) => ({ enabled: params.enabled }),
+      "mcp.importPreview": () => ({ from: "/Users/me/.claude.json", to: "", hash: null, items: [] }),
+      "mcp.import": () => ({ imported: 0, path: "/Users/me/.dawg/mcp.json" }),
+      "mcp.session": () => ({ resources: [], prompts: [] }),
+      // A subagent's latest state is its latest `subagent.updated` in the parent's log.
+      "subagent.stop": (params) => {
+        const updates = known(params.sessionId).log.flatMap((event) =>
+          event.event === "subagent.updated" && event.payload.agent.agentId === params.agentId
+            ? [event.payload.agent]
+            : [],
+        );
+        const agent = updates.at(-1);
+        if (!agent) throw new RpcError(ErrorCodes.InvalidParams, `No agent ${params.agentId}`);
+        if (agent.status !== "queued" && agent.status !== "running") return { stopped: false };
+        this.emit(params.sessionId, "subagent.updated", {
+          agent: { ...agent, status: "stopped", queuePosition: null, endedAt: this.time + 100 },
+        });
+        return { stopped: true };
+      },
     };
     const wrapped: Partial<Handlers> = {};
     for (const [method, handler] of Object.entries(defaults)) {

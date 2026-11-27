@@ -19,6 +19,23 @@ describe.each(THEMES)("Notices (%s)", (theme) => {
     expect(region).toBeEmptyDOMElement();
   });
 
+  it("offers a notice's own action, which also dismisses it", async () => {
+    const run = vi.fn();
+    const onDismiss = vi.fn();
+    const notice: Notice = {
+      id: "n1",
+      text: "dawg found a Claude Code setup in tally: 1 hook.",
+      tone: "neutral",
+      action: { label: "See what it uses", run },
+    };
+    renderInTheme(<Notices notices={[notice]} connection={READY} onDismiss={onDismiss} />, theme);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "See what it uses" }));
+    expect(run).toHaveBeenCalledOnce();
+    expect(onDismiss).toHaveBeenCalledWith("n1");
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+
   it("shows a quiet line while connecting and while the engine restarts", () => {
     const { rerender } = renderInTheme(
       <Notices notices={[]} connection={{ phase: "connecting" }} onDismiss={vi.fn()} />,

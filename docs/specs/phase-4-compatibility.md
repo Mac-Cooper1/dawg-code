@@ -161,6 +161,15 @@ Shell commands can run inside macOS's Seatbelt sandbox, using the open-source sa
 - With the sandbox on, sandboxed commands can be auto-allowed, which removes most prompts safely.
 - The package's interface is confirmed at implementation time; it is young and still changing.
 
+As built (2026-11-27, `@anthropic-ai/sandbox-runtime` 0.0.83):
+
+- Off until a settings file, Settings → Permissions or `dawg --sandbox` turns it on (`sandbox.enabled` defaults to false, as documented). `autoAllowBashIfSandboxed` defaults to false and `allowUnsandboxedCommands` to true, as the settings reference now says.
+- Booleans follow settings precedence; lists merge. dawg's own rule on top of the documented scopes, a deliberate difference from Claude Code (decided 2026-11-27): a project's shared file cannot turn on auto-allow or loosen isolation (local binding, sockets, Mach lookups, weaker isolation), and opens writes only inside the project. The compatibility report names each key that is ignored, and why.
+- Hosts a project's files (shared or personal, `.claude` or `.dawg`) open to sandboxed commands are project-supplied power (principle 3): each is an approval item ("Network access to example.com (sandbox)") counted in the trust store's hash, and stays off the list until the person approves the project's setup. The person's own settings' hosts need no approval.
+- `WebFetch(domain:…)` rules add to the allowed and denied hosts; `Read`/`Edit` deny rules become read and write denies, so they hold for commands no analysis can see into.
+- One proxy and one system-log reader per process, started by the first sandboxed command and stopped when the last engine closes. Commands get a temp folder of their own (`$TMPDIR/dawg-sandbox-*`), removed with it; nothing else is written to disk on macOS.
+- Elsewhere: Linux works when bubblewrap, socat and ripgrep are installed (not tested here); Windows is not supported. Where the sandbox cannot run, commands run without it and say so, unless `failIfUnavailable` is set.
+
 ### Web tools
 
 **WebFetch** (`url`, `prompt`)
@@ -174,6 +183,7 @@ Shell commands can run inside macOS's Seatbelt sandbox, using the open-source sa
 
 - A provider interface with one method. There is no built-in search service, so the tool is absent until a provider is configured.
 - Providers: any MCP server that offers search, or a search API the user supplies a key for.
+- The suggested service is Brave Search (an independent index with a free plan), chosen by the project owner on 2026-11-27. Settings → Web marks it, and on the command line a key with no service named is taken as a Brave key. Tavily and a self-hosted SearXNG are the alternatives.
 
 Fetched pages and search results are untrusted. They are wrapped and labelled as data in the model's context, and the prompt tells the model not to follow instructions found in them.
 
@@ -242,5 +252,4 @@ Fetched pages and search results are untrusted. They are wrapped and labelled as
 
 - Whether to offer an export of our transcript in a shape transcript-reading hooks expect.
 - The schema-size threshold for deferring MCP tools, and whether the dispatcher approach holds up in evals.
-- Which search provider to document as the default suggestion.
 - Whether memory written by Claude Code for the same project should be offered for import.

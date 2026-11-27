@@ -89,6 +89,10 @@ describe("model profiles", () => {
     expect(getModelProfile("laguna-xs-2.1").chatTemplateKwargs).toEqual({ enable_thinking: true });
     // The harmony template renders one tool call per reply.
     expect(getModelProfile("gpt-oss").parallelToolCalls).toBe(false);
+    // The helper answers side requests at once: its template's no-think switch, its No Think
+    // sampling, and min_p off as the card asks for llama.cpp.
+    expect(getModelProfile("minicpm5").chatTemplateKwargs).toEqual({ enable_thinking: false });
+    expect(getModelProfile("minicpm5").sampling).toEqual({ temperature: 0.7, topP: 0.95, minP: 0 });
   });
 
   test("hands out copies", () => {

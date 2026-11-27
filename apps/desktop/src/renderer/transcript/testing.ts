@@ -425,6 +425,8 @@ export function makeEnv(overrides: Partial<TranscriptEnv> = {}): TranscriptEnv {
     respondPlan: vi.fn(),
     openLink: vi.fn(),
     openInChanges: null,
+    reviewProjectCode: null,
+    openSubagent: null,
     ...overrides,
   };
 }

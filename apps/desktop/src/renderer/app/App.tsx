@@ -3,6 +3,7 @@ import type { ResolvedTheme } from "../../shared/bridge.ts";
 import { FirstRunContainer } from "../onboarding/FirstRunContainer.tsx";
 import { SettingsContainer } from "../settings/SettingsContainer.tsx";
 import { useActions, useAppStore } from "../state/store.ts";
+import { TrustDialogContainer } from "../trust/TrustDialog.tsx";
 import { useRegionKeys } from "../ui/regions.ts";
 import { useMenuBar } from "./commands/menu-bar.ts";
 import { MainWindow } from "./MainWindow.tsx";
@@ -40,6 +41,8 @@ export function App() {
       {body}
       {/* ⌘K, from every view. */}
       <CommandPalette />
+      {/* Code a project supplies, waiting for consent: from every view (Settings → Hooks too). */}
+      <TrustDialogContainer />
     </>
   );
 }

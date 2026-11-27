@@ -14,6 +14,8 @@ export interface SettingsFlags {
   /** Extra working directories, resolved against the project directory, `~` expanded. */
   addDirs?: readonly string[];
   env?: Readonly<Record<string, string>>;
+  /** Added (Phase 4, sandbox): `--sandbox`, which turns the sandbox on for the session. */
+  sandbox?: boolean;
 }
 
 function isSeparator(ch: string): boolean {

@@ -112,6 +112,8 @@ export function describeReason(
     }
     case "not_needed":
       return "no permission is needed";
+    case "sandbox":
+      return "it runs in the sandbox, which is set to allow sandboxed commands without asking";
     case "mode":
       return describeMode(reason.mode, query);
     default:
@@ -147,9 +149,20 @@ function describeMode(mode: string, query: PermissionQuery): string {
       return "no rule allows this command";
     case "none":
       return "no permission is needed";
-    default:
-      return `no rule allows ${query.toolName}`;
+    default: {
+      const host = fetchHost(query);
+      return host === null
+        ? `no rule allows ${query.toolName}`
+        : `no rule allows fetching from ${host}`;
+    }
   }
+}
+
+/** The host of a WebFetch call (its `domain:` specifier), or null for any other call. */
+function fetchHost(query: PermissionQuery): string | null {
+  const s = query.subject;
+  if (query.toolName !== "WebFetch" || s.kind !== "other" || s.specifier === null) return null;
+  return s.specifier.startsWith("domain:") ? s.specifier.slice("domain:".length) : null;
 }
 
 function capitalize(s: string): string {
@@ -172,7 +185,9 @@ function requestTitle(query: PermissionQuery, ctx: WordingContext): string {
   const s = query.subject;
   switch (s.kind) {
     case "command":
-      return "Run a shell command";
+      return s.sandbox?.run === "outside"
+        ? "Run a shell command outside the sandbox"
+        : "Run a shell command";
     case "edit":
       return s.paths.length === 1
         ? `Edit ${displayPath(s.paths[0] as string, ctx)}`
@@ -181,8 +196,12 @@ function requestTitle(query: PermissionQuery, ctx: WordingContext): string {
       return s.paths.length === 1
         ? `Read ${displayPath(s.paths[0] as string, ctx)}`
         : `Read ${s.paths.length} paths`;
-    default:
+    default: {
+      const host = fetchHost(query);
+      if (host !== null) return `Fetch a page from ${host}`;
+      if (query.toolName === "WebSearch") return "Search the web";
       return `Use ${query.toolName}`;
+    }
   }
 }
 

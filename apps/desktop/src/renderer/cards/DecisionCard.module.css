@@ -71,6 +71,14 @@
   font-weight: 600;
 }
 
+/* Which subagent asks, above what it asks. */
+.agent {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--amber);
+}
+
 .why {
   margin: 0;
   font-size: 12.5px;

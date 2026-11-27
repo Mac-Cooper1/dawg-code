@@ -13,6 +13,13 @@ export {
   toChatTools,
 } from "./request.ts";
 export {
+  SIDE_FIRST_EVENT_TIMEOUT_MS,
+  type SideClientOptions,
+  type SideRoute,
+  type SideRoutes,
+  sideClient,
+} from "./side.ts";
+export {
   type ScheduledClientOptions,
   type SlotLease,
   type SlotPool,

@@ -41,6 +41,16 @@ export const ModelEndpointSchema = z.object({
 });
 export type ModelEndpoint = z.infer<typeof ModelEndpointSchema>;
 
+/** A search service as main hands it to the engine host: the shape of `SearchConfig` in @dawg/engine. */
+export const WebSearchConfigSchema = z.object({
+  provider: z.enum(["brave", "tavily", "searxng"]),
+  /** Read from the Keychain by main; never logged. */
+  apiKey: z.string().min(1).optional(),
+  /** SearXNG's address. */
+  url: z.string().min(1).optional(),
+});
+export type WebSearchConfig = z.infer<typeof WebSearchConfigSchema>;
+
 /** A model a session may use now, as main hands it to the engine host. */
 export const ModelGrantSchema = z.object({
   /**
@@ -71,8 +81,27 @@ export const ModelGrantSchema = z.object({
    * file added by hand); the engine host then picks a profile by the model's family.
    */
   profile: z.string().min(1).optional(),
+  /**
+   * The helper model, while it runs: a tiny model in a llama-server of its own that answers side
+   * requests (titles, WebFetch's page summaries) so they leave the main model alone. Whatever
+   * serves the main model, side requests go here; without it, or when it cannot be reached, they
+   * go where they always did (the main model's side slot, or the server). Absent while the
+   * helper is not downloaded, turned off, starting or failed.
+   */
+  helper: z
+    .object({
+      /** Its catalog id ("minicpm5-1b-q8"), which is also `endpoint.model`. */
+      modelId: z.string().min(1),
+      endpoint: ModelEndpointSchema,
+      /** Its slots, which the engine schedules side requests on. */
+      slots: z.array(z.number().int().nonnegative()).min(1),
+      /** Its engine model profile (`CatalogEntry.profile`): thinking off, and its sampling. */
+      profile: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 export type ModelGrant = z.infer<typeof ModelGrantSchema>;
+export type HelperGrant = NonNullable<ModelGrant["helper"]>;
 
 /** Engine host → main. */
 export const HostToMainSchema = z.discriminatedUnion("type", [
@@ -116,6 +145,15 @@ export const MainToHostSchema = z.discriminatedUnion("type", [
      * next request.
      */
     type: z.literal("models-changed"),
+  }),
+  z.object({
+    /**
+     * The search service WebSearch uses, or null for none (Settings → Web). Sent as soon as the
+     * engine host starts, before any window connects, and again whenever the person changes it.
+     * Sessions opened after it arrives offer WebSearch only when `search` is set.
+     */
+    type: z.literal("web-config"),
+    search: WebSearchConfigSchema.nullable(),
   }),
 ]);
 export type MainToHost = z.infer<typeof MainToHostSchema>;

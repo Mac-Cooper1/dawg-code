@@ -31,3 +31,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A notice's own action ("See what it uses"), before Dismiss. */
+.action {
+  flex: none;
+  color: var(--acc-text);
+}

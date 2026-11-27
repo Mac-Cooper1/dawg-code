@@ -4,7 +4,8 @@
  * from the previous ones where nothing visible changed (`stable`), so a component subscribed
  * to the sidebar does not re-render for every streamed token of another session.
  */
-import type { SessionId } from "@dawg/protocol";
+import type { SessionId, SubagentInfo } from "@dawg/protocol";
+import { agentTitle } from "../lib/agents.ts";
 import { basename, formatRelativeTime, shortenPath } from "../lib/format.ts";
 import { createKeyedMemo, shallowEqual, stable } from "./memo.ts";
 import { serverOf } from "./models.ts";
@@ -25,6 +26,7 @@ import type {
   SessionView,
   SidebarGroup,
   SidebarRow,
+  SubagentPanelView,
   TasksPaneView,
   TitleBarView,
   TranscriptItem,
@@ -36,6 +38,8 @@ const EMPTY_ITEMS: readonly TranscriptItem[] = Object.freeze([]);
 const EMPTY_PENDING: readonly PendingRef[] = Object.freeze([]);
 const EMPTY_QUEUE: readonly QueuedMessage[] = Object.freeze([]);
 const EMPTY_FLAGS: Readonly<Record<string, boolean>> = Object.freeze({});
+const EMPTY_AGENTS: readonly SubagentInfo[] = Object.freeze([]);
+const NO_TURNS: Readonly<Record<string, true>> = Object.freeze({});
 
 export const PLACEHOLDERS = {
   idle: "Reply to dawg. / for commands, @ to mention a file",
@@ -266,16 +270,72 @@ const tasksPaneMemo = createKeyedMemo<TasksPaneView>();
 export function selectTasksPane(state: AppStore, sessionId: SessionId): TasksPaneView | null {
   const session = state.sessions[sessionId];
   if (!session) return null;
+  const subagents = session.subagents ?? EMPTY_AGENTS;
   return tasksPaneMemo.get(
     sessionId,
-    [session.open, session.tasks, session.background],
+    [session.open, session.tasks, session.background, subagents],
     (previous) =>
       stable(previous, {
         sessionId,
         open: session.open,
         tasks: session.tasks,
         background: session.background,
+        agents: sameElements(
+          previous?.agents,
+          subagents.filter((agent) => agent.background),
+        ),
       }),
+  );
+}
+
+// --- Subagents ---------------------------------------------------------------------------------
+
+const subagentMemo = createKeyedMemo<SubagentPanelView>(8);
+
+/**
+ * The subagent transcript shown in place of `sessionId`'s, or null when none is open for it (or
+ * the session no longer knows the agent).
+ */
+export function selectSubagentPanel(
+  state: AppStore,
+  sessionId: SessionId,
+): SubagentPanelView | null {
+  const open = state.ui.openSubagent;
+  if (open === null || open.sessionId !== sessionId) return null;
+  const parent = state.sessions[sessionId];
+  const agent = parent?.subagents?.find((candidate) => candidate.agentId === open.agentId);
+  if (!parent || !agent) return null;
+  const child = state.subagentTranscripts[agent.sessionId];
+  const childSession = child?.slice.sessions[agent.sessionId];
+  const items = child?.slice.transcripts[agent.sessionId] ?? EMPTY_ITEMS;
+  const openItems = state.ui.openItems[agent.sessionId] ?? EMPTY_FLAGS;
+  return subagentMemo.get(
+    sessionId,
+    [agent, childSession, items, openItems, state.settings.toolCalls, child?.error],
+    (previous) => {
+      const transcript: TranscriptView | null = childSession
+        ? stable(previous?.transcript ?? undefined, {
+            sessionId: agent.sessionId,
+            items,
+            loaded: childSession.loaded,
+            working: childSession.activeTurnId !== null,
+            activeTurnId: childSession.activeTurnId,
+            promptProgress: childSession.promptProgress,
+            toolCallDisplay: state.settings.toolCalls,
+            openItems,
+            shownAgain: EMPTY_FLAGS,
+            queuedTurnIds: NO_TURNS,
+            cwd: childSession.summary.cwd,
+          })
+        : null;
+      return {
+        sessionId,
+        agent,
+        title: agentTitle(agent),
+        transcript,
+        error: child?.error ?? null,
+      };
+    },
   );
 }
 

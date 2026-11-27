@@ -49,6 +49,7 @@ import {
   type FakeSettingsFile,
 } from "./fake-permissions.ts";
 import { createFakeTerminal, type FakeTerminal } from "./fake-terminal.ts";
+import { createFakeWeb, type FakeWeb, type FakeWebOptions } from "./fake-web.ts";
 import {
   createFakeWorkspace,
   type FakeWorkspace,
@@ -93,6 +94,8 @@ export interface MemoryBridgeOptions {
    * Default: a few lived-in ones under the home folder and ~/code/tally.
    */
   permissionFiles?: Record<string, FakeSettingsFile>;
+  /** Settings → Web's starting point (see fake-web.ts). Default: no search service. */
+  web?: FakeWebOptions;
 }
 
 /** An in-memory bridge, also used by tests. */
@@ -107,6 +110,8 @@ export interface MemoryBridge extends DawgBridge {
   readonly fakeTerminal: FakeTerminal;
   /** The settings files behind `permissions`. */
   readonly fakePermissions: FakePermissions;
+  /** The search settings behind `web`. */
+  readonly fakeWeb: FakeWeb;
   /** Every notification shown (by main's rules: notifications on, the page not focused). */
   readonly notificationsShown: NotifyInput[];
   /** Every count given to the Dock badge, in order. */
@@ -162,6 +167,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     homeDir: platform.homeDir,
     files: options.permissionFiles ?? browserPermissionFiles(platform.homeDir),
   });
+  const fakeWeb = createFakeWeb(options.web);
   const notificationsShown: NotifyInput[] = [];
   const badgeCounts: number[] = [];
   const openSessionListeners = new Set<(sessionId: string) => void>();
@@ -249,6 +255,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
       onOpenSession: (listener) => subscribe(openSessionListeners, listener),
     },
     permissions: fakePermissions.api,
+    web: fakeWeb.api,
     dialogs: {
       chooseFolder: async (folderOptions) => {
         validate(ChooseFolderOptionsSchema, folderOptions, "folder options");
@@ -277,6 +284,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     fakeWorkspace,
     fakeTerminal,
     fakePermissions,
+    fakeWeb,
     notificationsShown,
     badgeCounts,
     openSessionFromNotification(sessionId) {

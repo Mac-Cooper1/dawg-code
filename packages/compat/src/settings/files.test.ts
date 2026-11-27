@@ -292,14 +292,16 @@ describe("updatePermissionSettings", () => {
       addPermissionRules({ projectDir: project, list: "allow", rules: ["B"] }),
       updatePermissionSettings({ file: p.dawgLocal(), defaultMode: "plan" }),
     ]);
-    expect(await json(p.dawgLocal())).toEqual({
-      permissions: {
-        deny: ["Bash(rm *)"],
-        allow: ["A", "B"],
-        ask: ["Bash(git push *)"],
-        defaultMode: "plan",
-      },
+    // Calls made at once have no order between them (each resolves the file's real path before
+    // it queues), so the two "allow" rules may land either way round; none may be lost.
+    const saved = (await json(p.dawgLocal())) as { permissions: Record<string, unknown> };
+    expect({ ...saved.permissions, allow: undefined }).toEqual({
+      deny: ["Bash(rm *)"],
+      allow: undefined,
+      ask: ["Bash(git push *)"],
+      defaultMode: "plan",
     });
+    expect([...(saved.permissions.allow as string[])].sort()).toEqual(["A", "B"]);
   });
 });
 

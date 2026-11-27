@@ -25,6 +25,36 @@ function hostAndPath(url: string): string {
   }
 }
 
+/** The tool that calls an MCP server's tool by name (the engine's `CallMcpTool`). */
+export const MCP_DISPATCHER = "CallMcpTool";
+
+/**
+ * The MCP server and tool a call is made to, by its own name (`mcp__github__get_issue`) or
+ * through `CallMcpTool`; null for any other call.
+ */
+export function mcpCallOf(
+  toolName: string,
+  input: Record<string, unknown>,
+  display?: ToolDisplay | null,
+): { server: string; tool: string } | null {
+  if (display?.kind === "mcp") return { server: display.server, tool: display.tool };
+  const name = toolName === MCP_DISPATCHER ? (stringField(input, "name") ?? "") : toolName;
+  const match = /^mcp__(.+?)__(.+)$/.exec(name);
+  return match === null ? null : { server: match[1] as string, tool: match[2] as string };
+}
+
+/** The arguments an MCP tool was given: through the dispatcher they are its `arguments`. */
+export function mcpArguments(call: {
+  toolName: string;
+  input: Record<string, unknown>;
+}): Record<string, unknown> {
+  if (call.toolName !== MCP_DISPATCHER) return call.input;
+  const args = call.input.arguments;
+  return args !== null && typeof args === "object" && !Array.isArray(args)
+    ? (args as Record<string, unknown>)
+    : {};
+}
+
 /** What a call works on, for the card's second column: a command, a path, a pattern. */
 export function toolTarget(
   toolName: string,
@@ -48,8 +78,11 @@ export function toolTarget(
     case "WebFetch":
       return hostAndPath(stringField(input, "url") ?? "");
     case "WebSearch":
+    case "ToolSearch":
       return stringField(input, "query") ?? "";
     default: {
+      const mcp = mcpCallOf(toolName, input);
+      if (mcp !== null) return `${mcp.server} · ${mcp.tool}`;
       if (path) return displayPath(path, cwd, homeDir);
       for (const value of Object.values(input)) {
         if (typeof value === "string" && value !== "") return truncate(firstLine(value), 120);
@@ -70,6 +103,7 @@ const RUNNING_VERB: Record<string, string> = {
   Grep: "Searching",
   WebFetch: "Fetching",
   WebSearch: "Searching the web",
+  ToolSearch: "Searching MCP tools",
   TodoWrite: "Updating tasks",
   EnterPlanMode: "Entering plan mode",
   ExitPlanMode: "Proposing a plan",
@@ -87,6 +121,7 @@ const DONE_VERB: Record<string, string> = {
   Grep: "Searched",
   WebFetch: "Fetched",
   WebSearch: "Searched the web",
+  ToolSearch: "Searched MCP tools",
   TodoWrite: "Updated tasks",
   EnterPlanMode: "Entered plan mode",
   ExitPlanMode: "Proposed a plan",
@@ -99,11 +134,13 @@ export function toolVerb(
   state: "running" | "success" | "error" | "denied" | "invalid" | "interrupted",
   display?: ToolDisplay | null,
 ): string {
-  if (state === "running") return RUNNING_VERB[toolName] ?? toolName;
+  const mcp = toolName === MCP_DISPATCHER || toolName.startsWith("mcp__");
+  if (state === "running") return mcp ? "Calling" : (RUNNING_VERB[toolName] ?? toolName);
   if (state === "interrupted") return "Stopped";
   if (state === "denied") return "Denied";
   if (state === "invalid") return "Could not run";
   if (toolName === "Write" && display?.kind === "diff" && display.created) return "Created";
+  if (mcp) return "Called";
   return DONE_VERB[toolName] ?? toolName;
 }
 
@@ -134,8 +171,12 @@ export function toolActivity(toolName: string, input: Record<string, unknown>): 
       return "searching the web";
     case "TodoWrite":
       return "updating the task list";
-    default:
-      return `using ${toolName}`;
+    case "ToolSearch":
+      return "searching MCP tools";
+    default: {
+      const mcp = mcpCallOf(toolName, input);
+      return mcp === null ? `using ${toolName}` : `using ${mcp.server}’s ${mcp.tool}`;
+    }
   }
 }
 
@@ -158,6 +199,10 @@ export function permissionNeed(request: Pick<PermissionRequest, "toolName" | "di
     case "WebSearch":
       return "search the web";
     default:
-      return request.toolName.startsWith("mcp__") ? "use a tool" : `use ${request.toolName}`;
+      if (request.toolName.startsWith("mcp__")) {
+        const mcp = mcpCallOf(request.toolName, {});
+        return mcp === null ? "use a tool" : `use ${mcp.server}’s ${mcp.tool}`;
+      }
+      return `use ${request.toolName}`;
   }
 }

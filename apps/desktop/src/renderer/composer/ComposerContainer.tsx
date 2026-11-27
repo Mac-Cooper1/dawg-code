@@ -1,14 +1,19 @@
-import type { SessionId } from "@dawg/protocol";
-import { useCallback } from "react";
+import type { CommandInfo, SessionId } from "@dawg/protocol";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { run } from "../app/run.ts";
 import { getBridge } from "../bridge/index.ts";
 import { selectComposer } from "../state/selectors.ts";
 import { useActions, useAppStore } from "../state/store.ts";
-import type { ImageAttachment } from "../state/types.ts";
+import type { ImageAttachment, McpOffer } from "../state/types.ts";
 import { Composer } from "./Composer.tsx";
+import { resourceMatches } from "./mcpResources.ts";
 
 const NO_IMAGES: readonly ImageAttachment[] = Object.freeze([]);
 const NO_PATHS: readonly string[] = Object.freeze([]);
+
+const NO_PROMPTS: readonly CommandInfo[] = Object.freeze([]);
+/** How long an answer of `mcp.session` is used before it is asked again. */
+const OFFER_TTL_MS = 3_000;
 
 /** How many files the `@` menu lists. */
 const MENU_LIMIT = 50;
@@ -23,19 +28,54 @@ export function ComposerContainer(props: { sessionId: SessionId }) {
   const attachments = useAppStore((state) => state.ui.attachments[sessionId] ?? NO_IMAGES);
   const mentionPaths = useAppStore((state) => state.ui.mentionPaths[sessionId] ?? NO_PATHS);
   const actions = useActions();
+  // What the session's MCP servers offer: resources for `@`, prompts for `/` (servers connect
+  // after the session opened, so this is asked again now and then rather than kept).
+  const offer = useRef<{ at: number; offer: Promise<McpOffer> } | null>(null);
+  const mcpOffer = useCallback(() => {
+    const now = Date.now();
+    if (offer.current === null || now - offer.current.at > OFFER_TTL_MS) {
+      offer.current = { at: now, offer: actions.mcpOffer(sessionId) };
+    }
+    return offer.current.offer;
+  }, [actions, sessionId]);
   const findFiles = useCallback(
     async (query: string) => {
       // Main answers only for sessions a window tracks; tracking again is free.
       await actions.trackSession(sessionId);
-      return getBridge().workspace.findFiles({ sessionId, query, limit: MENU_LIMIT });
+      const [files, mcp] = await Promise.all([
+        getBridge().workspace.findFiles({ sessionId, query, limit: MENU_LIMIT }),
+        mcpOffer(),
+      ]);
+      const resources = resourceMatches(mcp.resources, query);
+      return resources.length === 0
+        ? files
+        : { ...files, matches: [...files.matches, ...resources] };
     },
-    [actions, sessionId],
+    [actions, mcpOffer, sessionId],
   );
-  if (!view) return null;
+  const [prompts, setPrompts] = useState<readonly CommandInfo[]>(NO_PROMPTS);
+  const typingCommand = view?.draft.startsWith("/") ?? false;
+  useEffect(() => {
+    if (!typingCommand) return;
+    let live = true;
+    void mcpOffer().then((mcp) => {
+      if (live) setPrompts(mcp.prompts.length === 0 ? NO_PROMPTS : mcp.prompts);
+    });
+    return () => {
+      live = false;
+    };
+  }, [mcpOffer, typingCommand]);
+  const shown = useMemo(() => {
+    if (!view || prompts.length === 0) return view;
+    const names = new Set(view.commands.map((c) => c.name));
+    const extra = prompts.filter((p) => !names.has(p.name));
+    return extra.length === 0 ? view : { ...view, commands: [...view.commands, ...extra] };
+  }, [view, prompts]);
+  if (!shown) return null;
 
   return (
     <Composer
-      view={view}
+      view={shown}
       models={models}
       loadedModelId={loadedModelId}
       canSend={phase === "ready"}
@@ -62,6 +102,7 @@ export function ComposerContainer(props: { sessionId: SessionId }) {
         actions.setSettingsPage("models");
         actions.setView("settings");
       }}
+      onRewind={() => run(actions.openRewind(sessionId))}
     />
   );
 }

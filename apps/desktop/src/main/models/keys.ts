@@ -32,8 +32,14 @@ export const KEYS_FILE = "server-keys.json";
 
 const KeysFileSchema = z.record(z.string(), z.string());
 
-export function createKeyStore(dataRoot: string, encryption: Encryption, log: Logger): KeyStore {
-  const file = path.join(dataRoot, KEYS_FILE);
+/** `fileName` keeps another set of keys apart (web search keys: `search-keys.json`). */
+export function createKeyStore(
+  dataRoot: string,
+  encryption: Encryption,
+  log: Logger,
+  fileName: string = KEYS_FILE,
+): KeyStore {
+  const file = path.join(dataRoot, fileName);
   let ciphertexts = new Map<string, string>();
   let loaded: Promise<void> | null = null;
   let queue: Promise<unknown> = Promise.resolve();

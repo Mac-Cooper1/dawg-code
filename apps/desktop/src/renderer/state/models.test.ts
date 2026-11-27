@@ -10,7 +10,14 @@ import { FakeEngine } from "./__fixtures__/fake-engine.ts";
 import { PROJECT } from "./__fixtures__/streams.ts";
 import { MODEL_LOADING_NOTICE_ID } from "./actions.ts";
 import { MODEL_BOUND_TIMEOUT_MS } from "./connection.ts";
-import { firstRunStep, leadModel, needsSetup } from "./models.ts";
+import {
+  firstRunStep,
+  helperToSetUp,
+  isHelperInstalled,
+  leadModel,
+  modelName,
+  needsSetup,
+} from "./models.ts";
 import { selectModelFooter } from "./selectors.ts";
 import { type AppStoreApi, createAppStore } from "./store.ts";
 
@@ -42,6 +49,7 @@ async function start(options: Omit<FakeBridgeOptions, "engine"> = {}): Promise<H
 
 const Q8 = "qwen3.8-27b-q8";
 const GPT_OSS = "gpt-oss-20b-q4";
+const HELPER = "minicpm5-1b-q8";
 
 function s(harness: Harness) {
   return harness.store.getState();
@@ -115,6 +123,19 @@ describe("models state in the store", () => {
     expect(s(harness).modelsState?.downloads).toEqual([]);
   });
 
+  it("switches side requests between the helper and the main model through the bridge", async () => {
+    const harness = await start();
+    expect(s(harness).modelsState?.helper).toMatchObject({ state: "running", enabled: true });
+    await s(harness).actions.setHelperEnabled(false);
+    expect(s(harness).modelsState?.helper).toMatchObject({ state: "ready", enabled: false });
+    await s(harness).actions.setHelperEnabled(true);
+    expect(s(harness).modelsState?.helper).toMatchObject({ state: "running", enabled: true });
+    // Removing it goes through the usual call with its id, and it never was a model to chat with.
+    await s(harness).actions.removeModel(HELPER);
+    expect(s(harness).modelsState?.helper?.state).toBe("available");
+    expect(s(harness).models.some((model) => model.id === HELPER)).toBe(false);
+  });
+
   it("names the server's model in the footer when it is the default and nothing is loaded", async () => {
     const harness = await start();
     await s(harness).actions.setDefaultModel("ollama/qwen3.6:35b-a3b");
@@ -153,6 +174,38 @@ describe("first run", () => {
     ).toEqual({ step: "download", modelId: Q8, error: null });
     expect(leadModel(empty)?.id).toBe(Q8);
     expect(leadModel(mockModelsState("small"))).toBeNull();
+  });
+
+  it("never leads first run with the helper's download, and offers the helper with the lead model", () => {
+    const helperDownload = {
+      modelId: HELPER,
+      phase: "downloading" as const,
+      bytesDone: 5,
+      bytesTotal: 10,
+      bytesPerSecond: 0,
+      secondsLeft: null,
+      error: null,
+    };
+    // The helper's download goes on in the background; it is not a model to set up.
+    expect(firstRunStep(emptyMac({ downloads: [helperDownload] }))).toEqual({ step: "welcome" });
+    expect(modelName(emptyMac(), HELPER)).toBe("MiniCPM5 1B (8-bit)");
+
+    const empty = emptyMac();
+    expect(helperToSetUp(empty)?.id).toBe(HELPER);
+    const helper = empty.helper;
+    if (!helper) throw new Error("no helper");
+    for (const state of ["paused", "failed"] as const) {
+      expect(helperToSetUp(emptyMac({ helper: { ...helper, state } }))?.id).toBe(HELPER);
+    }
+    for (const state of ["downloading", "ready", "running", "error"] as const) {
+      expect(helperToSetUp(emptyMac({ helper: { ...helper, state } }))).toBeNull();
+    }
+    expect(helperToSetUp(emptyMac({ helper: { ...helper, enabled: false } }))).toBeNull();
+    expect(helperToSetUp(emptyMac({ helper: { ...helper, recommended: false } }))).toBeNull();
+    expect(helperToSetUp(mockModelsState("small"))).toBeNull();
+    expect(helperToSetUp(emptyMac({ helper: null }))).toBeNull();
+    expect(isHelperInstalled(helper)).toBe(false);
+    expect(isHelperInstalled({ ...helper, state: "error" })).toBe(true);
   });
 
   it("downloads the chosen model, starts it, makes it the default, then gives way", async () => {

@@ -105,6 +105,7 @@ export function sessionView(
     additionalDirectories: options.additionalDirectories ?? [],
     tasks: [],
     background: [],
+    subagents: [],
     usage: null,
     commands: [],
     activeTurnId: null,

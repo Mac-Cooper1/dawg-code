@@ -73,6 +73,13 @@ export interface FakeWorkspaceOptions {
   nonGitRoots?: string[];
   /** Clock for modification times. Default `Date.now`. */
   now?: () => number;
+  /** Where a project's memory folder is, as main's `memoryDirectory` would say. */
+  memoryDirectory?: (projectDir: string) => string;
+}
+
+/** The fake data root's memory folder for a project: `/Users/you/.dawg/projects/<key>/memory`. */
+export function fakeMemoryDirectory(projectDir: string): string {
+  return `/Users/you/.dawg/projects/${trimSlash(projectDir).replace(/[^A-Za-z0-9]/g, "-")}/memory`;
 }
 
 export interface FakeWorkspace {
@@ -362,6 +369,11 @@ function fileSize(file: FakeFile): number {
   return file.kind === "text" ? new TextEncoder().encode(file.text).length : file.size;
 }
 
+function withoutMemory(info: WorkspaceInfo): WorkspaceInfo {
+  const { memoryDirectory: _memory, ...rest } = info;
+  return rest;
+}
+
 export function createFakeWorkspace(options: FakeWorkspaceOptions = {}): FakeWorkspace {
   const nonGitRoots = options.nonGitRoots ?? [BROWSER_NON_GIT_PROJECT];
   const clock = options.now ?? Date.now;
@@ -520,8 +532,13 @@ export function createFakeWorkspace(options: FakeWorkspaceOptions = {}): FakeWor
       if (nonGit) seed(cwd, nonGitTemplate());
       else seedRepo(cwd, worktree !== null && (worktrees.get(cwd)?.untouched ?? false));
       for (const dir of extra) seed(dir, extraTemplate());
+      // `/memory`: the project's memory folder, worked out here as main does, never sent in.
+      const memory = valid.memory
+        ? (options.memoryDirectory ?? fakeMemoryDirectory)(valid.projectDir)
+        : null;
+      if (memory !== null) seed(memory, { "MEMORY.md": "" });
       const existing = sessions.get(valid.sessionId);
-      const info: WorkspaceInfo = existing?.info ?? {
+      const known: WorkspaceInfo = existing?.info ?? {
         sessionId: valid.sessionId,
         cwd,
         git: nonGit
@@ -536,10 +553,13 @@ export function createFakeWorkspace(options: FakeWorkspaceOptions = {}): FakeWor
               worktree,
             },
       };
+      const info: WorkspaceInfo = valid.memory
+        ? { ...known, memoryDirectory: memory }
+        : withoutMemory(known);
       sessions.set(valid.sessionId, {
         sessionId: valid.sessionId,
         cwd,
-        dirs: [cwd, ...extra],
+        dirs: memory === null ? [cwd, ...extra] : [cwd, ...extra, memory],
         repo: nonGit ? null : cwd,
         info,
       });

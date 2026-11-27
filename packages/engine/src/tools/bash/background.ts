@@ -58,6 +58,13 @@ export interface StartTaskOptions {
   killGraceMs: number;
   /** Total output after which the task is stopped. */
   outputLimitBytes: number;
+  /**
+   * Added (Phase 4, sandbox): what the shell really runs, when it differs from `command` (the
+   * command wrapped in the sandbox). `command` is still what the task shows.
+   */
+  script?: string;
+  /** Added (Phase 4, sandbox): called once when the task has ended, however it ended. */
+  onEnded?: () => void;
 }
 
 export interface TaskOutputRead {
@@ -147,7 +154,7 @@ export class BackgroundTasks {
       stdout: new EscapeStripper(),
       stderr: new EscapeStripper(),
     };
-    handle = spawnInGroup(options.shell, ["-c", options.command], {
+    handle = spawnInGroup(options.shell, ["-c", options.script ?? options.command], {
       cwd: options.cwd,
       env: options.env,
       onOutput: (stream, text) => {
@@ -179,6 +186,11 @@ export class BackgroundTasks {
       else info.status = exit.code === 0 ? "completed" : "failed";
       if (timer) clearTimeout(timer);
       if (started.pid !== undefined) untrackGroup(started.pid);
+      try {
+        options.onEnded?.();
+      } catch {
+        // Releasing what the task held must not keep it from being reported.
+      }
       this.unreported.push(id);
       notify(this.updatedListeners, info);
       notify(this.listeners, info);

@@ -11,14 +11,18 @@ import { formatBytes, formatMemory } from "../lib/format.ts";
 import modelStyles from "../models/Models.module.css";
 import { ServerForm } from "../models/ServerForm.tsx";
 import { abilitySentence, archName, catalogFacts, contextLine, originTag } from "../models/text.ts";
-import { foundInName, leadModel, serverOf } from "../state/models.ts";
+import { foundInName, helperToSetUp, leadModel, serverOf } from "../state/models.ts";
+import type { SetUpModelOptions } from "../state/types.ts";
 import { Button, Icon, Tag } from "../ui/index.ts";
 import styles from "./FirstRun.module.css";
 
 export interface WelcomeProps {
   state: ModelsState;
-  /** Downloads (unless on this Mac already), starts, and makes it the default. */
-  onSetUp(modelId: string, options?: { useExisting?: boolean }): void;
+  /**
+   * Downloads (unless on this Mac already), starts, and makes it the default. The lead card asks
+   * for the helper model too (`withHelper`) when the catalog offers it.
+   */
+  onSetUp(modelId: string, options?: SetUpModelOptions): void;
   onAddModelFile(): Promise<AddedModelFile | null>;
   onConnectServer(input: ConnectServerInput): Promise<{ server: ServerInfo } | { error: string }>;
   onOpenLink(url: string): void;
@@ -68,6 +72,12 @@ function LeadCard(props: {
   const { entry, state } = props;
   const installed = state.installed.some((option) => option.id === entry.id);
   const can = abilitySentence(entry);
+  // The one click also gets the helper model, which writes titles and reads web pages so the
+  // main model stays on the conversation.
+  const helper = helperToSetUp(state);
+  const helperNoteId = useId();
+  const describedBy = helper ? helperNoteId : undefined;
+  const withHelper = helper !== null;
   return (
     <section className={styles.feature} aria-labelledby="welcome-lead">
       <div className={styles.featureHead}>
@@ -114,9 +124,24 @@ function LeadCard(props: {
           <dd>{contextLine(entry)}</dd>
         </div>
       </dl>
+      {helper && (
+        <p id={helperNoteId} className={styles.helperNote}>
+          <Icon name="download" size={14} className={styles.helperNoteIcon} />
+          <span>
+            Plus a small helper model ({formatBytes(helper.sizeBytes)}) for titles and page
+            summaries, so {entry.displayName} stays on your conversation.
+          </span>
+        </p>
+      )}
       <div className={styles.buttons}>
         {installed ? (
-          <Button variant="primary" size="lg" icon="send" onClick={() => props.onSetUp(entry.id)}>
+          <Button
+            variant="primary"
+            size="lg"
+            icon="send"
+            aria-describedby={describedBy}
+            onClick={() => props.onSetUp(entry.id, { withHelper })}
+          >
             Start
           </Button>
         ) : entry.foundIn !== null ? (
@@ -124,7 +149,8 @@ function LeadCard(props: {
             variant="primary"
             size="lg"
             icon="check"
-            onClick={() => props.onSetUp(entry.id, { useExisting: true })}
+            aria-describedby={describedBy}
+            onClick={() => props.onSetUp(entry.id, { useExisting: true, withHelper })}
           >
             Use the copy from {foundInName(entry.foundIn)}
           </Button>
@@ -133,7 +159,8 @@ function LeadCard(props: {
             variant="primary"
             size="lg"
             icon="download"
-            onClick={() => props.onSetUp(entry.id)}
+            aria-describedby={describedBy}
+            onClick={() => props.onSetUp(entry.id, { withHelper })}
           >
             Download and start
           </Button>

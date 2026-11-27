@@ -12,12 +12,19 @@
  *   the runtime becomes ready (a load, a restart after a crash) `generation` grows and the engine
  *   host is told its grants may be out of date.
  * - Server keys live in the Keychain (keys.ts) and are read only to make a request.
+ * - The helper model (the catalog's `role: "helper"` entry) answers side requests (titles,
+ *   WebFetch's page summaries) in a second llama-server. It is never offered as a model to chat
+ *   with or made the default. It starts with the main model (any kind: bundled, Ollama, LM Studio
+ *   or remote), when it is downloaded and the person has not turned it off, and grants carry its
+ *   endpoint while it is ready; until then, or when it fails, side requests use the main model.
+ *   Its memory is taken off before the main model's window is chosen.
  */
 import { open, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   type CatalogEntry,
   cachePaths,
+  catalogHelper,
   type DiscoveredModel,
   type DiscoveredServer,
   DownloadError,
@@ -29,11 +36,14 @@ import {
   entryTargets,
   entryWeightsBytes,
   type HardwareProfile,
+  helperWorkingSetBytes,
+  isHelperEntry,
   MEMORY_BUDGET_FRACTION,
   type RemoteResult,
   RUNTIME_OVERHEAD_BYTES,
   type RuntimeState,
   recommend,
+  recommendHelper,
   toEndpoint,
   workingSetBytes,
 } from "@dawg/models";
@@ -42,6 +52,7 @@ import type {
   CatalogModel,
   ConnectServerInput,
   DownloadState,
+  HelperInfo,
   MachineInfo,
   ModelOption,
   ModelStatus,
@@ -70,6 +81,7 @@ import {
   type CreateRuntime,
   contextPerSlot,
   describeRuntimeError,
+  HELPER_SLOTS,
   MODEL_FILE_CONTEXT,
   RUNTIME_SLOTS,
   type RuntimeEvent,
@@ -113,6 +125,15 @@ export interface ModelBackend {
   residentBytes(pid: number): Promise<number | null>;
 }
 
+/**
+ * Where the person's choice for side requests is kept: `<data root>/helper-model.json`
+ * (`readHelperEnabled` / `writeHelperEnabled` in @dawg/models), which the command line reads too.
+ */
+export interface HelperPreference {
+  read(): Promise<boolean>;
+  write(enabled: boolean): Promise<void>;
+}
+
 export interface ModelManagerOptions {
   backend: ModelBackend;
   store: ModelsStore;
@@ -135,6 +156,8 @@ export interface ModelManagerOptions {
   progressIntervalMs?: number;
   /** How often the runtime's memory (and idle sleep) is read. Default 5 s. */
   pollIntervalMs?: number;
+  /** The helper on/off setting. Without it the helper is on and the choice is not saved. */
+  helperPreference?: HelperPreference;
 }
 
 type ServerKind = "ollama" | "lmstudio" | "remote";
@@ -225,6 +248,16 @@ export class ModelManager implements ModelService {
   private runtimeQueue: Promise<unknown> = Promise.resolve();
   private generation = 0;
 
+  /** The helper model's runtime, apart from the main one, with a queue of its own. */
+  private helper: LoadedRuntime | null = null;
+  private helperQueue: Promise<unknown> = Promise.resolve();
+  private helperEnabled = true;
+  /**
+   * A main model has been made available since launch (or since the person stopped the models):
+   * the helper should run beside it. Before that nothing needs side requests answered.
+   */
+  private helperWanted = false;
+
   private scanAbort: AbortController | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private emitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -253,6 +286,7 @@ export class ModelManager implements ModelService {
   private async load(): Promise<void> {
     this.saved = await this.options.store.load();
     await this.options.keys.load();
+    this.helperEnabled = (await this.options.helperPreference?.read().catch(() => true)) ?? true;
     const [machine, catalog] = await Promise.all([
       this.backend.probeHardware().catch((error: unknown) => {
         this.log(`Could not read this Mac's hardware: ${messageOf(error)}`);
@@ -302,8 +336,14 @@ export class ModelManager implements ModelService {
     active?.controller?.abort();
     await active?.settled;
     // Stopping the handle first ends a load in progress, so the queue is free for the unload.
-    await this.runtime?.handle?.stop().catch(() => {});
-    await this.serial(() => this.unload());
+    await Promise.all([
+      this.runtime?.handle?.stop().catch(() => {}),
+      this.helper?.handle?.stop().catch(() => {}),
+    ]);
+    await Promise.all([
+      this.serial(() => this.unload()),
+      this.helperSerial(() => this.stopHelperNow()),
+    ]);
   }
 
   /**
@@ -381,6 +421,7 @@ export class ModelManager implements ModelService {
       status: this.runtimeStatus(),
       defaultModelId: this.effectiveDefault(installed),
       idleUnloadMinutes: this.saved.idleUnloadMinutes,
+      helper: this.helperInfo(),
     };
   }
 
@@ -463,8 +504,9 @@ export class ModelManager implements ModelService {
   private orderedCatalog(): { entries: CatalogEntry[]; recommendedId: string | null } {
     const fitting = this.machine ? recommend(this.machine, this.catalog) : [];
     const fitIds = new Set(fitting.map((entry) => entry.id));
+    // Helpers are never offered as a model to chat with; they have their own section.
     const rest = this.catalog
-      .filter((entry) => !fitIds.has(entry.id))
+      .filter((entry) => !fitIds.has(entry.id) && !isHelperEntry(entry))
       .sort((a, b) => b.rank - a.rank || a.minMemoryBytes - b.minMemoryBytes);
     return { entries: [...fitting, ...rest], recommendedId: fitting[0]?.id ?? null };
   }
@@ -545,7 +587,9 @@ export class ModelManager implements ModelService {
 
   private catalogOption(entry: CatalogEntry, record: InstalledRecord): ModelOption {
     const loaded = this.loadedEndpoint(entry.id);
-    const context = loaded?.contextWindow ?? contextPerSlot(entry, this.machineInfo().memoryBytes);
+    const context =
+      loaded?.contextWindow ??
+      contextPerSlot(entry, this.machineInfo().memoryBytes, this.helperReserveBytes());
     const where =
       record.source === "lmstudio"
         ? "LM Studio’s copy"
@@ -736,6 +780,8 @@ export class ModelManager implements ModelService {
       this.log(`Downloaded ${entry.id}.`);
       this.changed();
       this.modelsChanged();
+      // A helper that arrives while a main model is in use starts beside it at once.
+      if (isHelperEntry(entry)) void this.ensureHelper();
     } catch (error) {
       record.controller = undefined;
       record.bytesPerSecond = 0;
@@ -788,14 +834,20 @@ export class ModelManager implements ModelService {
     return total;
   }
 
-  /** Records an installed catalog model; the first model on this Mac becomes the default. */
+  /**
+   * Records an installed catalog model; the first model on this Mac becomes the default. The
+   * helper never does: it is not a model to chat with.
+   */
   private install(record: InstalledRecord): void {
     const hadDefault = this.effectiveDefault(this.installedOptions()) !== null;
     this.saved = {
       ...this.saved,
       installed: [...this.saved.installed.filter((r) => r.id !== record.id), record],
     };
-    if (!hadDefault) this.saved = { ...this.saved, defaultModelId: record.id };
+    const entry = this.entry(record.id);
+    if (!hadDefault && !(entry && isHelperEntry(entry))) {
+      this.saved = { ...this.saved, defaultModelId: record.id };
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -845,6 +897,7 @@ export class ModelManager implements ModelService {
     this.log(`Using the copy of ${modelId} in ${copy.model.path}.`);
     this.changed();
     this.modelsChanged();
+    if (isHelperEntry(entry)) void this.ensureHelper();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -903,6 +956,11 @@ export class ModelManager implements ModelService {
     if (!record && !file) throw new Error("That model is not installed.");
     if (this.runtime?.modelId === modelId || this.pendingLoad?.modelId === modelId) {
       await this.serial(() => this.unload());
+    }
+    if (this.helper?.modelId === modelId) {
+      // Stopping the handle first ends a start in progress, so the queue is free for the stop.
+      await this.helper.handle?.stop().catch(() => {});
+      await this.helperSerial(() => this.stopHelperNow());
     }
     if (record) {
       this.saved = {
@@ -969,6 +1027,37 @@ export class ModelManager implements ModelService {
         this.log(`Reloading ${modelId} for the new idle time failed: ${messageOf(error)}`),
       );
     }
+    // The helper unloads with the same setting, so it restarts with it too.
+    if (this.helper && !this.helper.error) {
+      void this.helperSerial(async () => {
+        await this.stopHelperNow();
+        await this.startHelperNow();
+      });
+    }
+  }
+
+  async setHelperEnabled(enabled: boolean): Promise<void> {
+    await this.init();
+    if (this.helperEnabled === enabled) return;
+    this.helperEnabled = enabled;
+    try {
+      await this.options.helperPreference?.write(enabled);
+    } catch (error) {
+      this.log(`Could not save the helper setting: ${messageOf(error)}`);
+    }
+    this.log(
+      enabled
+        ? "Side requests go to the helper model again."
+        : "Side requests go to the main model; the helper model is off.",
+    );
+    if (enabled) {
+      void this.ensureHelper(true);
+    } else {
+      await this.helper?.handle?.stop().catch(() => {});
+      await this.helperSerial(() => this.stopHelperNow());
+    }
+    this.changed();
+    this.modelsChanged();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -981,9 +1070,15 @@ export class ModelManager implements ModelService {
     if (!answer.ok) throw new Error(answer.message);
   }
 
+  /** Unloads the main model and the helper: the person wants the memory back. */
   async stop(): Promise<void> {
     await this.init();
-    await this.serial(() => this.unload());
+    this.helperWanted = false;
+    await this.helper?.handle?.stop().catch(() => {});
+    await Promise.all([
+      this.serial(() => this.unload()),
+      this.helperSerial(() => this.stopHelperNow()),
+    ]);
   }
 
   /** Runtime operations run one at a time, in order. */
@@ -1020,7 +1115,11 @@ export class ModelManager implements ModelService {
         modelPath: record.modelPath,
         ...(record.projectorPath === undefined ? {} : { projectorPath: record.projectorPath }),
         catalogEntry: entry,
-        contextPerSlot: contextPerSlot(entry, this.machineInfo().memoryBytes),
+        contextPerSlot: contextPerSlot(
+          entry,
+          this.machineInfo().memoryBytes,
+          this.helperReserveBytes(),
+        ),
         ...idleUnload,
       };
     }
@@ -1208,9 +1307,13 @@ export class ModelManager implements ModelService {
     return file ? fileLabel(file.path) : modelId;
   }
 
-  /** Reads the runtime's memory, and whether it is asleep when idle unload is on. */
+  /** Reads both runtimes' memory, and whether they are asleep when idle unload is on. */
   private async pollRuntime(): Promise<void> {
-    const runtime = this.runtime;
+    await Promise.all([this.pollOne(() => this.runtime), this.pollOne(() => this.helper)]);
+  }
+
+  private async pollOne(current: () => LoadedRuntime | null): Promise<void> {
+    const runtime = current();
     const pid = runtime?.handle?.pid;
     if (runtime?.state !== "ready" || pid === undefined) return;
     const [memory, sleeping] = await Promise.all([
@@ -1219,7 +1322,7 @@ export class ModelManager implements ModelService {
         ? Promise.resolve(false)
         : (runtime.handle?.isSleeping().catch(() => runtime.sleeping) ?? Promise.resolve(false)),
     ]);
-    if (this.runtime !== runtime) return;
+    if (current() !== runtime) return;
     const before = runtime.memoryBytes;
     const memoryMoved =
       memory !== before &&
@@ -1230,6 +1333,258 @@ export class ModelManager implements ModelService {
     if (memoryMoved) runtime.memoryBytes = memory;
     runtime.sleeping = sleeping;
     this.changed();
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // The helper model
+  // -------------------------------------------------------------------------------------------
+
+  /** The catalog's helper entry, if it has one. */
+  private helperEntry(): CatalogEntry | null {
+    return catalogHelper(this.catalog);
+  }
+
+  /** The helper is downloaded and the person has not turned it off. */
+  private helperUsable(): boolean {
+    const entry = this.helperEntry();
+    return entry !== null && this.helperEnabled && this.installedRecord(entry.id) !== undefined;
+  }
+
+  /** Memory the helper takes while it runs, kept out of the main model's window. */
+  private helperReserveBytes(): number {
+    const entry = this.helperEntry();
+    return entry && this.helperUsable() ? helperWorkingSetBytes(entry) : 0;
+  }
+
+  /** A main model is in use: the helper should run beside it. */
+  private wantHelper(retryFailed = false): void {
+    this.helperWanted = true;
+    void this.ensureHelper(retryFailed);
+  }
+
+  /**
+   * Starts the helper when it should run and is not running. One that failed is tried again only
+   * with `retryFailed` (a fresh main load, the person turning it on): a model that crashed three
+   * times in a row would only crash again on every request.
+   */
+  private async ensureHelper(retryFailed = false): Promise<void> {
+    if (this.disposed || !this.loaded || !this.helperWanted || !this.helperUsable()) return;
+    const current = this.helper;
+    if (current && !(current.error && retryFailed)) return;
+    await this.helperSerial(async () => {
+      const again = this.helper;
+      if (again && !(again.error && retryFailed)) return;
+      if (again) await this.stopHelperNow();
+      if (!this.disposed && this.helperWanted && this.helperUsable()) await this.startHelperNow();
+    });
+  }
+
+  /** Helper operations run one at a time, apart from the main runtime's. */
+  private helperSerial<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.helperQueue.then(task, task);
+    this.helperQueue = run.catch(() => {});
+    return run;
+  }
+
+  /** Starts the helper's llama-server. Never throws: a failure leaves side requests on the main model. Runs inside `helperSerial`. */
+  private async startHelperNow(): Promise<void> {
+    const entry = this.helperEntry();
+    const record = entry ? this.installedRecord(entry.id) : undefined;
+    if (!entry || !record || this.disposed) return;
+    const idle = this.saved.idleUnloadMinutes;
+    const launch: RuntimeLaunch = {
+      role: "helper",
+      modelId: entry.id,
+      modelPath: record.modelPath,
+      catalogEntry: entry,
+      contextPerSlot: entry.context.default,
+      ...(idle === null ? {} : { idleUnloadSeconds: idle * 60 }),
+    };
+    const runtime: LoadedRuntime = {
+      modelId: entry.id,
+      handle: null,
+      state: "starting",
+      endpoint: null,
+      error: null,
+      restarting: false,
+      memoryBytes: null,
+      sleeping: false,
+      unsubscribe: () => {},
+    };
+    this.helper = runtime;
+    this.changed();
+    this.log(`Starting the helper model ${entry.id} for side requests.`);
+    try {
+      runtime.handle = await this.backend.createRuntime(launch);
+    } catch (error) {
+      runtime.state = "stopped";
+      runtime.error = describeRuntimeError(error);
+      this.log(
+        `The helper model could not start (${messageOf(error)}); side requests use the main model.`,
+      );
+      this.changed();
+      return;
+    }
+    runtime.unsubscribe = runtime.handle.subscribe((event) => this.onHelperEvent(runtime, event));
+    if (this.disposed || this.helper !== runtime) {
+      await runtime.handle.stop().catch(() => {});
+      return;
+    }
+    try {
+      const endpoint = await runtime.handle.start();
+      if (this.helper === runtime && runtime.endpoint === null) {
+        this.onHelperEvent(runtime, { type: "ready", endpoint });
+      }
+    } catch (error) {
+      if (this.helper !== runtime) return;
+      runtime.error ??= describeRuntimeError(error, runtime.handle.logPath);
+      runtime.state = "stopped";
+      runtime.endpoint = null;
+      this.log(
+        `The helper model did not start (${messageOf(error)}); side requests use the main model.`,
+      );
+      this.changed();
+    }
+  }
+
+  private onHelperEvent(runtime: LoadedRuntime, event: RuntimeEvent): void {
+    if (this.helper !== runtime) return;
+    switch (event.type) {
+      case "state":
+        runtime.state = event.state;
+        if (event.state === "starting") {
+          runtime.restarting = event.reason === "restart";
+        } else if (event.state === "crashed") {
+          const had = runtime.endpoint !== null;
+          runtime.endpoint = null;
+          runtime.memoryBytes = null;
+          this.log(
+            "The helper model stopped unexpectedly; restarting it. Side requests use the main model meanwhile.",
+          );
+          // Grants that carry it are out of date; the engine host asks again.
+          if (had) this.modelsChanged();
+        } else if (event.state === "stopped") {
+          runtime.endpoint = null;
+          runtime.memoryBytes = null;
+        }
+        break;
+      case "ready":
+        runtime.state = "ready";
+        runtime.endpoint = event.endpoint;
+        runtime.restarting = false;
+        runtime.sleeping = false;
+        runtime.error = null;
+        // What serves side requests changed: grants made from now on carry the helper.
+        this.generation += 1;
+        this.log(
+          `The helper model ${runtime.modelId} is ready for side requests (${formatContext(event.endpoint.contextWindow)} context).`,
+        );
+        this.modelsChanged();
+        void this.pollRuntime();
+        break;
+      case "failure":
+        runtime.state = "stopped";
+        runtime.endpoint = null;
+        runtime.memoryBytes = null;
+        runtime.error = describeRuntimeError(event.error, runtime.handle?.logPath);
+        this.log(
+          `The helper model failed (${messageOf(event.error)}); side requests use the main model.`,
+        );
+        this.modelsChanged();
+        break;
+    }
+    this.changed();
+  }
+
+  /** Stops the helper, if it runs. Runs inside `helperSerial`. */
+  private async stopHelperNow(): Promise<void> {
+    const runtime = this.helper;
+    if (!runtime) return;
+    this.helper = null;
+    runtime.unsubscribe();
+    const wasReady = runtime.endpoint !== null;
+    this.changed();
+    if (runtime.handle) {
+      try {
+        await runtime.handle.stop();
+      } catch (error) {
+        this.log(`Stopping the helper model failed: ${messageOf(error)}`);
+      }
+      this.log(`Stopped the helper model ${runtime.modelId}.`);
+    }
+    if (wasReady) this.modelsChanged();
+  }
+
+  /** What grants say about the helper: its endpoint and slot while it is ready and wanted. */
+  private helperGrant(): Pick<ModelGrant, "helper"> {
+    const runtime = this.helper;
+    const entry = this.helperEntry();
+    const endpoint = runtime?.state === "ready" ? runtime.endpoint : null;
+    if (!entry || !endpoint || !this.helperUsable() || runtime?.modelId !== entry.id) return {};
+    return {
+      helper: {
+        modelId: entry.id,
+        endpoint: {
+          kind: endpoint.kind,
+          baseUrl: endpoint.baseUrl,
+          ...(endpoint.apiKey === undefined ? {} : { apiKey: endpoint.apiKey }),
+          model: endpoint.model,
+          contextWindow: endpoint.contextWindow,
+          capabilities: { ...endpoint.capabilities },
+          ...(endpoint.template === undefined ? {} : { template: { ...endpoint.template } }),
+        },
+        slots: [...HELPER_SLOTS],
+        profile: entry.profile,
+      },
+    };
+  }
+
+  /** Settings → Models' helper section, and the welcome screen's offer. */
+  private helperInfo(): HelperInfo | null {
+    const entry = this.helperEntry();
+    if (!entry) return null;
+    const installed = this.installedRecord(entry.id) !== undefined;
+    const fitNote = this.fitNote(entry, installed);
+    const offered = this.machine ? recommendHelper(this.machine, this.catalog) : null;
+    const runtime = this.helper?.modelId === entry.id ? this.helper : null;
+    const copy = this.found.get(entry.id);
+    let state: HelperInfo["state"];
+    let message: string | null = null;
+    if (!installed) {
+      const download = catalogDownloadState(this.downloads.get(entry.id));
+      state = download === "installed" ? "available" : download;
+    } else if (runtime?.error) {
+      state = "error";
+      message = `${runtime.error} Side requests use the main model.`;
+    } else if (runtime?.state === "ready") {
+      state = "running";
+      if (runtime.sleeping) {
+        message = "Unloaded while idle; it loads again with the next side request";
+      }
+    } else if (runtime && runtime.state !== "stopped") {
+      state = "starting";
+      if (runtime.restarting) message = "Restarting after it stopped";
+    } else {
+      state = "ready";
+    }
+    if (!this.helperEnabled)
+      message = "Turned off: the main model answers titles and page summaries";
+    return {
+      id: entry.id,
+      displayName: entry.displayName,
+      licence: { ...entry.licence },
+      sizeBytes: entryWeightsBytes(entry),
+      memoryBytes: helperWorkingSetBytes(entry),
+      contextWindow: runtime?.endpoint?.contextWindow ?? entry.context.default,
+      recommended: offered?.id === entry.id,
+      fits: fitNote === null,
+      fitNote,
+      state,
+      enabled: this.helperEnabled,
+      message,
+      runtimeMemoryBytes: runtime?.state === "ready" ? runtime.memoryBytes : null,
+      foundIn: !installed && copy?.ready && copy.model ? copy.model.source : null,
+    };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1490,13 +1845,30 @@ export class ModelManager implements ModelService {
     return this.makeAvailable(id);
   }
 
+  /** A main model is downloading (the helper's download makes nothing to chat with). */
   private hasActiveDownload(): boolean {
-    return [...this.downloads.values()].some((record) => ACTIVE_PHASES.has(record.phase));
+    return [...this.downloads.values()].some((record) => {
+      const entry = this.entry(record.modelId);
+      return ACTIVE_PHASES.has(record.phase) && !(entry && isHelperEntry(entry));
+    });
   }
 
   /** Loads a bundled model, or checks a server's model answers, and says how to reach it. */
   private async makeAvailable(modelId: string): Promise<ModelAnswer> {
+    const asked = this.entry(modelId);
+    if (asked && isHelperEntry(asked)) {
+      return {
+        ok: false,
+        message: `${asked.displayName} is the helper model: it answers titles and page summaries, not conversations. Choose another model.`,
+        retryable: false,
+      };
+    }
     if (this.installedRecord(modelId) || this.fileRecord(modelId)) {
+      // The helper loads beside the main model, at the same time: it is small, so it is
+      // normally ready by the time the main model is, and the first grant carries it. A model
+      // that has to load is a fresh chance for a helper that failed before.
+      const loaded = this.runtime?.modelId === modelId && this.runtime.state === "ready";
+      this.wantHelper(!loaded);
       try {
         const endpoint = await this.ensureLoaded(modelId);
         return { ok: true, grant: this.grant(modelId, endpoint, true) };
@@ -1566,6 +1938,9 @@ export class ModelManager implements ModelService {
     }
     const endpoint = toEndpoint(discovered, model);
     const shared = server.ephemeral && this.options.testServerSlots === true;
+    // A server's model gets the helper too: side requests then stay on this Mac's helper. Its
+    // grant does not wait for it; the engine host is told when it is ready.
+    this.wantHelper();
     return { ok: true, grant: this.grant(modelId, endpoint, shared) };
   }
 
@@ -1593,6 +1968,7 @@ export class ModelManager implements ModelService {
         : {}),
       generation: this.generation,
       ...(profile === undefined ? {} : { profile }),
+      ...this.helperGrant(),
     };
   }
 

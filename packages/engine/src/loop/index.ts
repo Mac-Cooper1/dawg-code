@@ -8,6 +8,8 @@ export {
   type ExecutedCall,
   type ExecutorHost,
   executeToolCalls,
+  type HookedCall,
+  type ToolHookVerdict,
 } from "./executor.ts";
 export { RepeatDetector } from "./repeat.ts";
 export { type RoomCheck, type RoomResult, runTurn, type TurnHost } from "./turn.ts";

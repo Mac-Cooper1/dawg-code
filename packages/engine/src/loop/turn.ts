@@ -66,6 +66,16 @@ export interface TurnHost extends ExecutorHost {
    */
   makeRoom(turnId: string, signal: AbortSignal, check: RoomCheck): Promise<RoomResult>;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
+  /**
+   * Stop hooks (Phase 4), when the model ends its turn: true when they kept it going (the host
+   * has appended what they said). Absent: the turn ends.
+   */
+  onStop?(turn: { turnId: string; lastText: string | null; signal: AbortSignal }): Promise<boolean>;
+  /**
+   * Whether a hook asked to stop processing (`continue: false`), checked at each safe point: the
+   * turn then ends there. Absent: never.
+   */
+  hookStopRequested?(): boolean;
 }
 
 interface Partial_ {
@@ -145,6 +155,10 @@ export async function runTurn(
     }
     await appendPending();
     await host.flushNotes();
+    // A hook said `continue: false`; its reason is already in history (hooks reference).
+    if (host.hookStopRequested?.() === true) {
+      return { stopReason: "completed", finalText: lastText, error: null };
+    }
     return null;
   };
 
@@ -270,7 +284,15 @@ export async function runTurn(
     }
 
     if (prepared.calls.length === 0) {
-      if (!cutOff) return { stopReason: "completed", finalText: lastText, error: null };
+      if (!cutOff) {
+        // Stop hooks may keep the turn going; what they said is now in history.
+        if (host.onStop !== undefined && (await host.onStop({ turnId, lastText, signal }))) {
+          if (signal.aborted) return interrupted();
+          continue;
+        }
+        if (signal.aborted) return interrupted();
+        return { stopReason: "completed", finalText: lastText, error: null };
+      }
       // Cut off mid-text: let the model carry on, told to send less at once.
       await appendPending();
       continue;

@@ -14,6 +14,7 @@
  *   tests, NewSessionDialog.test.tsx).
  */
 import {
+  type CompatItem,
   METHOD_NAMES,
   type MethodName,
   type PermissionResponse,
@@ -25,7 +26,7 @@ import { sessionsStore } from "../app/commands/testing.ts";
 import type { CommandContext, PaletteUi } from "../app/commands/types.ts";
 import { createFakeBridge, type FakeBridge } from "./__fixtures__/fake-bridge.ts";
 import { FakeEngine } from "./__fixtures__/fake-engine.ts";
-import { makeBackgroundTask, PROJECT } from "./__fixtures__/streams.ts";
+import { makeBackgroundTask, makeSubagent, PROJECT } from "./__fixtures__/streams.ts";
 import { type AppStoreApi, createAppStore } from "./store.ts";
 import type { AppActions, UiState } from "./types.ts";
 
@@ -122,9 +123,42 @@ function pendingPlan(engine: FakeEngine): void {
   engine.emit(ID, "session.status", { status: "waiting", waitingOn: "plan", message: null });
 }
 
+/** A turn that has ended: the session has a checkpoint to rewind to. */
+function turnDone(engine: FakeEngine): void {
+  runningTurn(engine);
+  engine.emit(ID, "turn.finished", {
+    turnId: "t1",
+    stopReason: "completed",
+    finalText: "Done.",
+    error: null,
+    durationMs: 100,
+  });
+  engine.emit(ID, "session.status", { status: "idle", waitingOn: null, message: null });
+}
+
 function runningCommand(engine: FakeEngine): void {
   engine.emit(ID, "background.updated", { task: makeBackgroundTask("bash-1") });
   engine.backgroundOutput(ID, "bash-1", "listening on :3000\n");
+}
+
+function runningAgent(engine: FakeEngine): void {
+  engine.emit(ID, "subagent.updated", { agent: makeSubagent("agent-1", { background: true }) });
+}
+
+/** The project has a hook from its Claude Code settings waiting for the person's consent. */
+function codeWaiting(engine: FakeEngine): void {
+  const item: CompatItem = {
+    kind: "hook",
+    name: "PreToolUse on Bash: ./scripts/check-command.sh",
+    source: { path: `${PROJECT}/.claude/settings.json`, origin: "claude", scope: "project" },
+    status: "needs-approval",
+    notes: ["Runs a command from the project's files."],
+  };
+  engine.overrides["project.inspect"] = (params) => ({
+    projectDir: params.projectDir,
+    items: [item],
+    approval: { hash: "sha256:9f2c", approved: false, items: [item] },
+  });
 }
 
 const ALLOW_ONCE: PermissionResponse = { behavior: "allow", scope: "once" };
@@ -138,6 +172,123 @@ const REACH: Record<MethodName, Reach> = {
   },
   "session.list": {
     internal: "The connection lists every stored session at each connect to fill the sidebar.",
+  },
+  "project.inspect": {
+    // The trust dialog asks on its own when a project's session is first shown, and when the
+    // person asks to review the project's code. Settings → Project setup shows the whole report
+    // (and the first-open notice links there).
+    wire: [
+      { action: "reviewProjectCode", call: async (a) => a.reviewProjectCode(PROJECT) },
+      { action: "inspectProject", call: (a) => a.inspectProject(PROJECT) },
+    ],
+    components: [
+      { file: "app/SessionArea.tsx", action: "reviewProjectCode" },
+      { file: "settings/SettingsContainer.tsx", action: "reviewProjectCode" },
+      { file: "settings/ProjectSetupPageContainer.tsx", action: "inspectProject" },
+    ],
+  },
+  "project.trust": {
+    wire: [
+      {
+        action: "answerTrustReview",
+        setup: codeWaiting,
+        call: (a) => approveFromDialog(a),
+      },
+    ],
+    components: [{ file: "trust/TrustDialog.tsx", action: "answerTrustReview" }],
+  },
+  "hooks.list": {
+    wire: [{ action: "listHooks", call: (a) => a.listHooks(PROJECT) }],
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "listHooks",
+        uses: "listHooks=\\{actions\\.listHooks\\}",
+      },
+    ],
+  },
+  "project.skills": {
+    wire: [{ action: "listSkills", call: (a) => a.listSkills(PROJECT) }],
+    // Settings → Skills and commands lists them for the project the person picks.
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "listSkills",
+        uses: "listSkills=\\{actions\\.listSkills\\}",
+      },
+    ],
+  },
+  "hooks.setEnabled": {
+    wire: [{ action: "setHookEnabled", call: (a) => a.setHookEnabled(PROJECT, "hook:1", false) }],
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "setHookEnabled",
+        uses: "setHookEnabled=\\{actions\\.setHookEnabled\\}",
+      },
+    ],
+  },
+  "mcp.list": {
+    wire: [{ action: "listMcpServers", call: (a) => a.listMcpServers(PROJECT) }],
+    // Settings → MCP servers lists them for the project the person picks.
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "listMcpServers",
+        uses: "listMcpServers=\\{actions\\.listMcpServers\\}",
+      },
+    ],
+  },
+  "mcp.restart": {
+    wire: [{ action: "restartMcpServer", call: (a) => a.restartMcpServer(PROJECT, "github") }],
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "restartMcpServer",
+        uses: "restartMcpServer=\\{actions\\.restartMcpServer\\}",
+      },
+    ],
+  },
+  "mcp.setEnabled": {
+    wire: [
+      {
+        action: "setMcpServerEnabled",
+        call: (a) => a.setMcpServerEnabled(PROJECT, "github", false),
+      },
+    ],
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "setMcpServerEnabled",
+        uses: "setMcpServerEnabled=\\{actions\\.setMcpServerEnabled\\}",
+      },
+    ],
+  },
+  "mcp.importPreview": {
+    wire: [{ action: "previewMcpImport", call: (a) => a.previewMcpImport() }],
+    // "Import…" on Settings → MCP servers shows what would be copied first.
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "previewMcpImport",
+        uses: "previewMcpImport=\\{actions\\.previewMcpImport\\}",
+      },
+    ],
+  },
+  "mcp.import": {
+    wire: [{ action: "importMcpServers", call: (a) => a.importMcpServers("sha256:1a2b") }],
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "importMcpServers",
+        uses: "importMcpServers=\\{actions\\.importMcpServers\\}",
+      },
+    ],
+  },
+  "mcp.session": {
+    wire: [{ action: "mcpOffer", call: (a) => a.mcpOffer(ID) }],
+    // The composer's @ menu offers the session's resources, its / menu the servers' prompts.
+    components: [{ file: "composer/ComposerContainer.tsx", action: "mcpOffer" }],
   },
   "session.replay": {
     internal:
@@ -273,6 +424,17 @@ const REACH: Record<MethodName, Reach> = {
       { file: "composer/ComposerContainer.tsx", action: "submit" },
     ],
   },
+  "session.checkpoints": {
+    // The rewind dialog lists them: Esc twice in the composer, `/rewind`, or the palette.
+    wire: [{ action: "openRewind", setup: turnDone, call: (a) => a.openRewind(ID) }],
+    registry: [{ id: "session.rewind", calls: "openRewind" }],
+    components: [{ file: "composer/ComposerContainer.tsx", action: "openRewind" }],
+  },
+  "session.rewind": {
+    wire: [{ action: "rewind", setup: turnDone, call: (a) => rewindFromDialog(a) }],
+    // The dialog's actions: restore files and conversation, conversation, files, summarise.
+    components: [{ file: "rewind/RewindDialog.tsx", action: "rewind" }],
+  },
   "background.output": {
     wire: [
       {
@@ -299,6 +461,17 @@ const REACH: Record<MethodName, Reach> = {
       },
     ],
     components: [{ file: "panes/tasks/index.tsx", action: "stopBackground" }],
+  },
+  "subagent.stop": {
+    wire: [
+      {
+        action: "stopSubagent",
+        setup: runningAgent,
+        call: (a) => a.stopSubagent(ID, "agent-1"),
+      },
+    ],
+    // A background agent's row in the Tasks pane has Stop.
+    components: [{ file: "panes/tasks/index.tsx", action: "stopSubagent" }],
   },
   "permission.respond": {
     wire: [
@@ -394,6 +567,26 @@ async function newSessionFromDialog(actions: AppActions): Promise<unknown> {
   await vi.waitFor(() => expect(currentStore?.getState().newSessionOffer).not.toBeNull());
   await actions.answerNewSessionOffer({ worktree: null });
   return made;
+}
+
+/** Opens the trust dialog for the project and approves what it lists. */
+async function approveFromDialog(actions: AppActions): Promise<void> {
+  const store = currentStore;
+  if (!store) throw new Error("no harness");
+  actions.reviewProjectCode(PROJECT);
+  await vi.waitFor(() => expect(store.getState().trustReview?.phase).toBe("ready"));
+  await actions.answerTrustReview(true);
+}
+
+/** Opens the rewind dialog and goes back to before the first prompt, files and conversation. */
+async function rewindFromDialog(actions: AppActions): Promise<void> {
+  const store = currentStore;
+  if (!store) throw new Error("no harness");
+  await actions.openRewind(ID);
+  await vi.waitFor(() => expect(store.getState().rewind?.phase).toBe("ready"));
+  const checkpoint = store.getState().rewind?.checkpoints[0];
+  if (!checkpoint) throw new Error("no checkpoint listed");
+  await actions.rewind(checkpoint.id, "both");
 }
 
 /** Queues a message behind a running turn, stops the turn (the message is held), then sends it. */

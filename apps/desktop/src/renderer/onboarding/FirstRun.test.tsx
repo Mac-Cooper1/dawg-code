@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedTheme } from "../../shared/bridge.ts";
+import type { ModelsState, ResolvedTheme } from "../../shared/bridge.ts";
 import { type MockModelsScenario, mockModelsState } from "../../shared/mock-models.ts";
 import { App } from "../app/App.tsx";
 import { PlatformProvider } from "../app/platform.tsx";
@@ -11,6 +11,8 @@ import { renderInTheme, THEMES } from "../test/render.tsx";
 
 const Q8 = "qwen3.8-27b-q8";
 const Q8_NAME = "Qwen3.8 27B (8-bit)";
+const HELPER = "minicpm5-1b-q8";
+const HELPER_NAME = "MiniCPM5 1B (8-bit)";
 
 const open: { store: AppStoreApi; bridge: MemoryBridge }[] = [];
 
@@ -25,11 +27,15 @@ afterEach(() => {
  * The real store on the browser fallback bridge, its model manager driven by hand. The engine
  * never answers: first run does not need it.
  */
-async function setup(theme: ResolvedTheme, scenario: MockModelsScenario = "empty") {
+async function setup(
+  theme: ResolvedTheme,
+  scenario: MockModelsScenario = "empty",
+  change: (state: ModelsState) => ModelsState = (state) => state,
+) {
   const bridge = createMemoryBridge({
     storage: null,
     settings: { appearance: theme },
-    modelsState: mockModelsState(scenario),
+    modelsState: change(mockModelsState(scenario)),
     modelTiming: { auto: false },
     engine: { connect: () => {} },
   });
@@ -131,6 +137,59 @@ describe.each(THEMES)("First run (%s)", (theme) => {
     expect(store.getState().modelsState?.defaultModelId).toBe(Q8);
   });
 
+  it("gets the helper model in the same click, after the model, and starts without waiting for it", async () => {
+    const { user, manager, store } = await setup(theme);
+    const lead = screen.getByRole("region", { name: Q8_NAME });
+    const note =
+      "Plus a small helper model (1.2 GB) for titles and page summaries, so Qwen3.8 27B (8-bit) stays on your conversation.";
+    expect(lead).toHaveTextContent(note);
+    const button = within(lead).getByRole("button", { name: "Download and start" });
+    expect(button).toHaveAccessibleDescription(note);
+    await user.click(button);
+    await screen.findByRole("heading", { level: 1, name: `Downloading ${Q8_NAME}` });
+    // One download at a time in main: the model first, so it can start sooner.
+    await waitFor(() =>
+      expect(manager.current().downloads.map((d) => d.modelId)).toEqual([Q8, HELPER]),
+    );
+    const download = screen.getByRole("region", { name: "Download" });
+    expect(download).toHaveTextContent(`Then ${HELPER_NAME}for titles and page summaries`);
+    act(() => manager.advanceDownload(HELPER, 576_764_608));
+    expect(download).toHaveTextContent("50.0% · 577 MB of 1.2 GB");
+
+    // The model is in: it starts while the helper still downloads.
+    act(() => manager.advanceDownload(Q8));
+    await screen.findByRole("heading", { level: 1, name: "Starting the model" });
+    act(() => manager.finishLoad());
+    expect(await screen.findByRole("navigation", { name: "Sessions" })).toBeInTheDocument();
+    expect(store.getState().modelsState?.helper?.state).toBe("downloading");
+    act(() => manager.advanceDownload(HELPER));
+    await waitFor(() => expect(store.getState().modelsState?.helper?.state).toBe("running"));
+    // The helper never joins the models to chat with.
+    expect(store.getState().models.map((option) => option.id)).toEqual([Q8]);
+  });
+
+  it.each([
+    ["the catalog has no helper", (state: ModelsState) => ({ ...state, helper: null })],
+    [
+      "the helper is turned off",
+      (state: ModelsState) =>
+        state.helper ? { ...state, helper: { ...state.helper, enabled: false } } : state,
+    ],
+    [
+      "the catalog does not offer it on this Mac",
+      (state: ModelsState) =>
+        state.helper ? { ...state, helper: { ...state.helper, recommended: false } } : state,
+    ],
+  ])("downloads the model alone when %s", async (_label, change) => {
+    const { user, manager } = await setup(theme, "empty", change);
+    const lead = screen.getByRole("region", { name: Q8_NAME });
+    expect(lead).not.toHaveTextContent("helper model");
+    await user.click(within(lead).getByRole("button", { name: "Download and start" }));
+    await screen.findByRole("heading", { level: 1, name: `Downloading ${Q8_NAME}` });
+    expect(manager.current().downloads.map((d) => d.modelId)).toEqual([Q8]);
+    expect(screen.getByRole("region", { name: "Download" })).not.toHaveTextContent("Then");
+  });
+
   it("asks before cancelling, then goes back to the welcome screen", async () => {
     const { user, manager } = await setup(theme);
     await user.click(screen.getByRole("button", { name: "Download and start" }));
@@ -166,7 +225,9 @@ describe.each(THEMES)("First run (%s)", (theme) => {
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "20");
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(manager.current().downloads[0]).toMatchObject({ bytesDone: 6_000_000_000 });
+    expect(manager.current().downloads.find((d) => d.modelId === Q8)).toMatchObject({
+      bytesDone: 6_000_000_000,
+    });
 
     act(() => manager.failDownload(Q8, "The download was corrupt and was deleted."));
     await user.click(await screen.findByRole("button", { name: "Choose another model" }));

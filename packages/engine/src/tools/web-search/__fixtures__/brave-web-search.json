@@ -1,0 +1,45 @@
+{
+  "type": "search",
+  "query": { "original": "vitest fake timers", "more_results_available": true },
+  "mixed": { "type": "mixed", "main": [{ "type": "web", "index": 0, "all": false }] },
+  "web": {
+    "type": "search",
+    "family_friendly": true,
+    "results": [
+      {
+        "type": "search_result",
+        "title": "Timers | <strong>Vitest</strong>",
+        "url": "https://vitest.dev/guide/mocking/timers",
+        "is_source_local": false,
+        "is_source_both": false,
+        "description": "Use <strong>vi.useFakeTimers()</strong> to control time &amp; dates in tests.",
+        "page_age": "2026-09-01T00:00:00",
+        "language": "en",
+        "family_friendly": true,
+        "profile": { "name": "Vitest", "url": "https://vitest.dev", "long_name": "vitest.dev" },
+        "meta_url": { "scheme": "https", "netloc": "vitest.dev", "hostname": "vitest.dev", "path": "› guide › mocking › timers" }
+      },
+      {
+        "type": "search_result",
+        "title": "vi.useFakeTimers API",
+        "url": "https://vitest.dev/api/vi#vi-usefaketimers",
+        "description": "Enables mocking of timers.",
+        "language": "en"
+      },
+      {
+        "type": "search_result",
+        "title": "Fake timers in Jest",
+        "url": "https://jestjs.io/docs/timer-mocks",
+        "description": "Jest can swap out timers with functions that let you control time.",
+        "language": "en"
+      },
+      {
+        "type": "search_result",
+        "title": "Not a web page",
+        "url": "ftp://files.example.com/timers.txt",
+        "description": "Skipped: not http.",
+        "language": "en"
+      }
+    ]
+  }
+}

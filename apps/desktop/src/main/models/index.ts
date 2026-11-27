@@ -24,8 +24,10 @@ import {
   probeHardware,
   probeLmStudio,
   probeOllama,
+  readHelperEnabled,
   resolveHubCacheDir,
   scanExistingModels,
+  writeHelperEnabled,
 } from "@dawg/models";
 import { safeStorage } from "electron";
 import type { Logger } from "../json-file.ts";
@@ -131,6 +133,11 @@ export function createModelService(options: ModelServiceOptions): ModelService {
     keys: createKeyStore(dataRoot, safeStorage, log),
     hubDir,
     log,
+    // Shared with the command line, which follows the same choice.
+    helperPreference: {
+      read: () => readHelperEnabled(dataRoot),
+      write: (enabled) => writeHelperEnabled(dataRoot, enabled),
+    },
     ...(testServerUrl ? { testServerUrl } : {}),
     ...(testServerUrl && env.DAWG_TEST_SERVER_SLOTS === "1" ? { testServerSlots: true } : {}),
   });

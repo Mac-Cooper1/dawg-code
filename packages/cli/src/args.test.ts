@@ -129,6 +129,7 @@ describe("helpers", () => {
     expect(profileIdForModel("qwen3.6:35b-a3b")).toBe("qwen3.6");
     expect(profileIdForModel("/models/Laguna-XS-2.1-Q4_K_M.gguf")).toBe("laguna-xs-2.1");
     expect(profileIdForModel("openai/gpt-oss-20b")).toBe("gpt-oss");
+    expect(profileIdForModel("minicpm5-1b-q8")).toBe("minicpm5");
     expect(profileIdForModel("qwen3-8b")).toBeNull();
     expect(profileIdForModel("/qwen3.8-models/other")).toBeNull();
   });
