@@ -449,11 +449,17 @@ describe.each(THEMES)("Composer (%s)", (theme) => {
   describe("the context meter", () => {
     it("shows how full the context is, and the details in a popover", async () => {
       const { on, user } = setup(theme);
-      const pill = screen.getByRole("button", { name: "Context used: 74.2K / 204.8K" });
+      const pill = screen.getByRole("button", {
+        name: "Context used: 74.2K of 204.8K tokens, 36%",
+      });
+      expect(pill).toHaveTextContent("74.2K / 204.8K");
       const ring = pill.querySelector("svg");
       expect(ring?.querySelectorAll("circle")).toHaveLength(2);
       await user.click(pill);
       const dialog = screen.getByRole("dialog", { name: "Context · 36% of 204.8K tokens" });
+      const meter = within(dialog).getByRole("meter", { name: "Context used" });
+      expect(meter).toHaveAttribute("aria-valuenow", "36");
+      expect(meter).toHaveAttribute("aria-valuetext", "74.2K of 204.8K tokens, 36%");
       const rows = within(dialog)
         .getAllByRole("term")
         .map((term) => term.textContent);

@@ -57,6 +57,23 @@
   background: var(--hover);
 }
 
+/* The keyboard's place, as in the command palette: a fill and an accent edge (the hover fill
+   alone is too faint to follow). Radix menus move real focus onto items; the composer's lists
+   leave focus in the text field and mark their active option. */
+.item[data-highlighted]:focus-visible,
+.item[role="option"][data-highlighted] {
+  background: var(--active);
+  box-shadow: inset 2px 0 0 var(--acc-text);
+}
+
+@media (prefers-contrast: more) {
+  .item[data-highlighted]:focus-visible,
+  .item[role="option"][data-highlighted] {
+    outline: 1px solid var(--ink);
+    outline-offset: -1px;
+  }
+}
+
 .item[data-disabled] {
   opacity: 0.5;
 }

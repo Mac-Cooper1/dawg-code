@@ -38,6 +38,7 @@ export function forgetSessions(ui: UiState, ids: readonly SessionId[]): UiState 
     attachments: without(ui.attachments, ids),
     mentionPaths: without(ui.mentionPaths, ids),
     queues: without(ui.queues, ids),
+    draftImagesNotKept: without(ui.draftImagesNotKept, ids),
     openItems: without(ui.openItems, ids),
     shownAgain: without(ui.shownAgain, ids),
     seenSeq: without(ui.seenSeq, ids),

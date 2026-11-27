@@ -32,7 +32,7 @@ import { MentionMenu } from "./MentionMenu.tsx";
 import { ModelMenu } from "./ModelMenu.tsx";
 import { ModeMenu } from "./ModeMenu.tsx";
 import { activeMention, applyMention, resolveMentions } from "./mentions.ts";
-import { QueueList } from "./QueueList.tsx";
+import { imagesNotKeptText, QueueList } from "./QueueList.tsx";
 import { useFileSearch } from "./useFileSearch.ts";
 
 /** How long a one-line notice about attaching stays. */
@@ -324,13 +324,17 @@ export function Composer(props: ComposerProps) {
   const full = props.attachments.length + preparing >= MAX_IMAGES;
 
   return (
-    <div className={styles.composer}>
+    // A landmark, so VoiceOver's rotor reaches the message box directly.
+    <section className={styles.composer} aria-label="Composer">
       <div className={styles.inner}>
         <QueueList
           queue={view.queue}
           onSendNow={props.onSendQueuedNow}
           onRemove={props.onRemoveQueued}
         />
+        {view.draftImagesNotKept > 0 && (
+          <p className={styles.notKept}>{imagesNotKeptText(view.draftImagesNotKept, "draft")}</p>
+        )}
         {commandOpen && (
           <CommandMenu
             id={commandListId}
@@ -510,6 +514,6 @@ export function Composer(props: ComposerProps) {
           </div>
         </div>
       </div>
-    </div>
+    </section>
   );
 }

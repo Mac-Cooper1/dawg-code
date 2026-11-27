@@ -26,7 +26,7 @@ const BG: Record<AnsiColor, string | undefined> = {
   gray: styles.bgGray,
 };
 
-function classesOf(segment: AnsiSegment): string | undefined {
+export function classesOf(segment: AnsiSegment): string | undefined {
   const { style } = segment;
   const names = [
     style.fg && FG[style.fg],

@@ -1,7 +1,7 @@
 import { Popover } from "radix-ui";
 import { useId, useState } from "react";
 import menu from "../app/menu.module.css";
-import { formatTokens } from "../lib/format.ts";
+import { formatPercent, formatTokens } from "../lib/format.ts";
 import type { ContextMeterView } from "../state/types.ts";
 import { Button } from "../ui/index.ts";
 import styles from "./Composer.module.css";
@@ -44,6 +44,11 @@ function Ring(props: { fraction: number }) {
   );
 }
 
+/** What VoiceOver reads for the pill: "Context used: 74.2K of 204.8K tokens, 36%". */
+export function contextSpoken(context: ContextMeterView): string {
+  return `${formatTokens(context.used)} of ${formatTokens(context.window)} tokens, ${formatPercent(context.fraction)}`;
+}
+
 /**
  * The context meter pill ("74.2K / 204.8K") and its popover: how full the context is and what
  * fills it (system prompt, instructions, tools, messages), with a mark where compaction starts
@@ -68,7 +73,7 @@ export function ContextMeter(props: {
         <button
           type="button"
           className={styles.pill}
-          aria-label={`Context used: ${contextLabel(context)}`}
+          aria-label={`Context used: ${contextSpoken(context)}`}
         >
           <Ring fraction={context.fraction} />
           {contextLabel(context)}
@@ -85,13 +90,25 @@ export function ContextMeter(props: {
           <div id={headingId} className={menu.label}>
             {contextHeading(context)}
           </div>
-          <div className={styles.stackFrame} aria-hidden="true">
+          {/* A meter for VoiceOver; the coloured parts are spelled out in the list below. A <meter>
+              element cannot hold the stacked parts and the compaction mark. */}
+          {/* biome-ignore lint/a11y/useSemanticElements: see above */}
+          <div
+            className={styles.stackFrame}
+            role="meter"
+            aria-label="Context used"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(Math.min(1, Math.max(0, context.fraction)) * 100)}
+            aria-valuetext={contextSpoken(context)}
+          >
             <div className={styles.stack}>
               {segments
                 .filter((segment) => segment.key !== "free" && segment.tokens > 0)
                 .map((segment) => (
                   <span
                     key={segment.key}
+                    aria-hidden="true"
                     className={`${styles.stackPart} ${SWATCH_CLASS[segment.key]}`}
                     style={{ width: `${segment.share * 100}%` }}
                   />
@@ -99,6 +116,7 @@ export function ContextMeter(props: {
             </div>
             {marker !== null && (
               <span
+                aria-hidden="true"
                 className={styles.compactMark}
                 data-testid="compact-mark"
                 style={{ left: `${marker * 100}%` }}

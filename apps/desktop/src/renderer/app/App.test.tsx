@@ -30,7 +30,7 @@ vi.mock("../transcript/Transcript.tsx", async () => {
   return {
     Transcript: (props: TranscriptProps) => {
       transcript.props = props;
-      return createElement("section", { "aria-label": "Transcript" });
+      return createElement("div", { role: "log", "aria-label": "Transcript" });
     },
   };
 });
@@ -75,7 +75,9 @@ describe.each(THEMES)("App (%s)", (theme) => {
     expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Sessions" })).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Resize the sidebar" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Transcript" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("main")).getByRole("log", { name: "Transcript" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Message to dawg" })).toBeInTheDocument();
     expect(screen.queryByRole("complementary", { name: "Side panes" })).not.toBeInTheDocument();
   });

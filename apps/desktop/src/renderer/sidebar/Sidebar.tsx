@@ -1,9 +1,10 @@
 import type { SessionId } from "@dawg/protocol";
-import { type KeyboardEvent, useId } from "react";
+import { type KeyboardEvent, useId, useRef, useState } from "react";
 import { ariaKeyShortcut, formatShortcut } from "../app/commands/keys.ts";
 import { SHORTCUTS } from "../app/commands/shortcuts.ts";
 import { usePlatformOs } from "../app/platform.tsx";
 import type { ModelFooterView, SidebarGroup } from "../state/types.ts";
+import { useFocusFallback } from "../ui/focus.ts";
 import { Icon, IconButton, Kbd } from "../ui/index.ts";
 import { SessionRow } from "./SessionRow.tsx";
 import styles from "./Sidebar.module.css";
@@ -30,9 +31,44 @@ export interface SidebarProps {
   onOpenModelSettings(): void;
 }
 
+/**
+ * ↑ and ↓ move between session rows (across projects), Home and End go to the first and last.
+ * Returns true when it moved focus.
+ */
+function moveBetweenRows(event: KeyboardEvent<HTMLButtonElement>): boolean {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  const list = event.currentTarget.closest("nav");
+  if (!list) return false;
+  const rows = [...list.querySelectorAll<HTMLButtonElement>("button[data-session-row]")];
+  const index = rows.indexOf(event.currentTarget);
+  let next: number;
+  if (event.key === "ArrowDown") next = Math.min(rows.length - 1, index + 1);
+  else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = rows.length - 1;
+  else return false;
+  rows[next]?.focus();
+  return true;
+}
+
 /** Sessions grouped by project, with New session, search and the running model. */
 export function Sidebar(props: SidebarProps) {
   const os = usePlatformOs();
+  // Roving focus: one row is in the tab order (the last one focused, else the selected one, else
+  // the first), so Tab passes the list in one step and the arrows move inside it.
+  const [focusedId, setFocusedId] = useState<SessionId | null>(null);
+  const rows = props.groups.flatMap((group) => group.rows);
+  const tabbableId =
+    rows.find((row) => row.sessionId === focusedId)?.sessionId ??
+    rows.find((row) => row.selected)?.sessionId ??
+    rows[0]?.sessionId ??
+    null;
+  const onRowKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (moveBetweenRows(event)) event.preventDefault();
+  };
+  // Hidden with focus inside (⌘B): focus goes to the message field.
+  const ref = useRef<HTMLElement>(null);
+  useFocusFallback(ref);
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape" && props.search !== "") {
       // Esc clears the search first; it must not also interrupt the selected session.
@@ -43,7 +79,7 @@ export function Sidebar(props: SidebarProps) {
   };
 
   return (
-    <nav className={styles.sidebar} style={{ width: props.width }} aria-label="Sessions">
+    <nav ref={ref} className={styles.sidebar} style={{ width: props.width }} aria-label="Sessions">
       <div className={styles.top}>
         <button
           type="button"
@@ -72,7 +108,10 @@ export function Sidebar(props: SidebarProps) {
             onChange={(event) => props.onSearch(event.target.value)}
             onKeyDown={onSearchKeyDown}
           />
-          <Kbd>{formatShortcut(SHORTCUTS.searchSessions, os)}</Kbd>
+          {/* The field's aria-keyshortcuts says it for VoiceOver. */}
+          <span aria-hidden="true">
+            <Kbd>{formatShortcut(SHORTCUTS.searchSessions, os)}</Kbd>
+          </span>
         </div>
       </div>
       <div className={styles.list}>
@@ -84,7 +123,14 @@ export function Sidebar(props: SidebarProps) {
           </p>
         )}
         {props.groups.map((group) => (
-          <ProjectGroup key={group.projectDir} group={group} {...props} />
+          <ProjectGroup
+            key={group.projectDir}
+            group={group}
+            {...props}
+            tabbableId={tabbableId}
+            onRowKeyDown={onRowKeyDown}
+            onRowFocus={setFocusedId}
+          />
         ))}
       </div>
       <SidebarFooter footer={props.footer} onOpenModelSettings={props.onOpenModelSettings} />
@@ -92,7 +138,14 @@ export function Sidebar(props: SidebarProps) {
   );
 }
 
-function ProjectGroup(props: SidebarProps & { group: SidebarGroup }) {
+function ProjectGroup(
+  props: SidebarProps & {
+    group: SidebarGroup;
+    tabbableId: SessionId | null;
+    onRowKeyDown(event: KeyboardEvent<HTMLButtonElement>): void;
+    onRowFocus(id: SessionId): void;
+  },
+) {
   const { group } = props;
   const headingId = useId();
   return (
@@ -122,6 +175,9 @@ function ProjectGroup(props: SidebarProps & { group: SidebarGroup }) {
               onMarkUnread={() => props.onMarkUnread(row.sessionId)}
               onArchive={() => props.onArchive(row.sessionId)}
               onDelete={() => props.onDelete(row.sessionId)}
+              tabbable={row.sessionId === props.tabbableId}
+              onRowKeyDown={props.onRowKeyDown}
+              onRowFocus={() => props.onRowFocus(row.sessionId)}
             />
           </li>
         ))}

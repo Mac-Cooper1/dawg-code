@@ -319,7 +319,7 @@ function TerminalScreen(props: {
       )}
       <div className={styles.footer}>
         <span className={styles.hint}>
-          Your own shell: dawg sees only what you send it. ⌘C copies, ⌘V pastes.
+          Your own shell: dawg sees only what you send it. ⌘C copies, ⌘V pastes, F6 leaves it.
         </span>
         <Button
           size="sm"

@@ -421,7 +421,9 @@ export function selectComposer(state: AppStore, sessionId: SessionId): ComposerV
   const pending = state.pending[sessionId] ?? EMPTY_PENDING;
   const queue = state.ui.queues[sessionId] ?? EMPTY_QUEUE;
   const draft = state.ui.drafts[sessionId] ?? "";
-  return composerMemo.get(sessionId, [session, pending, state.models, queue, draft], (previous) => {
+  const imagesNotKept = state.ui.draftImagesNotKept[sessionId] ?? 0;
+  const inputs = [session, pending, state.models, queue, draft, imagesNotKept];
+  return composerMemo.get(sessionId, inputs, (previous) => {
     const answering = pending[0] ?? null;
     const { summary } = session;
     const modelLabel =
@@ -447,6 +449,7 @@ export function selectComposer(state: AppStore, sessionId: SessionId): ComposerV
       queue,
       commands: session.commands,
       draft,
+      draftImagesNotKept: imagesNotKept,
       canAttachImages: session.modelInfo?.vision ?? false,
     };
     return stable(previous, next);

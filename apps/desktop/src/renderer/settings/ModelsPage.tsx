@@ -13,7 +13,13 @@ import { CancelDownloadDialog } from "../models/CancelDownloadDialog.tsx";
 import modelStyles from "../models/Models.module.css";
 import { ProgressBar } from "../models/ProgressBar.tsx";
 import { ServerForm } from "../models/ServerForm.tsx";
-import { catalogFacts, downloadLine, originTag, serverFacts } from "../models/text.ts";
+import {
+  catalogFacts,
+  downloadAnnouncement,
+  downloadLine,
+  originTag,
+  serverFacts,
+} from "../models/text.ts";
 import {
   findCatalogEntry,
   foundInName,
@@ -263,6 +269,10 @@ function DownloadRow(props: {
         ) : (
           <p className={modelStyles.meta}>{downloadLine(download)}</p>
         )}
+        {/* Read out as the phase changes and every ten percent. */}
+        <p className="vh" aria-live="polite">
+          {download.phase === "failed" ? "" : `${name}: ${downloadAnnouncement(download)}`}
+        </p>
       </div>
       <div className={modelStyles.buttons}>
         {isRunningDownload(download) && (

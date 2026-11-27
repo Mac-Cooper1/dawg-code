@@ -1,10 +1,11 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import type { ResolvedTheme } from "../../shared/bridge.ts";
 import { ThemeSwitch } from "../app/ThemeSwitch.tsx";
 import titleBar from "../app/TitleBar.module.css";
 import { TitleBarFrame } from "../app/TitleBarFrame.tsx";
 import logoUrl from "../assets/logo.png";
 import type { OnboardingState } from "../state/types.ts";
+import { focusIsLost } from "../ui/focus.ts";
 import { Icon } from "../ui/index.ts";
 import styles from "./FirstRun.module.css";
 
@@ -57,6 +58,20 @@ export interface FirstRunProps {
  * Shown in place of the sessions view until the chosen model runs.
  */
 export function FirstRun(props: FirstRunProps) {
+  const main = useRef<HTMLElement>(null);
+  const shownStep = useRef(props.step);
+  // A new step replaces the button that moved to it, so focus would fall to the page: it goes to
+  // the step's heading instead, which VoiceOver reads, and Tab carries on from there.
+  useEffect(() => {
+    if (shownStep.current === props.step) return;
+    shownStep.current = props.step;
+    if (!focusIsLost()) return;
+    const heading = main.current?.querySelector<HTMLElement>("h1");
+    if (!heading) return;
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+  }, [props.step]);
+
   return (
     <div className={styles.window}>
       <TitleBarFrame>
@@ -68,7 +83,7 @@ export function FirstRun(props: FirstRunProps) {
         </span>
       </TitleBarFrame>
       {props.notices}
-      <main className={styles.scroll}>
+      <main ref={main} className={styles.scroll}>
         <div className={styles.column}>
           <div className={styles.brand}>
             <img

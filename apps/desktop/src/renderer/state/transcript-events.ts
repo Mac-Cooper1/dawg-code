@@ -22,6 +22,7 @@ import {
   writeItems,
 } from "./draft.ts";
 import type { UsageTotals } from "./internals.ts";
+import { findItemIndex, findPermissionIndex, itemsMoved } from "./item-index.ts";
 import type {
   AssistantTextItem,
   CompactionItem,
@@ -83,8 +84,9 @@ export function lastIndexWhere(
   return -1;
 }
 
+/** Like `lastIndexWhere` on the id, through an index (item-index.ts): replays stay linear. */
 export function indexOfId(items: readonly TranscriptItem[], id: string): number {
-  return lastIndexWhere(items, (item) => item.id === id);
+  return findItemIndex(items, id);
 }
 
 function toolIndex(items: readonly TranscriptItem[], toolCallId: string): number {
@@ -92,10 +94,7 @@ function toolIndex(items: readonly TranscriptItem[], toolCallId: string): number
 }
 
 function permissionIndexForCall(items: readonly TranscriptItem[], toolCallId: string): number {
-  return lastIndexWhere(
-    items,
-    (item) => item.kind === "permission" && item.request.toolCallId === toolCallId,
-  );
+  return findPermissionIndex(items, toolCallId);
 }
 
 function hasVisibleText(text: string): boolean {
@@ -403,10 +402,14 @@ export function messageFinished(
       };
       const assistantIndex = indexOfId(items, assistantId);
       if (assistantIndex === -1) items.push(item);
-      else items.splice(assistantIndex, 0, item);
+      else {
+        items.splice(assistantIndex, 0, item);
+        itemsMoved(items);
+      }
     }
   } else if (reasoningIndex !== -1) {
     items.splice(reasoningIndex, 1);
+    itemsMoved(items);
   }
 
   const assistantIndex = indexOfId(items, assistantId);
@@ -428,6 +431,7 @@ export function messageFinished(
     }
   } else if (assistantIndex !== -1) {
     items.splice(assistantIndex, 1);
+    itemsMoved(items);
   }
 }
 
@@ -441,6 +445,7 @@ function insertToolItem(items: TranscriptItem[], item: ToolCallItem): void {
   }
   const permission = items[permissionIndex] as PermissionItem;
   items.splice(permissionIndex + 1, 0, { ...item, permissionRequestId: permission.requestId });
+  itemsMoved(items);
 }
 
 export function toolStarted(
@@ -605,6 +610,7 @@ export function permissionRequested(
     const tool = items[index];
     if (tool?.kind === "tool") {
       items.splice(index, 0, item);
+      itemsMoved(items);
       items[index + 1] = { ...tool, permissionRequestId: request.requestId };
     } else {
       items.push(item);

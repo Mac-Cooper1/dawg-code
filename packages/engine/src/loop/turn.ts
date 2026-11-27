@@ -23,7 +23,7 @@ import {
 } from "../contracts/model.ts";
 import type { PromptPrefix, SystemNote } from "../contracts/prompt.ts";
 import type { MessageExtras } from "../session/writer.ts";
-import { type PreparedReply, prepareToolCalls } from "../toolcall/index.ts";
+import { type PreparedCall, type PreparedReply, prepareToolCalls } from "../toolcall/index.ts";
 import { errorInfo, errorInfoFrom } from "./errors.ts";
 import { type ExecutedCall, type ExecutorHost, executeToolCalls } from "./executor.ts";
 import { RepeatDetector } from "./repeat.ts";
@@ -78,15 +78,30 @@ type Attempt =
   | { kind: "interrupted"; partial: Partial_ }
   | { kind: "error"; error: unknown; partial: Partial_ };
 
+/**
+ * A turn carried on after its session restarted while it waited on the person: the remaining
+ * calls of the reply that was being run (see runtime/waiting-turn.ts).
+ */
+export interface ResumedBatch {
+  /** The assistant message that made the calls. */
+  messageId: string;
+  /** Its calls without results, in call order. */
+  calls: readonly PreparedCall[];
+  /** Calls whose `tool.started` went out before the restart. */
+  alreadyStarted: ReadonlySet<string>;
+  /** The text of that message, the turn's final text unless the model writes more. */
+  lastText: string | null;
+}
+
 export async function runTurn(
   host: TurnHost,
-  turn: { turnId: string; signal: AbortSignal },
+  turn: { turnId: string; signal: AbortSignal; resume?: ResumedBatch },
 ): Promise<LoopResult> {
   const { turnId, signal } = turn;
   const limits = host.loopLimits;
   const repeats = new RepeatDetector();
   let requests = 0;
-  let lastText: string | null = null;
+  let lastText: string | null = turn.resume?.lastText ?? null;
   let cutOffInARow = 0;
   /** Notes the loop itself raised, appended at the next safe point. */
   const pending: SystemNote[] = [];
@@ -99,6 +114,51 @@ export async function runTurn(
     await host.appendNote({ type: "interrupted" });
     return { stopReason: "interrupted", finalText: lastText, error: null };
   };
+
+  /** After a batch's results are all in: repeats, then the safe point. A result ends the turn. */
+  const afterBatch = async (executed: readonly ExecutedCall[]): Promise<LoopResult | null> => {
+    let repeatedTimes = 0;
+    let repeatedTool = "";
+    for (const e of executed) {
+      const times = repeats.observe(e.call, e.result);
+      if (times >= repeatedTimes) {
+        repeatedTimes = times;
+        repeatedTool = e.call.name;
+      }
+    }
+    await host.afterToolBatch(executed);
+    if (repeatedTimes >= limits.repeatStopAt) {
+      await appendPending();
+      return {
+        stopReason: "error",
+        finalText: lastText,
+        error: errorInfo(
+          "repetition",
+          `The model made the same ${repeatedTool} call with the same result ${repeatedTimes} times in a row, so the turn was stopped.`,
+          null,
+          true,
+        ),
+      };
+    }
+    if (repeatedTimes >= limits.repeatNoteAt) {
+      pending.push({ type: "repeating", toolName: repeatedTool, times: repeatedTimes });
+    }
+    await appendPending();
+    await host.flushNotes();
+    return null;
+  };
+
+  if (turn.resume !== undefined) {
+    const { messageId, calls, alreadyStarted } = turn.resume;
+    const executed = await executeToolCalls(
+      calls,
+      { turnId, messageId, signal, alreadyStarted },
+      host,
+    );
+    if (signal.aborted) return interrupted();
+    const ended = await afterBatch(executed);
+    if (ended !== null) return ended;
+  }
 
   while (true) {
     if (signal.aborted) return interrupted();
@@ -218,35 +278,8 @@ export async function runTurn(
 
     const executed = await executeToolCalls(prepared.calls, { turnId, messageId, signal }, host);
     if (signal.aborted) return interrupted();
-
-    let repeatedTimes = 0;
-    let repeatedTool = "";
-    for (const e of executed) {
-      const times = repeats.observe(e.call, e.result);
-      if (times >= repeatedTimes) {
-        repeatedTimes = times;
-        repeatedTool = e.call.name;
-      }
-    }
-    await host.afterToolBatch(executed);
-    if (repeatedTimes >= limits.repeatStopAt) {
-      await appendPending();
-      return {
-        stopReason: "error",
-        finalText: lastText,
-        error: errorInfo(
-          "repetition",
-          `The model made the same ${repeatedTool} call with the same result ${repeatedTimes} times in a row, so the turn was stopped.`,
-          null,
-          true,
-        ),
-      };
-    }
-    if (repeatedTimes >= limits.repeatNoteAt) {
-      pending.push({ type: "repeating", toolName: repeatedTool, times: repeatedTimes });
-    }
-    await appendPending();
-    await host.flushNotes();
+    const ended = await afterBatch(executed);
+    if (ended !== null) return ended;
   }
 }
 

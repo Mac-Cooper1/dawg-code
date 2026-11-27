@@ -154,13 +154,13 @@ describe.each(THEMES)("ToolCard (%s)", (theme) => {
     // What the model was told is not shown as output: no "Error: " prefix, no "Exit code" footer.
     expect(output?.textContent?.startsWith("===== FAILURES")).toBe(true);
     expect(output?.textContent).not.toContain("Exit code");
-    const red = Array.from(output?.querySelectorAll("span") ?? []).find((span) =>
-      span.textContent?.includes("AssertionError"),
+    // The innermost spans carry the colours; each line is a span of its own around them.
+    const spans = Array.from(output?.querySelectorAll("span") ?? []).filter(
+      (span) => span.children.length === 0,
     );
+    const red = spans.find((span) => span.textContent?.includes("AssertionError"));
     expect(red?.className).toMatch(/fgRed/);
-    const bold = Array.from(output?.querySelectorAll("span") ?? []).find((span) =>
-      span.textContent?.includes("FAILURES"),
-    );
+    const bold = spans.find((span) => span.textContent?.includes("FAILURES"));
     expect(bold?.className).toMatch(/bold/);
   });
 

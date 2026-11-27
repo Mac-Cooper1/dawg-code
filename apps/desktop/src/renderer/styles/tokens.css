@@ -5,6 +5,13 @@
  *
  * On light backgrounds accent-coloured text and progress bars use --acc-text (dark olive) so they
  * stay readable; --acc is for fills (primary buttons, the selection mark).
+ *
+ * Contrast: every text colour reaches WCAG AA (4.5:1) on the backgrounds it is used on, and the
+ * focus ring and status marks reach 3:1. src/renderer/styles/contrast.test.ts checks the pairs;
+ * add a pair there when a component puts a colour on a new background. The muted text (--ink-3)
+ * is a shade further from the mockup's (#90949b dark, #61656c light) so it stays readable on a
+ * selected row. "Increase contrast" in macOS (prefers-contrast: more) strengthens lines, muted
+ * text, fills and the focus ring at the end of this file.
  */
 
 :root {
@@ -25,6 +32,9 @@
   --radius-xl: 12px;
   --radius-2xl: 14px;
 
+  /* The keyboard focus ring (base.css); thicker with Increase contrast. */
+  --focus-width: 2px;
+
   --titlebar-height: 46px;
   --transcript-max-width: 780px;
 
@@ -40,7 +50,7 @@
   --edge: #3b3e45;
   --ink: #ecedef;
   --ink-2: #b9bcc2;
-  --ink-3: #90949b;
+  --ink-3: #9a9ea5;
   --hover: rgba(255, 255, 255, 0.06);
   --active: rgba(255, 255, 255, 0.1);
   --acc: #c8f03c;
@@ -82,7 +92,7 @@
   --edge: #c9c9c0;
   --ink: #17181a;
   --ink-2: #45484d;
-  --ink-3: #61656c;
+  --ink-3: #5b5f66;
   --hover: rgba(24, 24, 10, 0.055);
   --active: rgba(24, 24, 10, 0.085);
   --acc: #c8f03c;
@@ -109,4 +119,34 @@
   --shadow-1: 0 1px 2px rgba(20, 20, 8, 0.05);
   --shadow-2: 0 2px 4px rgba(20, 20, 8, 0.05), 0 12px 32px rgba(20, 20, 8, 0.1);
   --scrim: rgba(20, 20, 8, 0.22);
+}
+
+/*
+ * macOS "Increase contrast": lines and borders strong enough to see (3:1 and more), muted text
+ * close to secondary, stronger hover and selection fills, and a thicker focus ring. base.css adds
+ * an outline to selected rows and tabs, which otherwise differ by fill alone.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --focus-width: 3px;
+    --line: #5a5e66;
+    --line-2: #80848c;
+    --edge: #80848c;
+    --ink-3: #b0b3b9;
+    --hover: rgba(255, 255, 255, 0.1);
+    --active: rgba(255, 255, 255, 0.16);
+    --sel: rgba(200, 240, 60, 0.16);
+  }
+
+  :root[data-theme="light"] {
+    --line: #9a9a90;
+    --line-2: #7e7e74;
+    --edge: #7e7e74;
+    --ink-3: #4a4d52;
+    --hover: rgba(24, 24, 10, 0.09);
+    --active: rgba(24, 24, 10, 0.14);
+    --sel: #e6f5b4;
+    --acc-text: #3f5800;
+    --focus: #3f5800;
+  }
 }

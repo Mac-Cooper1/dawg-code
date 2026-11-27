@@ -52,6 +52,12 @@ export interface ExecutorHost {
     turnId: string,
     signal: AbortSignal,
   ): Promise<PermissionResponse>;
+  /**
+   * A permission request raised for this call before the session restarted, which the person
+   * answers (or has answered) on the card brought back: their answer stands, whatever the rules
+   * would decide now. Null when there is none (the usual case).
+   */
+  restoredPermission?(toolCallId: string): RestoredPermission | null;
   /** Saves "allow always" rules and applies them to the running session. Never throws. */
   allowAlways(rules: readonly string[]): Promise<void>;
   toolContext(call: { turnId: string; toolCallId: string; signal: AbortSignal }): ToolContext;
@@ -80,11 +86,23 @@ export interface ExecutedCall {
   durationMs: number | null;
 }
 
+export interface RestoredPermission {
+  /** The rules "always allow" saves when the answer names none: the request's suggestions. */
+  suggestions: readonly string[];
+  /** The person's answer. Rejects when `signal` aborts; the host then cancels the request. */
+  wait(signal: AbortSignal): Promise<PermissionResponse>;
+}
+
 export interface BatchContext {
   turnId: string;
   /** The assistant message that made the calls. */
   messageId: string;
   signal: AbortSignal;
+  /**
+   * Calls whose `tool.started` went out before the session restarted (a turn carried on after
+   * it waited on the person): they are not announced twice.
+   */
+  alreadyStarted?: ReadonlySet<string>;
 }
 
 interface Settled {
@@ -160,6 +178,7 @@ export async function executeToolCalls(
   const start = (index: number): void => {
     const prepared = calls[index] as PreparedCall;
     started[index] = true;
+    if (batch.alreadyStarted?.has(prepared.call.id) === true) return;
     host.emit("tool.started", {
       turnId: batch.turnId,
       messageId: batch.messageId,
@@ -273,42 +292,14 @@ async function settle(
     );
   }
 
-  // Permission.
-  const state = host.permissionState();
-  let query: PermissionQuery;
-  try {
-    query = { toolName: tool.name, subject: tool.permission(prepared.input, host.probeContext()) };
-  } catch (error) {
-    return textResult(
-      `Denied: the permission check for this call failed (${errorMessage(error)}), so it was not run.`,
-      "denied",
-      true,
-    );
-  }
-  const decision: PermissionDecision = host.permissions.decide(query, state);
-  if (decision.behavior === "deny") return textResult(decision.message, "denied", true);
-  if (decision.behavior === "ask") {
-    const wording = { cwd: state.cwd, homeDir: state.homeDir };
-    if (!host.canAskPermission()) {
-      return textResult(
-        denialMessage(query, decision.reason, { ...wording, dontAsk: true }),
-        "denied",
-        true,
-      );
-    }
-    const { title, reason } = describePermissionRequest(query, decision, wording);
-    const request: PermissionRequest = {
-      requestId: host.newId("request"),
-      toolCallId: call.id,
-      toolName: tool.name,
-      input: prepared.input,
-      title,
-      reason,
-      suggestions: decision.suggestions,
-    };
-    let answer: PermissionResponse;
+  // Permission. An answer given on a card brought back after a restart stands as it is.
+  let answer: PermissionResponse | null = null;
+  let suggestions: readonly string[] = [];
+  const restored = host.restoredPermission?.(call.id) ?? null;
+  if (restored !== null) {
+    suggestions = restored.suggestions;
     try {
-      answer = await host.askPermission(request, batch.turnId, batch.signal);
+      answer = await restored.wait(batch.signal);
     } catch (error) {
       if (batch.signal.aborted) return textResult(INTERRUPTED_WAITING, "interrupted", true);
       return textResult(
@@ -317,6 +308,56 @@ async function settle(
         true,
       );
     }
+  } else {
+    const state = host.permissionState();
+    let query: PermissionQuery;
+    try {
+      query = {
+        toolName: tool.name,
+        subject: tool.permission(prepared.input, host.probeContext()),
+      };
+    } catch (error) {
+      return textResult(
+        `Denied: the permission check for this call failed (${errorMessage(error)}), so it was not run.`,
+        "denied",
+        true,
+      );
+    }
+    const decision: PermissionDecision = host.permissions.decide(query, state);
+    if (decision.behavior === "deny") return textResult(decision.message, "denied", true);
+    if (decision.behavior === "ask") {
+      const wording = { cwd: state.cwd, homeDir: state.homeDir };
+      if (!host.canAskPermission()) {
+        return textResult(
+          denialMessage(query, decision.reason, { ...wording, dontAsk: true }),
+          "denied",
+          true,
+        );
+      }
+      const { title, reason } = describePermissionRequest(query, decision, wording);
+      const request: PermissionRequest = {
+        requestId: host.newId("request"),
+        toolCallId: call.id,
+        toolName: tool.name,
+        input: prepared.input,
+        title,
+        reason,
+        suggestions: decision.suggestions,
+      };
+      suggestions = decision.suggestions;
+      try {
+        answer = await host.askPermission(request, batch.turnId, batch.signal);
+      } catch (error) {
+        if (batch.signal.aborted) return textResult(INTERRUPTED_WAITING, "interrupted", true);
+        return textResult(
+          `Denied: the permission request failed (${errorMessage(error)}), so this call was not run.`,
+          "denied",
+          true,
+        );
+      }
+    }
+  }
+  if (answer !== null) {
     if (answer.behavior === "deny") {
       const said = answer.message?.trim() ?? "";
       return textResult(
@@ -326,7 +367,7 @@ async function settle(
       );
     }
     if (answer.scope === "always") {
-      const rules = answer.rules ?? decision.suggestions;
+      const rules = answer.rules ?? suggestions;
       if (rules.length > 0) await host.allowAlways(rules);
     }
   }

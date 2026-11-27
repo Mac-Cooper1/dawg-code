@@ -8,6 +8,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { onReducedMotionChange, prefersReducedMotion } from "../../ui/motion.ts";
 import type { TerminalView, TerminalViewOptions } from "./view.ts";
 
 /** Lines kept above the screen. */
@@ -19,12 +20,16 @@ export function createXtermView(options: TerminalViewOptions): TerminalView {
     fontFamily: options.fontFamily,
     fontSize: options.fontSize,
     lineHeight: 1.2,
-    cursorBlink: true,
+    // A steady cursor when macOS asks for reduced motion.
+    cursorBlink: !prefersReducedMotion(),
     scrollback: SCROLLBACK,
     allowProposedApi: false,
     // ⌥ types the characters macOS gives it (|, {, @ on other layouts) rather than Meta.
     macOptionIsMeta: false,
     macOptionClickForcesSelection: true,
+  });
+  const stopFollowingMotion = onReducedMotionChange((reduced) => {
+    terminal.options.cursorBlink = !reduced;
   });
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
@@ -94,6 +99,7 @@ export function createXtermView(options: TerminalViewOptions): TerminalView {
       return () => subscription.dispose();
     },
     dispose() {
+      stopFollowingMotion();
       host.remove();
       terminal.dispose();
     },

@@ -29,6 +29,21 @@
   gap: 12px;
 }
 
+/*
+ * A group of items (Transcript.tsx). Off screen, the browser skips its layout and painting and
+ * uses the size it last had, or an estimate (set inline) until it has been seen once. It lays
+ * its items out exactly as the column would. Paint containment would clip shadows and focus
+ * rings at its edges; the clip margin leaves room for them.
+ */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  content-visibility: auto;
+  overflow-clip-margin: 64px;
+}
+
 .quiet {
   display: flex;
   align-items: center;

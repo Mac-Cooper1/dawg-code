@@ -27,6 +27,7 @@ import {
   type FindFilesResult,
   IdleUnloadSchema,
   IPC,
+  MenuModelSchema,
   ModelIdSchema,
   type ModelOption,
   type ModelStatus,
@@ -304,6 +305,13 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
         const valid = validate(ExternalUrlSchema, url, "link");
         await ipc.invoke(IPC.openExternal, valid);
       },
+    },
+    menu: {
+      // One-way: invalid input throws here and is never sent.
+      update: (model) => {
+        ipc.send(IPC.menuUpdate, validate(MenuModelSchema, model, "menu"));
+      },
+      onAction: (listener) => subscribe<string>(IPC.menuAction, listener),
     },
   };
 }

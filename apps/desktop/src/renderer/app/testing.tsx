@@ -293,6 +293,7 @@ export function sampleComposer(overrides: Partial<ComposerView> = {}): ComposerV
       { name: "clear", description: "Start over with an empty context", argumentHint: null },
     ],
     draft: "",
+    draftImagesNotKept: 0,
     canAttachImages: true,
     ...overrides,
   };

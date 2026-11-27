@@ -58,6 +58,7 @@ export function initialAppState(
       attachments: {},
       mentionPaths: {},
       queues: {},
+      draftImagesNotKept: {},
       openItems: {},
       shownAgain: {},
       seenSeq: { ...windowState.seenSeq },

@@ -21,6 +21,8 @@ import {
   type FileContent,
   type FileDiff,
   type FindFilesInput,
+  type MenuModel,
+  MenuModelSchema,
   type ModelOption,
   type ModelStatus,
   type ModelsState,
@@ -154,6 +156,10 @@ export interface FakeBridge extends DawgBridge {
   openSessionFromNotification(sessionId: string): void;
   /** The settings files behind `permissions`, its writes, and a way to make one fail. */
   readonly fakePermissions: FakePermissions;
+  /** Every menu model the window sent, in order, validated as main does. */
+  readonly menuModels: MenuModel[];
+  /** The person chooses a menu item: `menu.onAction` hears its action id. */
+  chooseMenuItem(actionId: string): void;
   /** Closes every port it handed out. */
   close(): void;
 }
@@ -285,6 +291,11 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
   const notificationsShown: NotifyInput[] = [];
   const badgeCounts: number[] = [];
   const openSessionListeners = new Set<(sessionId: string) => void>();
+
+  // --- Menus -------------------------------------------------------------------------------
+
+  const menuModels: MenuModel[] = [];
+  const menuActionListeners = new Set<(actionId: string) => void>();
 
   function terminalOf(terminalId: string): FakeTerminal {
     const terminal = terminals.get(terminalId);
@@ -484,6 +495,16 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
     },
     shell: {
       openExternal: async () => {},
+    },
+    menu: {
+      update: (model) => {
+        menuModels.push(MenuModelSchema.parse(model));
+      },
+      onAction: (listener) => subscribe(menuActionListeners, listener),
+    },
+    menuModels,
+    chooseMenuItem(actionId) {
+      for (const listener of [...menuActionListeners]) listener(actionId);
     },
     saved,
     settingsUpdates,

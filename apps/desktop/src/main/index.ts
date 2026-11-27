@@ -14,6 +14,7 @@ import {
   MessageChannelMain,
   type MessagePortMain,
   Notification,
+  nativeImage,
   nativeTheme,
   type OpenDialogOptions,
   screen,
@@ -26,13 +27,18 @@ import {
   IPC,
   type PlatformInfo,
   PlatformInfoSchema,
+  PROJECT_URL,
 } from "../shared/bridge.ts";
 import type { MainToHost } from "../shared/engine-host-messages.ts";
 import { appLocation, appUrl, describeRefusedSender, isTrustedSender } from "./app-url.ts";
 import { spawnEngineHost } from "./engine-host-process.ts";
 import { createEngineSupervisor, type EngineSupervisor } from "./engine-supervisor.ts";
-import { createInvokeHandlers, createSendHandlers } from "./ipc-handlers.ts";
-import { menuTemplate } from "./menu.ts";
+import {
+  createInvokeHandlers,
+  createMenuSendHandlers,
+  createSendHandlers,
+} from "./ipc-handlers.ts";
+import { createMenuBar } from "./menu-bar.ts";
 import { createModelService, engineMode, resolveResourcesDir } from "./models/index.ts";
 import { answerHostMessage } from "./models/service.ts";
 import { createNotificationService } from "./notifications.ts";
@@ -148,6 +154,57 @@ const platform: PlatformInfo = PlatformInfoSchema.parse({
   engine: mode,
 });
 
+// The menu bar and the Dock menu, from each window's action registry (see menu-bar.ts).
+const menuBar = createMenuBar({
+  template: {
+    appName: APP_NAME,
+    isDev,
+    platform: process.platform,
+    onRestartEngineHost: () => supervisor?.restart(),
+  },
+  show: (bar, dock) => {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(bar));
+    app.dock?.setMenu(Menu.buildFromTemplate(dock));
+  },
+  focusedWindow: () => {
+    const window = BrowserWindow.getFocusedWindow();
+    if (!window || window.isDestroyed()) return null;
+    return ownWebContents.has(window.webContents.id) ? window.webContents.id : null;
+  },
+  openWindows: () => ownWindows().map((window) => window.webContents.id),
+  bringForward: (id) => {
+    const window = ownWindows().find((candidate) => candidate.webContents.id === id);
+    if (window) bringForward(window);
+  },
+  openMainWindow: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) bringForward(mainWindow);
+    else createMainWindow();
+    // createMainWindow sets it.
+    return (mainWindow as BrowserWindow | null)?.webContents.id ?? -1;
+  },
+  sendAction: (id, actionId) => {
+    const window = ownWindows().find((candidate) => candidate.webContents.id === id);
+    if (window && !window.webContents.isDestroyed()) {
+      window.webContents.send(IPC.menuAction, actionId);
+    }
+  },
+  openSession: (sessionId) => void openSessionInMainWindow(sessionId),
+  openProjectPage: () => {
+    shell.openExternal(PROJECT_URL).catch((error: unknown) => {
+      log(
+        `Could not open ${PROJECT_URL}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  },
+});
+
+/** dawg's open windows (not DevTools and the like). */
+function ownWindows(): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter(
+    (window) => !window.isDestroyed() && ownWebContents.has(window.webContents.id),
+  );
+}
+
 async function start(): Promise<void> {
   installSecurity(location, log);
   applyAppearance(await settings.get());
@@ -187,15 +244,9 @@ async function start(): Promise<void> {
   supervisor.start();
 
   registerIpc();
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate(
-      menuTemplate({
-        appName: APP_NAME,
-        isDev,
-        onRestartEngineHost: () => supervisor?.restart(),
-      }),
-    ),
-  );
+  menuBar.render();
+  // The menus follow the window with focus.
+  app.on("browser-window-focus", () => menuBar.render());
 
   createMainWindow();
   app.on("activate", () => {
@@ -220,7 +271,9 @@ function engineHostEnv(): Record<string, string> {
 function showDockIcon(): void {
   const icon = path.join(resourcesDir, "icon.png");
   try {
-    app.dock?.setIcon(icon);
+    // At 256 px, the Dock's largest regular tile: handing it the 1024 px artwork kept the window
+    // from showing for 0.35 to 0.6 s on an Intel Mac (README, "Performance").
+    app.dock?.setIcon(nativeImage.createFromPath(icon).resize({ width: 256, quality: "best" }));
   } catch (error) {
     log(
       `Could not show the Dock icon from ${icon}: ${error instanceof Error ? error.message : String(error)}`,
@@ -264,7 +317,12 @@ function createMainWindow(): void {
     if (shown || window.isDestroyed()) return;
     shown = true;
     window.show();
-    log(`Window visible ${Date.now() - launchedAt} ms after launch (${why}).`);
+    // From the process's creation, which includes Electron's own start (the spec's budget is
+    // 2 s from launch), and from when this file began to run.
+    const created = process.getCreationTime();
+    const sinceStart =
+      created === null ? "" : `${Math.round(Date.now() - created)} ms after the app started, `;
+    log(`Window visible ${sinceStart}${Date.now() - launchedAt} ms after main loaded (${why}).`);
   };
   window.once("ready-to-show", () => show("ready to show"));
   // A page that never paints (a crash, a broken build) must still give the person a window.
@@ -281,8 +339,12 @@ function createMainWindow(): void {
       }
     });
   }
+  window.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) menuBar.pageLoading(contentsId);
+  });
   window.webContents.once("destroyed", () => {
     ownWebContents.delete(contentsId);
+    menuBar.windowClosed(contentsId);
     supervisor?.removeClient(String(contentsId));
     workspace.releaseOwner(String(contentsId));
     notifications.windowClosed(String(contentsId));
@@ -425,9 +487,13 @@ function registerIpc(): void {
     });
   }
 
-  const sendHandlers = createSendHandlers<WebContents>({ terminals }, (message) =>
-    log(`[ipc] ${message}`),
-  );
+  const sendHandlers = {
+    ...createSendHandlers<WebContents>({ terminals }, (message) => log(`[ipc] ${message}`)),
+    ...createMenuSendHandlers<WebContents>(
+      { update: (sender, model) => menuBar.update(sender.id, model) },
+      (message) => log(`[ipc] ${message}`),
+    ),
+  };
   for (const [channel, handler] of Object.entries(sendHandlers)) {
     ipcMain.on(channel, (event, ...args: unknown[]) => {
       if (trusted(event, channel)) handler(event.sender, args);

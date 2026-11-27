@@ -97,6 +97,17 @@ describe.each(THEMES)("SettingsView (%s)", (theme) => {
     expect(on.onBack).toHaveBeenCalledOnce();
   });
 
+  it("goes back to the sessions on Esc, unless focus is in a text field", async () => {
+    const { on, user } = setup(theme, { page: "shortcuts" });
+    await user.click(screen.getByRole("searchbox", { name: "Filter shortcuts" }));
+    await user.keyboard("{Escape}");
+    expect(on.onBack).not.toHaveBeenCalled();
+    const nav = screen.getByRole("navigation", { name: "Settings pages" });
+    await user.click(within(nav).getByRole("button", { name: "Shortcuts" }));
+    await user.keyboard("{Escape}");
+    expect(on.onBack).toHaveBeenCalledOnce();
+  });
+
   it("lists the pages and marks the current one", async () => {
     const { on, user } = setup(theme);
     const nav = screen.getByRole("navigation", { name: "Settings pages" });

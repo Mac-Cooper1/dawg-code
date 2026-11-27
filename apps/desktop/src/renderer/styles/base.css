@@ -60,8 +60,10 @@ body {
   color: var(--ink-3);
 }
 
+/* Every focusable control shows this ring for the keyboard; components that draw their own focus
+   (a search box around its field, a list's active row) use the same colour and width. */
 :focus-visible {
-  outline: 2px solid var(--focus);
+  outline: var(--focus-width) solid var(--focus);
   outline-offset: 1px;
 }
 
@@ -111,5 +113,69 @@ body {
     animation-iteration-count: 1 !important;
     /* biome-ignore lint/complexity/noImportantStyles: reduced motion overrides every component */
     transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * Increase contrast (tokens.css strengthens the colours). Selected rows, tabs and toggles differ
+ * from the rest by a fill alone; here they also get an outline. ARIA states mark them, so this
+ * reaches every component without knowing its class names.
+ */
+@media (prefers-contrast: more) {
+  :is(
+    [aria-current="true"],
+    [aria-current="page"],
+    [aria-pressed="true"],
+    [role="tab"][aria-selected="true"],
+    [role="option"][aria-selected="true"],
+    [role="treeitem"][aria-selected="true"]
+  ):not(:focus-visible) {
+    outline: 1px solid var(--ink-2);
+    outline-offset: -1px;
+  }
+}
+
+/*
+ * Forced colours (a high-contrast palette chosen in the system): the browser swaps our colours for
+ * the system's and drops shadows and backgrounds, so anything drawn only with those has to be
+ * redrawn with system colours. Focus uses Highlight; the keyboard's place in a list, the selected
+ * row and the status marks keep a visible shape.
+ */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+
+  /* A resize handle draws its focus as a filled strip, which forced colours would hide. */
+  [role="separator"]:focus-visible {
+    outline: 2px solid Highlight;
+  }
+
+  :is(
+    [aria-current="true"],
+    [aria-current="page"],
+    [aria-pressed="true"],
+    [role="tab"][aria-selected="true"],
+    [role="treeitem"][aria-selected="true"]
+  ):not(:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The keyboard's place in a menu or list (a fill and a shadow otherwise). */
+  :is(
+    [role="menuitem"][data-highlighted],
+    [role="menuitemradio"][data-highlighted],
+    [role="menuitemcheckbox"][data-highlighted],
+    [role="option"][data-highlighted],
+    [role="option"][data-active="true"]
+  ) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* Status marks are drawn with fills, which forced colours would remove: keep their colours. */
+  [data-mark] {
+    forced-color-adjust: none;
   }
 }

@@ -15,6 +15,7 @@ import {
   type Client,
   type EngineEvent,
   type EventPayload,
+  type PendingRequest,
   type PermissionResponse,
   type PlanResponse,
   type QuestionAnswer,
@@ -224,6 +225,17 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
       }
     };
 
+    // A resumed session can open with its turn waiting on the person (it stopped while it
+    // waited): ask again, and follow the turn to its end before reading new prompts.
+    const opened = current;
+    if (opened.activeTurnId !== null && opened.pending.length > 0) {
+      for (const pending of opened.pending) {
+        const request = requestEventOf(opened.session.id, pending);
+        requests.push(request);
+        closers.set(requestIdOf(request), new AbortController());
+      }
+      await follow(opened.session.id, opened.activeTurnId);
+    }
     if (options.prompt !== null && options.prompt.trim() !== "") await send(options.prompt);
     while (!quitting) {
       if (tty) rl.prompt();
@@ -345,6 +357,42 @@ class View {
 // ---------------------------------------------------------------------------------------------
 // Answering requests
 // ---------------------------------------------------------------------------------------------
+
+/** A pending request from a snapshot, as the event that raised it. */
+function requestEventOf(sessionId: string, pending: PendingRequest): RequestEvent {
+  const base = { sessionId, seq: 0, time: 0 };
+  switch (pending.kind) {
+    case "permission":
+      return {
+        event: "permission.requested",
+        payload: { ...base, turnId: pending.turnId, request: pending.request },
+      };
+    case "question":
+      return {
+        event: "question.asked",
+        payload: {
+          ...base,
+          turnId: pending.turnId,
+          requestId: pending.requestId,
+          toolCallId: pending.toolCallId,
+          questions: pending.questions,
+        },
+      };
+    case "plan":
+      return {
+        event: "plan.proposed",
+        payload: {
+          ...base,
+          turnId: pending.turnId,
+          requestId: pending.requestId,
+          toolCallId: pending.toolCallId,
+          plan: pending.plan,
+          planPath: pending.planPath,
+          modeBeforePlan: pending.modeBeforePlan,
+        },
+      };
+  }
+}
 
 function requestIdOf(event: RequestEvent): string {
   return event.event === "permission.requested"

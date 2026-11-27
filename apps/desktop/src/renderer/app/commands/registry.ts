@@ -6,7 +6,12 @@
  * composer, ⌘⏎ on a card), so Settings → Shortcuts lists the whole keymap.
  */
 import type { SessionId } from "@dawg/protocol";
-import type { Appearance, Pane, ToolCallDisplay } from "../../../shared/bridge.ts";
+import {
+  type Appearance,
+  type Pane,
+  PROJECT_URL,
+  type ToolCallDisplay,
+} from "../../../shared/bridge.ts";
 import { shortenPath } from "../../lib/format.ts";
 import { EFFORT_INFO, MODE_INFO, MODE_ORDER } from "../../lib/modes.ts";
 import { SIDEBAR_SEARCH_ID } from "../../sidebar/Sidebar.tsx";
@@ -584,6 +589,21 @@ const TOOL_CALL_DISPLAYS: readonly { value: ToolCallDisplay; label: string }[] =
 ];
 
 const VIEW: Command[] = [
+  // F6 is installed by ui/regions.ts, ahead of the terminal and the editor, which would take it.
+  {
+    id: "regions.next",
+    title: "Move to the next part of the window",
+    group: "View",
+    keywords: ["focus", "sidebar", "panes", "message field", "f6"],
+    shortcut: handledIn("regions", key("F6")),
+  },
+  {
+    id: "regions.previous",
+    title: "Move to the previous part of the window",
+    group: "View",
+    keywords: ["focus", "sidebar", "panes", "message field", "f6"],
+    shortcut: handledIn("regions", key("F6", { shift: true })),
+  },
   {
     id: "sidebar.toggle",
     title: "Show or hide the sidebar",
@@ -718,6 +738,8 @@ const SETTINGS: Command[] = [
     title: "Back to sessions",
     group: "Settings",
     keywords: ["close settings", "leave"],
+    // Settings handles Esc itself (SettingsView), so a text field keeps Esc for its own use.
+    shortcut: handledIn("settings", key("Escape")),
     when: (state) => state.layout.view === "settings",
     run: ({ actions }) => actions.setView("sessions"),
   },
@@ -783,6 +805,13 @@ const HELP: Command[] = [
     keywords: ["keys", "keymap", "help", "cheat sheet"],
     shortcut: inWindow(SHORTCUTS.keyboardShortcuts),
     run: openSettings("shortcuts"),
+  },
+  {
+    id: "help.github",
+    title: "Open dawg-code on GitHub",
+    group: "Help",
+    keywords: ["website", "source", "repository", "issues", "report a problem"],
+    run: ({ actions }) => run(actions.openExternal(PROJECT_URL)),
   },
 ];
 

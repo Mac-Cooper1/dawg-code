@@ -98,7 +98,7 @@ describe("fork", () => {
 });
 
 describe("crash safety", () => {
-  it("a session left mid-turn by a killed process opens again, repaired, and goes on", async () => {
+  it("a session killed while it waits on the person opens waiting, and the answer goes on", async () => {
     h = await startHarness({
       files: { "a.txt": "alpha\n" },
       script: [
@@ -147,30 +147,91 @@ describe("crash safety", () => {
       }),
     );
 
+    // The turn waited on the person, so it still does (waiting-turn.ts): nothing is closed.
+    const session = await h.engine.resumeSession(sessionId);
+    expect(session.status).toBe("waiting");
+    expect(session.eventsAfter(highest).events).toEqual([]);
+    const [pending] = session.pending();
+    expect(pending).toMatchObject({ kind: "permission", request: { toolCallId: "write-1" } });
+    if (pending?.kind !== "permission") throw new Error("no permission request");
+    session.respondPermission(pending.request.requestId, { behavior: "allow", scope: "once" });
+    const outcome = await session.waitForIdle();
+    expect(outcome?.finalText).toBe("after the crash");
+    expect(historyProblems(session.view)).toEqual([]);
+    expect(await readFile(path.join(h.project, "b.txt"), "utf8")).toBe("beta\n");
+    // Numbers continue above any the killed process could have used.
+    const resolved = session.eventsAfter(highest).events[0];
+    expect(resolved?.event).toBe("request.resolved");
+    expect(resolved?.payload.seq).toBeGreaterThan(highest);
+    h.mock.assertDone();
+  });
+
+  it("a session killed while a reply streams opens again, repaired, and goes on", async () => {
+    h = await startHarness({
+      files: { "a.txt": "alpha\n" },
+      mock: { flavor: "openai" },
+      script: [
+        toolCalls([{ id: "read-1", name: "Read", arguments: { file_path: "a.txt" } }]),
+        stalled(text(["never ", "finishes"]), 3),
+        text("after the crash"),
+      ],
+    });
+    const child = spawn(
+      process.execPath,
+      [childScript, h.storeRoot, h.home, h.project, JSON.stringify(h.mock.endpoint)],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    children.push(child);
+    let stderr = "";
+    child.stderr?.on("data", (d) => {
+      stderr += String(d);
+    });
+    const sessionId = await new Promise<string>((resolve, reject) => {
+      let out = "";
+      child.stdout?.on("data", (d) => {
+        out += String(d);
+        const line = out.split("\n")[0];
+        if (out.includes("\n") && line)
+          resolve((JSON.parse(line) as { sessionId: string }).sessionId);
+      });
+      child.once("exit", () => reject(new Error(`child exited early: ${stderr}`)));
+    });
+    const paths = await h.engine.store.paths(h.project, sessionId);
+    const eventsFile = path.join(paths.dir, "events.jsonl");
+    // Mid-reply: the read has its result, the second reply has started and stalls.
+    const deadline = Date.now() + 10_000;
+    const started = () =>
+      readFile(eventsFile, "utf8")
+        .catch(() => "")
+        .then((t) => t.split("message.started").length > 2);
+    while (!(await started())) {
+      if (Date.now() > deadline) throw new Error(`the child never replied twice: ${stderr}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("exit", resolve));
+    const storedBefore = (await readFile(eventsFile, "utf8")).trim().split("\n");
+    const highest = Math.max(
+      ...storedBefore.map((l) => {
+        const v = JSON.parse(l) as { payload?: { seq: number }; reserve?: number };
+        return v.payload?.seq ?? v.reserve ?? 0;
+      }),
+    );
+
     const session = await h.engine.resumeSession(sessionId);
     expect(historyProblems(session.view)).toEqual([]);
-    const results = session.view.filter((m) => m.role === "tool");
-    expect(results.map((m) => (m as { toolCallId: string }).toolCallId)).toEqual([
-      "read-1",
-      "write-1",
-    ]);
-    expect(textOf(results[1])).toMatch(/^Interrupted/);
-    expect(textOf(session.view.at(-1))).toContain('"interrupted"');
-
     // Whatever the crash left open is closed for clients, with numbers never used before.
     const closers = session.eventsAfter(highest).events;
     expect(closers.map((e) => e.event)).toEqual([
-      "request.resolved",
-      "tool.finished",
+      "message.finished",
       "turn.finished",
       "session.status",
     ]);
     expect(closers[0]?.payload.seq).toBeGreaterThan(highest);
-    expect(closers[2]?.payload.stopReason).toBe("interrupted");
+    expect(closers[1]?.payload.stopReason).toBe("interrupted");
 
     const outcome = await session.run(ask("carry on"));
     expect(outcome.finalText).toBe("after the crash");
-    expect(JSON.stringify(h.mock.messages(-1))).toContain("Interrupted: the session stopped");
     h.mock.assertDone();
   });
 });

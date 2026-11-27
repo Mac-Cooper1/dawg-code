@@ -84,6 +84,34 @@ export type Pane = z.infer<typeof PaneSchema>;
 export const SIDEBAR_WIDTH = { min: 200, max: 420, default: 264 } as const;
 export const DOCK_WIDTH = { min: 360, max: 900, default: 560 } as const;
 
+/** A file mentioned in a saved message (`FileMention` in @dawg/protocol). */
+export const SavedMentionSchema = z.object({
+  path: z.string().min(1),
+  startLine: z.number().int().positive().optional(),
+  endLine: z.number().int().positive().optional(),
+});
+
+/** A message typed while dawg worked, not sent yet. It comes back held after a relaunch. */
+export const SavedMessageSchema = z.object({
+  text: z.string(),
+  mentions: z.array(SavedMentionSchema).default([]),
+  /** How many images it had: they are not saved, and the message says so when it comes back. */
+  imagesNotKept: z.number().int().nonnegative().default(0),
+});
+export type SavedMessage = z.infer<typeof SavedMessageSchema>;
+
+/** One session's composer as it was left. */
+export const SavedComposerSchema = z.object({
+  draft: z.string().default(""),
+  /** Paths the `@` menu inserted into the draft, so they still become mentions when it is sent. */
+  mentionPaths: z.array(z.string()).default([]),
+  /** Images attached to the draft, which are not saved. */
+  imagesNotKept: z.number().int().nonnegative().default(0),
+  /** Queued and held messages, oldest first. */
+  queue: z.array(SavedMessageSchema).default([]),
+});
+export type SavedComposer = z.infer<typeof SavedComposerSchema>;
+
 /** What a window remembers between launches. Saved by the renderer, debounced. */
 export const WindowStateSchema = z.object({
   sidebarOpen: z.boolean().default(true),
@@ -102,6 +130,11 @@ export const WindowStateSchema = z.object({
    * after this shows "Done, unread".
    */
   seenSeq: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  /**
+   * What the person typed and has not sent, per session, so quitting loses none of it: the
+   * composer's draft and the messages queued or held above it. Images are not kept.
+   */
+  composers: z.record(z.string(), SavedComposerSchema).default({}),
 });
 export type WindowState = z.infer<typeof WindowStateSchema>;
 
@@ -690,6 +723,92 @@ export const PermissionsWriteInputSchema = z.strictObject({
 export type PermissionsWriteInput = z.input<typeof PermissionsWriteInputSchema>;
 
 // ---------------------------------------------------------------------------------------------
+// The menu bar and the Dock menu
+//
+// The window builds them from its action registry (renderer/app/commands/menu.ts) and sends the
+// model whenever it changes; main shows the focused window's model around macOS's own items
+// (main/menu.ts). Choosing an item sends its action id back to that window, which checks that
+// the action still applies and runs it.
+// ---------------------------------------------------------------------------------------------
+
+/** Help → "dawg-code on GitHub". */
+export const PROJECT_URL = "https://github.com/Mac-Cooper1/dawg-code";
+
+/**
+ * A registry action ("session.fork", "model:qwen3-8b"), or one of the Dock menu's sessions
+ * (`MENU_OPEN_SESSION` and the session's id).
+ */
+export const MenuActionIdSchema = z.string().min(1).max(600);
+
+/** The Dock menu's items for sessions that need the person: main opens the session itself. */
+export const MENU_OPEN_SESSION = "session.open:";
+
+/**
+ * An Electron accelerator, for showing an item's keys: modifiers, then one key ("CmdOrCtrl+K",
+ * "Alt+CmdOrCtrl+1", "Shift+CmdOrCtrl+]", "Escape").
+ */
+export const MenuAcceleratorSchema = z
+  .string()
+  .max(64)
+  .regex(
+    /^(?:(?:Command|Cmd|Control|Ctrl|CommandOrControl|CmdOrCtrl|Alt|Option|Shift|Super|Meta)\+)*(?:[A-Z0-9]|F(?:[1-9]|1\d|2[0-4])|[,./;'[\]\\`=-]|Plus|Space|Tab|Backspace|Delete|Insert|Return|Enter|Up|Down|Left|Right|Home|End|PageUp|PageDown|Escape|Esc)$/,
+    "Not an accelerator",
+  );
+
+const MenuLabelSchema = z.string().min(1).max(200);
+
+export const MenuItemModelSchema = z.strictObject({
+  type: z.literal("item"),
+  id: MenuActionIdSchema,
+  label: MenuLabelSchema,
+  /**
+   * The keys the window runs the action with, shown beside it. The window's own key handling
+   * stays in charge of them: see main/menu.ts.
+   */
+  accelerator: MenuAcceleratorSchema.optional(),
+  /** False: shown greyed out (it does not apply in the window now). */
+  enabled: z.boolean(),
+  /** Left out for an action; true or false for an option, ticked while it is in effect. */
+  checked: z.boolean().optional(),
+});
+export type MenuItemModel = z.infer<typeof MenuItemModelSchema>;
+
+export const MenuSeparatorSchema = z.strictObject({ type: z.literal("separator") });
+
+/** One level deep: Mode, Model, Effort, the panes, Appearance. */
+export const MenuSubmenuModelSchema = z.strictObject({
+  type: z.literal("submenu"),
+  label: MenuLabelSchema,
+  enabled: z.boolean(),
+  items: z.array(z.discriminatedUnion("type", [MenuItemModelSchema, MenuSeparatorSchema])).max(200),
+});
+
+export const MenuEntrySchema = z.discriminatedUnion("type", [
+  MenuItemModelSchema,
+  MenuSeparatorSchema,
+  MenuSubmenuModelSchema,
+]);
+export type MenuEntry = z.infer<typeof MenuEntrySchema>;
+
+const MenuSectionSchema = z.array(MenuEntrySchema).max(100);
+
+/** dawg's items in each menu. Main adds macOS's own (About, Hide, Quit, Undo, Copy, Zoom…). */
+export const MenuModelSchema = z.strictObject({
+  /** The app menu, after About: Settings… */
+  app: MenuSectionSchema,
+  file: MenuSectionSchema,
+  /** After the standard editing items. */
+  edit: MenuSectionSchema,
+  /** Before zoom and full screen. */
+  view: MenuSectionSchema,
+  session: MenuSectionSchema,
+  help: MenuSectionSchema,
+  /** The Dock icon's menu. */
+  dock: MenuSectionSchema,
+});
+export type MenuModel = z.infer<typeof MenuModelSchema>;
+
+// ---------------------------------------------------------------------------------------------
 // Platform
 // ---------------------------------------------------------------------------------------------
 
@@ -911,6 +1030,22 @@ export interface DawgBridge {
     /** Opens an http(s) URL in the system browser. Other schemes reject. */
     openExternal(url: string): Promise<void>;
   };
+
+  /** The menu bar and the Dock menu, built in the window from the action registry. */
+  readonly menu: {
+    /**
+     * This window's menus. Main shows them while the window has focus (the Dock menu: the window
+     * that had it last). Callers send a model only when it changed, and not more often than
+     * every 100 ms or so. Invalid input throws here and is never sent.
+     */
+    update(model: MenuModel): void;
+    /**
+     * The person chose an item meant for this window: run the action if it still applies. An
+     * item reached with its keys arrives only when the window saw those keys first and did not
+     * take them; the window then ignores it (renderer/app/commands/menu-bar.ts).
+     */
+    onAction(listener: (actionId: string) => void): Unsubscribe;
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -973,6 +1108,8 @@ export const IPC = {
   permissionsCheckRule: "dawg:permissions:check-rule",
   chooseFolder: "dawg:dialogs:choose-folder",
   openExternal: "dawg:shell:open-external",
+  menuUpdate: "dawg:menu:update",
+  menuAction: "dawg:menu:action",
   platform: "dawg:platform",
 } as const;
 

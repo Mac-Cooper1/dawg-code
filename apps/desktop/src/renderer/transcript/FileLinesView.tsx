@@ -8,7 +8,13 @@ export function FileLinesView({ file, count }: { file: FileLines; count: number 
   const last = file.start + Math.max(shown.length, 1) - 1;
   const style = { "--number-width": `${Math.max(3, String(last).length) + 2}ch` } as CSSProperties;
   return (
-    <div className={styles.lines} style={style}>
+    // biome-ignore lint/a11y/useSemanticElements: a fieldset is for form controls; these are lines of a file
+    <div
+      className={styles.lines}
+      style={style}
+      role="group"
+      aria-label={shown.length > 1 ? `Lines ${file.start}–${last}` : `Line ${file.start}`}
+    >
       {shown.map((line, index) => {
         const number = file.start + index;
         return (

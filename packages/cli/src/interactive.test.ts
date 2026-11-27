@@ -123,6 +123,34 @@ describe("interactive mode through pipes", () => {
     expect(result.stdout).toContain("* Write a.txt: interrupted");
   });
 
+  it("asks again for a permission the session was waiting for when it stopped", async () => {
+    h = await startHarness({
+      script: withTitles([
+        toolCall("Write", { file_path: "a.txt", content: "a\n" }),
+        text("Wrote a."),
+      ]),
+    });
+    const first = h.spawn(["--endpoint", h.mock.baseUrl]);
+    first.process.stdin?.write("write a\n");
+    await first.waitForStdout("Allow?");
+    const sessionId = /session (\S+),/.exec(first.stderr())?.[1];
+    if (sessionId === undefined) throw new Error(`no session id in: ${first.stderr()}`);
+    // Gone without answering, as when the terminal is closed.
+    first.process.kill("SIGKILL");
+    await first.exited;
+
+    const second = h.spawn(["--endpoint", h.mock.baseUrl, "--resume", sessionId]);
+    const stdin = second.process.stdin;
+    if (stdin === null) throw new Error("no stdin");
+    await second.waitForStdout("Allow?");
+    stdin.write("y\n");
+    await second.waitForStdout("Wrote a.");
+    stdin.end();
+    const result = await second.exited;
+    expect(result.code).toBe(EXIT.ok);
+    expect(await readFile(path.join(h.project, "a.txt"), "utf8")).toBe("a\n");
+  });
+
   it("interrupts a turn on the first SIGINT and quits on the next", async () => {
     h = await startHarness({ script: withTitles([stalled(text("never ends"))]) });
     const child = h.spawn(["--endpoint", h.mock.baseUrl]);
