@@ -565,8 +565,10 @@ describe("downloadEntry", () => {
   }
 
   test("downloads the model and the projector, with progress across both", async () => {
-    const model = hub.add("m.gguf", pattern(9_000_000, 23));
-    const projector = hub.add("mmproj-F16.gguf", pattern(1_000_000, 24));
+    // 2 MB in all: dozens of socket reads, plenty for progress across both files, and quick to
+    // hash on CI's slow Intel runner (10 MB once took over 5 s there).
+    const model = hub.add("m.gguf", pattern(1_800_000, 23));
+    const projector = hub.add("mmproj-F16.gguf", pattern(200_000, 24));
     const events: DownloadProgress[] = [];
     let clock = 0;
     const result = await downloadEntry(
@@ -578,7 +580,7 @@ describe("downloadEntry", () => {
     await expectFinished(model);
     await expectFinished(projector);
 
-    const total = 10_000_000;
+    const total = 2_000_000;
     expect(events.every((e) => e.bytesTotal === total)).toBe(true);
     for (let i = 1; i < events.length; i++) {
       expect(events[i]?.bytesDone).toBeGreaterThanOrEqual(events[i - 1]?.bytesDone ?? 0);
