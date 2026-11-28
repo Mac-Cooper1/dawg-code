@@ -24,6 +24,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { ElicitationCard } from "../cards/ElicitationCard.tsx";
 import { PermissionCard } from "../cards/PermissionCard.tsx";
 import { PlanCard } from "../cards/PlanCard.tsx";
 import { QuestionCard } from "../cards/QuestionCard.tsx";
@@ -89,6 +90,11 @@ export function announcementFor(item: TranscriptItem): string | null {
         : null;
     case "plan":
       return item.state === "pending" ? "dawg has a plan ready for review." : null;
+    case "elicitation":
+      if (item.state !== "pending") return null;
+      return item.mode === "url"
+        ? `${item.server} asks you to open a page.`
+        : `${item.server} asks for input.`;
     case "error":
       return `Error: ${item.error.message}`;
     case "hook":
@@ -205,6 +211,15 @@ function renderItem(item: TranscriptItem, context: RowContext, env: TranscriptEn
     case "plan":
       return (
         <PlanCard
+          item={item}
+          shownAgain={context.shownAgain[item.requestId] ?? false}
+          autoFocus={context.autoFocusPendingCard}
+          env={env}
+        />
+      );
+    case "elicitation":
+      return (
+        <ElicitationCard
           item={item}
           shownAgain={context.shownAgain[item.requestId] ?? false}
           autoFocus={context.autoFocusPendingCard}
@@ -406,6 +421,8 @@ export function Transcript(props: TranscriptProps) {
       respondQuestion: (requestId, response) =>
         latest.current.onRespondQuestion(requestId, response),
       respondPlan: (requestId, response) => latest.current.onRespondPlan(requestId, response),
+      respondElicitation: (requestId, answer) =>
+        latest.current.onRespondElicitation(requestId, answer),
       openLink: (url) => latest.current.onOpenLink(url),
       openInChanges: hasOpenInChanges
         ? (filePath) => latest.current.onOpenInChanges?.(filePath)

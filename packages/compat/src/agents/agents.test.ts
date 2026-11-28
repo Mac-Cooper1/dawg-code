@@ -7,7 +7,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadAgents } from "./loader.ts";
-import { isProjectAgentCode, readAgentFile, toolGrants, toolNameOf } from "./read.ts";
+import {
+  agentServersNeedConsent,
+  isProjectAgentCode,
+  readAgentFile,
+  toolGrants,
+  toolNameOf,
+} from "./read.ts";
+import { newAgentNameProblem, renderAgentFile } from "./write.ts";
 
 let root: string;
 let home: string;
@@ -90,10 +97,10 @@ describe("one agent file", () => {
     const def = await readAgentFile(file, projectSource(file));
     expect(def.status).toBe("partly-supported");
     expect(def.permissionMode).toBe("default");
+    expect(def.memory).toBe("project");
     const notes = def.notes.join("\n");
     for (const part of [
       "hooks in an agent file are not run yet",
-      "memory is ignored",
       "color is not shown",
       "effort is ignored",
       "Unknown field “flavour”",
@@ -118,6 +125,145 @@ describe("one agent file", () => {
       expect(def.status, text).toBe("invalid");
       expect(def.notes.join("\n"), text).toContain(note);
     }
+  });
+});
+
+describe("memory and MCP servers", () => {
+  it("reads a memory scope, and notes one that is not documented", async () => {
+    for (const [value, expected] of [
+      ["user", "user"],
+      ["Local", "local"],
+      ["project", "project"],
+      ["team", null],
+    ] as const) {
+      const file = await put(
+        join(project, ".claude", "agents", `m-${value}.md`),
+        `---\nname: m\ndescription: M\nmemory: ${value}\n---\n`,
+      );
+      const def = await readAgentFile(file, projectSource(file));
+      expect(def.memory, value).toBe(expected);
+      if (expected === null) {
+        expect(def.status).toBe("partly-supported");
+        expect(def.notes.join("\n")).toContain("memory “team” is not user, project or local");
+      }
+    }
+  });
+
+  it("reads mcpServers as references and inline definitions, the documented list form", async () => {
+    const file = await put(
+      join(project, ".claude", "agents", "browser.md"),
+      [
+        "---",
+        "name: browser-tester",
+        "description: Tests features in a real browser",
+        "mcpServers:",
+        "  - playwright:",
+        "      type: stdio",
+        "      command: npx",
+        '      args: ["-y", "@playwright/mcp@latest"]',
+        "  - github",
+        "  - 42",
+        "---",
+        "Use the browser.",
+      ].join("\n"),
+    );
+    const def = await readAgentFile(file, projectSource(file));
+    expect(def.mcpServers).toEqual([
+      {
+        name: "playwright",
+        inline: { type: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest"] },
+      },
+      { name: "github", inline: null },
+    ]);
+    expect(def.status).toBe("partly-supported");
+    expect(def.notes.join("\n")).toContain("neither a server's name nor a definition");
+    // A server of its own, from a project file, runs a program: project code.
+    expect(isProjectAgentCode(def)).toBe(true);
+    expect(def.notes.join("\n")).toContain("its MCP server playwright take effect only once");
+    // The same file in the person's folder is theirs.
+    const mine = await readAgentFile(file, { path: file, origin: "dawg", scope: "user" });
+    expect(isProjectAgentCode(mine)).toBe(false);
+    expect(agentServersNeedConsent(mine)).toBe(false);
+    // Claude Code's own file in the home folder runs code dawg did not write: it waits too.
+    const claude = await readAgentFile(file, { path: file, origin: "claude", scope: "user" });
+    expect(isProjectAgentCode(claude)).toBe(false);
+    expect(agentServersNeedConsent(claude)).toBe(true);
+    expect(claude.notes.join("\n")).toContain(
+      "Its MCP server playwright starts only once you approve it",
+    );
+  });
+
+  it("reads a map of servers, and a reference alone is not project code", async () => {
+    const file = await put(
+      join(project, ".claude", "agents", "map.md"),
+      "---\nname: m\ndescription: M\nmcpServers:\n  docs:\n    type: http\n    url: https://example.com/mcp\n---\n",
+    );
+    const def = await readAgentFile(file, projectSource(file));
+    expect(def.mcpServers).toEqual([
+      { name: "docs", inline: { type: "http", url: "https://example.com/mcp" } },
+    ]);
+    const refs = await put(
+      join(project, ".claude", "agents", "refs.md"),
+      "---\nname: r\ndescription: R\nmcpServers: [github, slack]\n---\n",
+    );
+    const ref = await readAgentFile(refs, projectSource(refs));
+    expect(ref.mcpServers.map((s) => s.name)).toEqual(["github", "slack"]);
+    expect(ref.status).toBe("loaded");
+    expect(isProjectAgentCode(ref)).toBe(false);
+  });
+});
+
+describe("a new agent file", () => {
+  it("checks names: lowercase words with hyphens, not a built-in's or the fork's", () => {
+    expect(newAgentNameProblem("code-reviewer")).toBeNull();
+    expect(newAgentNameProblem("v2-checker")).toBeNull();
+    for (const bad of ["", "Code", "a b", "-a", "a--b", "a-", "a/b", "ü", "x".repeat(65)]) {
+      expect(newAgentNameProblem(bad), bad).not.toBeNull();
+    }
+    expect(newAgentNameProblem("fork")).toContain("copy of the conversation");
+    expect(newAgentNameProblem("general-purpose")).toContain("built-in");
+  });
+
+  it("writes the documented front matter, which reads back as written", async () => {
+    const text = renderAgentFile({
+      name: "code-reviewer",
+      description: "Reviews code: quality,\n security and tests",
+      prompt: "You are a code reviewer.\n\nGive specific feedback.",
+      tools: ["Read", "Grep", "Bash(npm test *)"],
+      disallowedTools: [],
+      model: "sonnet",
+      permissionMode: null,
+      memory: "project",
+      background: false,
+      isolation: null,
+    });
+    expect(text).toBe(
+      [
+        "---",
+        "name: code-reviewer",
+        'description: "Reviews code: quality, security and tests"',
+        "tools: Read, Grep, Bash(npm test *)",
+        "model: sonnet",
+        "memory: project",
+        "---",
+        "",
+        "You are a code reviewer.",
+        "",
+        "Give specific feedback.",
+        "",
+      ].join("\n"),
+    );
+    const file = await put(join(home, ".dawg", "agents", "code-reviewer.md"), text);
+    const def = await readAgentFile(file, { path: file, origin: "dawg", scope: "user" });
+    expect(def).toMatchObject({
+      name: "code-reviewer",
+      description: "Reviews code: quality, security and tests",
+      tools: ["Read", "Grep", "Bash(npm test *)"],
+      model: "sonnet",
+      memory: "project",
+      prompt: "You are a code reviewer.\n\nGive specific feedback.",
+      status: "loaded",
+    });
   });
 });
 

@@ -11,7 +11,7 @@ import type { CompatItemStatus, HookInfo } from "@dawg/protocol";
 import { Switch } from "radix-ui";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { basename, shortenPath } from "../lib/format.ts";
-import { STATUS_LABEL, sourceLabel } from "../lib/hooks.ts";
+import { handlerTypeLabel, hookReach, STATUS_LABEL, sourceLabel } from "../lib/hooks.ts";
 import type { HooksListing } from "../state/types.ts";
 import { Button, Icon, IconButton, Tag, type TagTone } from "../ui/index.ts";
 import styles from "./HooksPage.module.css";
@@ -228,6 +228,7 @@ function HookRow(props: {
   const titleId = useId();
   const detailId = useId();
   const title = hookTitle(hook);
+  const reach = hookReach(hook);
   return (
     <li className={hook.enabled ? styles.row : `${styles.row} ${styles.off}`}>
       <div className={styles.rowMain}>
@@ -236,10 +237,11 @@ function HookRow(props: {
             {title}
           </span>
           <Tag tone={STATUS_TONE[hook.status]}>{STATUS_LABEL[hook.status]}</Tag>
-          {hook.type !== "command" && <Tag>{hook.type}</Tag>}
+          {hook.type !== "command" && <Tag>{handlerTypeLabel(hook.type)}</Tag>}
         </div>
         <div id={detailId} className={styles.rowDetail}>
           <code className={styles.command}>{hook.command}</code>
+          {reach !== null && <p className={styles.reach}>{reach}</p>}
           <p className={styles.source}>
             <code className={styles.path}>{shortenPath(hook.source.path, props.homeDir)}</code>
             <span> · {sourceLabel(hook.source)}</span>

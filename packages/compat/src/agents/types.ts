@@ -33,6 +33,16 @@ export interface AgentDefinition {
   background: boolean;
   /** `isolation: worktree`: runs in a git worktree of its own. */
   isolation: "worktree" | null;
+  /**
+   * `memory`: a lasting folder of its own (`user`, `project` or `local`), loaded and kept the way
+   * a session's memory is; null for none.
+   */
+  memory: AgentMemoryScope | null;
+  /**
+   * `mcpServers`: MCP servers it gets, each a reference to one configured for the session (by
+   * name) or a definition of its own (`inline`), in the order written.
+   */
+  mcpServers: AgentMcpServer[];
   /** The body: the agent's own system prompt. */
   prompt: string;
   /** The file (absolute). */
@@ -44,6 +54,17 @@ export interface AgentDefinition {
   notes: string[];
   /** The file whose definition of the same name is used instead, or null when this one is used. */
   shadowedBy: string | null;
+}
+
+/** Where an agent's own memory lives: the person's for every project, the project's, or the person's for this project. */
+export type AgentMemoryScope = "user" | "project" | "local";
+
+/** One `mcpServers` entry. */
+export interface AgentMcpServer {
+  /** The server's name: the configured server it refers to, or the inline definition's key. */
+  name: string;
+  /** The definition, as written, for a server of its own; null for a reference by name. */
+  inline: Readonly<Record<string, unknown>> | null;
 }
 
 export interface LoadAgentsOptions {

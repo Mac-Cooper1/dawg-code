@@ -24,6 +24,9 @@ import type {
   CompatSource,
   ContentPart,
   ContextBreakdown,
+  ElicitationContent,
+  ElicitationField,
+  ElicitationResponse,
   EngineEvent,
   ErrorInfo,
   EventPayload,
@@ -46,7 +49,9 @@ import type {
   SessionSummary,
   SkillInfo,
   StopReason,
+  SubagentDefinition,
   SubagentInfo,
+  SubagentLabel,
   TaskItem,
   ToolDisplay,
   ToolOutcome,
@@ -222,6 +227,29 @@ export interface PlanItem extends ItemBase {
   modeBeforePlan: PermissionMode | null;
 }
 
+/**
+ * An MCP server's request for input (Phase 4, MCP elicitation): a form, or a page to open. It
+ * sits after the call that caused it, which keeps running while it waits. Everything the server
+ * wrote is untrusted text.
+ */
+export interface ElicitationItem extends ItemBase {
+  kind: "elicitation";
+  requestId: string;
+  /** The call it came during; null when several of the session's calls were in progress. */
+  toolCallId: string | null;
+  server: string;
+  message: string;
+  mode: "form" | "url";
+  /** The form, in the server's order; empty in URL mode. */
+  fields: ElicitationField[];
+  /** The page in URL mode; null in form mode. */
+  url: string | null;
+  /** Set when a subagent's call caused it: the card names the agent. */
+  agent?: SubagentLabel;
+  state: DecisionState;
+  response: ElicitationResponse | null;
+}
+
 /** A thin divider line with a short label: "Interrupted by you · the transcript keeps every finished call". */
 export interface NoteItem extends ItemBase {
   kind: "note";
@@ -307,6 +335,7 @@ export type TranscriptItem =
   | PermissionItem
   | QuestionItem
   | PlanItem
+  | ElicitationItem
   | NoteItem
   | CompactionItem
   | TurnSummaryItem
@@ -353,7 +382,7 @@ export interface SessionView {
   /** True once its history has been replayed into `transcripts`. */
   loaded: boolean;
   status: SessionStatus;
-  waitingOn: "permission" | "question" | "plan" | null;
+  waitingOn: "permission" | "question" | "plan" | "elicitation" | null;
   /** The engine's short sidebar line from `session.status`. Shown as is, never parsed. */
   statusMessage: string | null;
   /**
@@ -442,6 +471,7 @@ export type SettingsPage =
   | "setup"
   | "hooks"
   | "skills"
+  | "subagents"
   | "mcp"
   | "web"
   | "shortcuts";
@@ -509,6 +539,26 @@ export interface SkillsListing {
   projectDir: string | null;
   skills: SkillInfo[];
   commands: SkillInfo[];
+}
+
+/** Settings → Subagents: what `project.subagents` answered. */
+export interface SubagentsListing {
+  projectDir: string | null;
+  agents: SubagentDefinition[];
+  /** Where a new agent file goes: `~/.dawg/agents`, and the project's `.dawg/agents` (or null). */
+  folders: { user: string; project: string | null };
+}
+
+/** The "New subagent" form's choices, as `subagent.create` takes them. */
+export interface NewSubagentInput {
+  projectDir: string | null;
+  scope: "user" | "project";
+  name: string;
+  description: string;
+  prompt: string;
+  /** Null for every tool a subagent can have. */
+  tools: string[] | null;
+  memory: "user" | "project" | "local" | null;
 }
 
 /** Settings → MCP servers: what `mcp.list` answered. */
@@ -711,8 +761,14 @@ export interface BackgroundOutput {
   done: boolean;
 }
 
+/** The person's answer to an MCP server's request for input; `content` with an accepted form. */
+export interface ElicitationAnswer {
+  action: ElicitationResponse["action"];
+  content?: ElicitationContent;
+}
+
 export interface PendingRef {
-  kind: "permission" | "question" | "plan";
+  kind: "permission" | "question" | "plan" | "elicitation";
   requestId: string;
   turnId: string;
 }
@@ -846,7 +902,8 @@ export interface ComposerView {
    * "Reply to dawg. / for commands, @ to mention a file", or while a card is open:
    * "Waiting on you. A message here denies the command and tells dawg why." (permission),
    * "Waiting on you. A message here answers the question." (question),
-   * "Waiting on you. A message here keeps planning, with your feedback." (plan).
+   * "Waiting on you. A message here keeps planning, with your feedback." (plan),
+   * "Waiting on you. Answer the form above; a message here declines it." (elicitation).
    */
   placeholder: string;
   mode: PermissionMode;
@@ -1035,6 +1092,20 @@ export interface AppActions {
    */
   listSkills(projectDir: string | null): Promise<SkillsListing | { error: string }>;
   /**
+   * Settings → Subagents: every subagent a project's new sessions get, or (null) the built-ins
+   * and the person's own (`project.subagents`). Never throws: a failure comes back as `{ error }`.
+   */
+  listSubagents(projectDir: string | null): Promise<SubagentsListing | { error: string }>;
+  /**
+   * Writes a new agent file under `.dawg` (`subagent.create`): the file and the agent, or
+   * `{ error }`, the engine's sentence (a refused name, a file already there).
+   */
+  createSubagent(
+    input: NewSubagentInput,
+  ): Promise<{ path: string; agent: SubagentDefinition } | { error: string }>;
+  /** Opens an agent, skill or command file in the person's own editor; a notice says if it failed. */
+  openConfigFile(path: string): Promise<void>;
+  /**
    * Settings → MCP servers: the servers a project's sessions get, or (null) only the person's
    * own, with their state (`mcp.list`). Never throws: a failure comes back as `{ error }`.
    */
@@ -1048,6 +1119,18 @@ export interface AppActions {
   /** Copies the servers the person saw (`mcp.import`); `{ error }` when it did not. */
   importMcpServers(hash: string): Promise<{ imported: number; path: string } | { error: string }>;
   /**
+   * Starts signing in to a remote server (`mcp.signIn`): the address for the browser, which the
+   * page opens through `openExternal`; `{ error }`, a sentence, when it could not start.
+   */
+  signInMcpServer(
+    projectDir: string | null,
+    name: string,
+  ): Promise<{ url: string } | { error: string }>;
+  /** Forgets a server's sign-in (`mcp.signOut`). Null when it failed (a notice says why). */
+  signOutMcpServer(projectDir: string | null, name: string): Promise<McpServerInfo | null>;
+  /** Stops a sign-in on its way (`mcp.cancelSignIn`). Null when it failed. */
+  cancelMcpSignIn(projectDir: string | null, name: string): Promise<McpServerInfo | null>;
+  /**
    * What a session's MCP servers offer the composer now (`mcp.session`): resources for the `@`
    * menu, prompts for the `/` menu. Empty when the session is not open or the request fails.
    */
@@ -1059,7 +1142,8 @@ export interface AppActions {
    * What Enter in the composer does, in this order:
    * 1. A pending decision: the text answers it (permission → deny with the text as the note;
    *    question → a free-text answer to each question; plan → keep planning with the text as
-   *    feedback).
+   *    feedback; an MCP server's request for input → declined, and the text is queued to go
+   *    once the turn ends, since a server's form has nowhere to take a note).
    * 2. A turn is running: the text is queued.
    * 3. Text starting with "/name" where `name` is one of the session's commands: `session.command`.
    * 4. Otherwise `session.prompt`, with the session's attached images and `mentions` (the files
@@ -1138,6 +1222,12 @@ export interface AppActions {
     response: QuestionResponse,
   ): Promise<void>;
   respondPlan(sessionId: SessionId, requestId: string, response: PlanResponse): Promise<void>;
+  /** Answers an MCP server's request for input (`elicitation.respond`). */
+  respondElicitation(
+    sessionId: SessionId,
+    requestId: string,
+    answer: ElicitationAnswer,
+  ): Promise<void>;
 
   // --- Background commands (the Tasks pane) ----------------------------------------------------
   /**

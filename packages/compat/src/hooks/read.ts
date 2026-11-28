@@ -6,6 +6,8 @@
  *
  * Hook entries from every file are combined, not replaced ("Hook entries merge across levels");
  * `disableAllHooks` is read after settings precedence, so the first file that sets it decides.
+ * The HTTP hook allowlists (`allowedHttpHookUrls`, `httpHookAllowedEnvVars`) are read too; their
+ * arrays merge across files, as the settings reference says.
  */
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -34,6 +36,25 @@ export interface HookHandler {
   statusMessage: string | null;
   /** What it runs, for people: the command line, the URL, the prompt or the MCP tool. */
   target: string;
+  /** For `http` handlers: where the event is posted, as written. Null for other types. */
+  url: string | null;
+  /** For `http` handlers: extra headers as written; values may name environment variables. */
+  headers: Record<string, string>;
+  /** For `http` handlers: the environment variables its headers may read. */
+  allowedEnvVars: string[];
+  /** For `prompt` and `agent` handlers: the prompt as written. Null for other types. */
+  prompt: string | null;
+  /** For `prompt` and `agent` handlers: `model` as written (mapped, principle 4), or null. */
+  model: string | null;
+  /** For `prompt` handlers: an `ok: false` reason goes back to the model instead of ending the turn. */
+  continueOnBlock: boolean;
+  /** For `mcp_tool` handlers: the server and the tool, as written. Null for other types. */
+  server: string | null;
+  tool: string | null;
+  /** For `mcp_tool` handlers: the tool's arguments as written (`${path}` substitutions), or null. */
+  input: Record<string, unknown> | null;
+  /** `once` as written: honoured only in skill front matter, so ignored in settings files. */
+  once: boolean;
   /** Keys as written that dawg does not know, so the report can name them. */
   unknownKeys: string[];
   /** The handler exactly as written, so consent can cover every byte of it. */
@@ -58,7 +79,21 @@ export interface HookFile {
   hooks: HookDefinition[];
   /** `disableAllHooks` as written, or null when the file does not set it. */
   disableAllHooks: boolean | null;
+  /** `allowedHttpHookUrls` as written, or null when the file does not set it. */
+  allowedHttpHookUrls: string[] | null;
+  /** `httpHookAllowedEnvVars` as written, or null when the file does not set it. */
+  httpHookAllowedEnvVars: string[] | null;
   problems: SettingsProblem[];
+}
+
+/**
+ * The settings that restrict HTTP hooks (settings reference, "allowedHttpHookUrls" and
+ * "httpHookAllowedEnvVars"), merged across every file. Null where no file sets the key: then any
+ * URL is allowed, and each hook's own `allowedEnvVars` applies.
+ */
+export interface HttpHookPolicy {
+  allowedUrls: string[] | null;
+  allowedEnvVars: string[] | null;
 }
 
 export interface LoadedHooks {
@@ -68,6 +103,8 @@ export interface LoadedHooks {
   hooks: HookDefinition[];
   /** The file whose `disableAllHooks: true` is in force, or null when hooks may run. */
   disabledBy: string | null;
+  /** The HTTP hook allowlists in force. */
+  http: HttpHookPolicy;
   problems: SettingsProblem[];
 }
 
@@ -85,7 +122,7 @@ const KNOWN_KEYS: Record<string, ReadonlySet<string>> = {
   command: new Set(["command", "args", "async", "asyncRewake", "shell", "onFailure"]),
   http: new Set(["url", "headers", "allowedEnvVars", "onFailure"]),
   mcp_tool: new Set(["server", "tool", "input", "onFailure"]),
-  prompt: new Set(["prompt", "model"]),
+  prompt: new Set(["prompt", "model", "continueOnBlock"]),
   agent: new Set(["prompt", "model"]),
 };
 
@@ -106,6 +143,12 @@ function quoteArg(arg: string): string {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/** A list of non-empty strings, or null when the value is not one. */
+function stringList(value: unknown): string[] | null {
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) return null;
+  return (value as string[]).map((v) => v.trim()).filter((v) => v !== "");
 }
 
 /** Reads one handler object. Null (with a problem) when it cannot be used at all. */
@@ -147,6 +190,91 @@ function readHandler(
           path,
           key: `${key}.args`,
           message: "Expected a list of strings; the hook is not run.",
+        });
+        return null;
+      }
+    }
+  }
+
+  let url: string | null = null;
+  let headers: Record<string, string> = {};
+  let allowedEnvVars: string[] = [];
+  if (type === "http") {
+    url = stringOrNull(value.url);
+    let parsed: URL | null = null;
+    try {
+      parsed = url === null ? null : new URL(url);
+    } catch {
+      parsed = null;
+    }
+    if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+      problems.push({
+        path,
+        key: `${key}.url`,
+        message:
+          url === null
+            ? "An http hook needs a url."
+            : `Expected an http or https address, found ${JSON.stringify(url)}; the hook is not run.`,
+      });
+      return null;
+    }
+    if (value.headers !== undefined) {
+      if (
+        isPlainObject(value.headers) &&
+        Object.values(value.headers).every((v) => typeof v === "string")
+      ) {
+        headers = value.headers as Record<string, string>;
+      } else {
+        problems.push({
+          path,
+          key: `${key}.headers`,
+          message: "Expected an object of text values; no headers are sent.",
+        });
+      }
+    }
+    if (value.allowedEnvVars !== undefined) {
+      const list = stringList(value.allowedEnvVars);
+      if (list !== null) allowedEnvVars = list;
+      else {
+        problems.push({
+          path,
+          key: `${key}.allowedEnvVars`,
+          message: "Expected a list of variable names; headers read no variables.",
+        });
+      }
+    }
+  }
+
+  let prompt: string | null = null;
+  if (type === "prompt" || type === "agent") {
+    prompt = stringOrNull(value.prompt);
+    if (prompt === null) {
+      problems.push({ path, key: `${key}.prompt`, message: `A ${type} hook needs a prompt.` });
+      return null;
+    }
+  }
+
+  let server: string | null = null;
+  let tool: string | null = null;
+  let input: Record<string, unknown> | null = null;
+  if (type === "mcp_tool") {
+    server = stringOrNull(value.server);
+    tool = stringOrNull(value.tool);
+    if (server === null || tool === null) {
+      problems.push({
+        path,
+        key: `${key}.${server === null ? "server" : "tool"}`,
+        message: "An mcp_tool hook needs a server and a tool.",
+      });
+      return null;
+    }
+    if (value.input !== undefined) {
+      if (isPlainObject(value.input)) input = value.input;
+      else {
+        problems.push({
+          path,
+          key: `${key}.input`,
+          message: `Expected an object of arguments, found ${describe(value.input)}; the hook is not run.`,
         });
         return null;
       }
@@ -209,6 +337,16 @@ function readHandler(
     onFailure,
     statusMessage: stringOrNull(value.statusMessage),
     target,
+    url,
+    headers,
+    allowedEnvVars,
+    prompt,
+    model: type === "prompt" || type === "agent" ? stringOrNull(value.model) : null,
+    continueOnBlock: type === "prompt" && value.continueOnBlock === true,
+    server,
+    tool,
+    input,
+    once: value.once === true,
     unknownKeys,
     raw: value,
   };
@@ -286,6 +424,8 @@ export async function readHookFile(source: CompatSource): Promise<HookFile> {
     exists,
     hooks: [],
     disableAllHooks: null,
+    allowedHttpHookUrls: null,
+    httpHookAllowedEnvVars: null,
     problems,
   });
   let text: string;
@@ -327,6 +467,18 @@ export async function readHookFile(source: CompatSource): Promise<HookFile> {
       });
     }
   }
+  for (const key of ["allowedHttpHookUrls", "httpHookAllowedEnvVars"] as const) {
+    if (data[key] === undefined) continue;
+    const list = stringList(data[key]);
+    if (list !== null) file[key] = list;
+    else {
+      file.problems.push({
+        path: source.path,
+        key,
+        message: `Expected a list of strings, found ${describe(data[key])}; ignored.`,
+      });
+    }
+  }
   return file;
 }
 
@@ -352,6 +504,19 @@ export async function loadHooks(options: LoadHooksOptions): Promise<LoadedHooks>
     files,
     hooks: files.flatMap((file) => file.hooks),
     disabledBy: setting?.disableAllHooks === true ? setting.source.path : null,
+    http: httpPolicy(files),
     problems: files.flatMap((file) => file.problems),
+  };
+}
+
+/** The HTTP hook allowlists of these files, merged ("Arrays merge across settings files"). */
+export function httpPolicy(files: readonly HookFile[]): HttpHookPolicy {
+  const merge = (key: "allowedHttpHookUrls" | "httpHookAllowedEnvVars"): string[] | null => {
+    const lists = files.flatMap((file) => (file[key] === null ? [] : [file[key]]));
+    return lists.length === 0 ? null : [...new Set(lists.flat())];
+  };
+  return {
+    allowedUrls: merge("allowedHttpHookUrls"),
+    allowedEnvVars: merge("httpHookAllowedEnvVars"),
   };
 }

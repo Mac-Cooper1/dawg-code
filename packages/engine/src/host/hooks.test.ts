@@ -115,7 +115,8 @@ describe("hooks.list and hooks.setEnabled", () => {
       files: {
         ".claude/settings.json": hooks({
           Stop: [{ hooks: [{ type: "command", command: "./notify.sh", timeout: 5 }] }],
-          PreCompact: [{ hooks: [{ type: "command", command: "./later.sh" }] }],
+          FileChanged: [{ hooks: [{ type: "command", command: "./later.sh" }] }],
+          PermissionRequest: [{ hooks: [{ type: "http", url: "http://localhost:8080/ask" }] }],
         }),
       },
     });
@@ -142,11 +143,28 @@ describe("hooks.list and hooks.setEnabled", () => {
       ]),
     ).toEqual([
       ["Stop", null, "./notify.sh", 5, "project", "needs-approval", true],
-      ["PreCompact", null, "./later.sh", null, "project", "not-supported", true],
+      ["FileChanged", null, "./later.sh", null, "project", "not-supported", true],
+      [
+        "PermissionRequest",
+        null,
+        "http://localhost:8080/ask",
+        null,
+        "project",
+        "needs-approval",
+        true,
+      ],
       ["SessionStart", "startup", "git status", null, "user", "loaded", true],
     ]);
+    // What a hook that is not a command reaches.
+    expect(list.hooks[2]?.reaches).toEqual({
+      host: "localhost:8080",
+      model: null,
+      server: null,
+      tool: null,
+    });
+    expect(list.hooks[0]?.reaches).toBeNull();
 
-    const mine = list.hooks[2];
+    const mine = list.hooks[3];
     expect(
       await c.client.request("hooks.setEnabled", {
         projectDir: s.project,
@@ -155,7 +173,7 @@ describe("hooks.list and hooks.setEnabled", () => {
       }),
     ).toEqual({ enabled: false });
     const again = await c.client.request("hooks.list", { projectDir: s.project });
-    expect(again.hooks[2]?.enabled).toBe(false);
+    expect(again.hooks[3]?.enabled).toBe(false);
     // The person's own hook is off in every project.
     expect((await c.client.request("hooks.list", { projectDir: null })).hooks[0]?.enabled).toBe(
       false,

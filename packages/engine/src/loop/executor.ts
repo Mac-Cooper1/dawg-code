@@ -97,6 +97,34 @@ export interface ExecutorHost {
     },
     signal: AbortSignal,
   ): Promise<void>;
+  /**
+   * Added (Phase 4, hooks): PermissionRequest hooks, when the call would ask the person (or be
+   * refused because nobody can answer): they may answer instead. Never when a rule decided.
+   */
+  permissionRequest?(
+    call: HookedCall & { suggestions: readonly string[] },
+    signal: AbortSignal,
+  ): Promise<PermissionHookVerdict>;
+  /**
+   * Added (Phase 4, hooks): PostToolUseFailure hooks, after a call that ran and failed (not one
+   * the person stopped). What they say is the host's to keep.
+   */
+  postToolUseFailure?(
+    call: HookedCall & { error: string; isInterrupt: boolean; durationMs: number | null },
+    signal: AbortSignal,
+  ): Promise<void>;
+}
+
+/**
+ * What PermissionRequest hooks answered in the person's place: allow (with a new input, judged
+ * again by deny and ask rules) or deny (with a message for the model), or nothing.
+ */
+export interface PermissionHookVerdict {
+  behavior: "allow" | "deny" | null;
+  updatedInput: Record<string, unknown> | null;
+  message: string | null;
+  /** Called once the allow stands: applies the hooks' permission updates. */
+  accepted?: () => Promise<void>;
 }
 
 /** A call as hooks see it. */
@@ -423,6 +451,71 @@ async function settle(
     } else if (hook?.decision === "ask" && decision.behavior === "allow") {
       decision = { behavior: "ask", reason: decision.reason, suggestions: [] };
     }
+    // PermissionRequest hooks answer a prompt that would be shown, before the person sees it.
+    if (decision.behavior === "ask" && host.permissionRequest !== undefined) {
+      const verdict = await host.permissionRequest(
+        {
+          turnId: batch.turnId,
+          toolCallId: call.id,
+          toolName: tool.name,
+          input,
+          suggestions: decision.suggestions,
+        },
+        batch.signal,
+      );
+      if (batch.signal.aborted) return textResult(INTERRUPTED_WAITING, "interrupted", true);
+      if (verdict.behavior === "deny") {
+        return textResult(
+          `Denied: a PermissionRequest hook refused this ${tool.name} call${verdict.message === null ? "." : `: ${verdict.message}`}`,
+          "denied",
+          true,
+        );
+      }
+      if (verdict.behavior === "allow") {
+        let allowed = true;
+        if (verdict.updatedInput !== null) {
+          const checked = validateToolInput(
+            { name: tool.name, description: tool.description, parameters: tool.inputSchema },
+            verdict.updatedInput,
+          );
+          if (!checked.ok) {
+            const issues = checked.issues
+              .map((i) => (i.path === "" ? i.problem : `${i.path}: ${i.problem}`))
+              .join("; ");
+            return textResult(
+              `Error: a PermissionRequest hook changed this call's input to one ${tool.name} does not accept (${issues}), so it was not run.`,
+              "error",
+              true,
+            );
+          }
+          // "The modified input is re-evaluated against deny and ask rules."
+          try {
+            query = {
+              toolName: tool.name,
+              subject: tool.permission(checked.value, host.probeContext()),
+            };
+          } catch (error) {
+            return textResult(
+              `Denied: the permission check for this call failed (${errorMessage(error)}), so it was not run.`,
+              "denied",
+              true,
+            );
+          }
+          input = checked.value;
+          const again = host.permissions.decide(query, host.permissionState());
+          if (again.behavior === "deny") return textResult(again.message, "denied", true);
+          if (again.behavior === "ask" && askedByRule(again.reason)) {
+            // An ask rule names the new input: the person decides, as for any call it names.
+            decision = again;
+            allowed = false;
+          }
+        }
+        if (allowed) {
+          await verdict.accepted?.();
+          decision = { behavior: "allow", reason: decision.reason };
+        }
+      }
+    }
     if (decision.behavior === "ask") {
       const wording = { cwd: state.cwd, homeDir: state.homeDir };
       if (!host.canAskPermission()) {
@@ -509,17 +602,43 @@ async function settle(
         durationMs,
       );
     }
-    return textResult(
-      `Error: ${tool.name} failed: ${errorMessage(error)}`,
-      "error",
-      true,
-      durationMs,
-    );
+    const failed = `Error: ${tool.name} failed: ${errorMessage(error)}`;
+    if (host.postToolUseFailure !== undefined) {
+      await host.postToolUseFailure(
+        {
+          turnId: batch.turnId,
+          toolCallId: call.id,
+          toolName: tool.name,
+          input,
+          error: failed,
+          // It reached the engine as an abort rather than as an error the tool reported.
+          isInterrupt: error instanceof Error && error.name === "AbortError",
+          durationMs,
+        },
+        batch.signal,
+      );
+    }
+    return textResult(failed, "error", true, durationMs);
   }
   if (changing.length > 0) await host.fileChanges?.after(batch.turnId, changing);
   const durationMs = Math.max(0, host.now() - startedAt);
   const isError = output.isError === true;
   const content = await spillIfLarge(output.content, call, host);
+  // PostToolUseFailure runs after calls that failed, unless the person stopped the turn.
+  if (isError && !batch.signal.aborted && host.postToolUseFailure !== undefined) {
+    await host.postToolUseFailure(
+      {
+        turnId: batch.turnId,
+        toolCallId: call.id,
+        toolName: tool.name,
+        input,
+        error: failureText(content, output.display ?? null),
+        isInterrupt: false,
+        durationMs,
+      },
+      batch.signal,
+    );
+  }
   // PostToolUse runs after calls that succeeded, before the model sees the result.
   if (!isError && !batch.signal.aborted && host.postToolUse !== undefined) {
     await host.postToolUse(
@@ -561,6 +680,31 @@ function editedPaths(
   } catch {
     return [];
   }
+}
+
+/** Whether an ask came from an ask rule (directly or for one part of a command). */
+function askedByRule(reason: PermissionDecision["reason"]): boolean {
+  if (reason.type === "rule") return reason.list === "ask";
+  if (reason.type === "command_part") return askedByRule(reason.reason);
+  return false;
+}
+
+/**
+ * A failed call's `error` for PostToolUseFailure: the text the model gets, except that a shell
+ * command's starts with `Exit code N` and then its output, as hook scripts key on that line.
+ */
+function failureText(content: readonly ContentPart[], display: ToolDisplay | null): string {
+  const text = content
+    .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
+    .map((p) => p.text)
+    .join("\n");
+  if (display?.kind === "command" && display.exitCode !== null && display.exitCode !== 0) {
+    const output = (display.output ?? "").trim();
+    return output === ""
+      ? `Exit code ${display.exitCode}`
+      : `Exit code ${display.exitCode}\n${output}`;
+  }
+  return text;
 }
 
 /**

@@ -18,9 +18,11 @@ import { CommandError, type SlashCommand } from "../commands/types.ts";
 import type { AnyTool, ToolContext, ToolOutput } from "../contracts/tools.ts";
 import { RuntimeError } from "../runtime/errors.ts";
 import type { McpConnection } from "./connection.ts";
+import { callerFor, McpTimeoutError, withNotes } from "./elicitation.ts";
 import type { McpManager, McpServerPlan } from "./manager.ts";
 import { MAX_TOOL_NAME_CHARS, mcpPromptCommandName, mcpToolName, normalizeName } from "./names.ts";
 import { renderMcpSegment } from "./prompt.ts";
+import { MCP_RESOURCE_TOOLS } from "./resource-tools.ts";
 import { resultCap, toolOutput } from "./result.ts";
 import {
   callMcpTool,
@@ -63,8 +65,19 @@ export interface SessionMcpOptions {
   projectDir: string;
   /** The session's own servers. */
   sessionServers?: Readonly<Record<string, unknown>>;
+  /** Added (round 3): only the session's own servers (`--strict-mcp-config`). */
+  strictMcpConfig?: boolean;
   /** The settings' `env`, read when needed: variables expand from it too. */
   settingsEnv?: () => Readonly<Record<string, string>>;
+  /** Added (round 3, subagents): only these servers and tools, for a typed subagent (../agents/mcp.ts). */
+  filter?: McpToolFilter;
+}
+
+/** Which of the session's servers and tools a view offers. */
+export interface McpToolFilter {
+  allowsServer(server: string): boolean;
+  /** `fullName` is `mcp__server__tool`. */
+  allowsTool(fullName: string, server: string): boolean;
 }
 
 /** Resources that are pages for a host to draw, not content to read. */
@@ -140,6 +153,7 @@ export class SessionMcp {
         ...(this.#options.sessionServers === undefined
           ? {}
           : { sessionServers: this.#options.sessionServers }),
+        ...(this.#options.strictMcpConfig === true ? { strict: true } : {}),
         ...(this.#options.settingsEnv === undefined
           ? {}
           : { settingsEnv: this.#options.settingsEnv() }),
@@ -184,12 +198,15 @@ export class SessionMcp {
   /** Connected servers and their tools, sorted by full name, long names left out. */
   #connectedTools(): { server: string; fullName: string; tool: Tool; alwaysLoad: boolean }[] {
     const out: { server: string; fullName: string; tool: Tool; alwaysLoad: boolean }[] = [];
+    const filter = this.#options.filter;
     for (const { plan, connection } of this.#held.values()) {
       if (connection.state !== "connected") continue;
+      if (filter !== undefined && !filter.allowsServer(plan.name)) continue;
       const serverAlways = plan.definition.parsed.alwaysLoad;
       for (const tool of connection.tools) {
         const fullName = mcpToolName(plan.name, tool.name);
         if (fullName.length > MAX_TOOL_NAME_CHARS) continue;
+        if (filter !== undefined && !filter.allowsTool(fullName, plan.name)) continue;
         const marked = (tool._meta as Record<string, unknown> | undefined)?.[
           "anthropic/alwaysLoad"
         ];
@@ -221,10 +238,16 @@ export class SessionMcp {
     await Promise.all([...this.#held.values()].map((h) => h.connection.whenSettled(waitMs)));
     if (this.#decision !== null) return this.#decision;
 
-    const connected = [...this.#held.values()].filter((h) => h.connection.state === "connected");
+    const filter = this.#options.filter;
+    const connected = [...this.#held.values()].filter(
+      (h) =>
+        h.connection.state === "connected" &&
+        (filter === undefined || filter.allowsServer(h.plan.name)),
+    );
     // Servers that may still come: starting, failed and trying again, waiting for consent or
     // sign-in. Search reaches them once they connect.
     const pending = this.#plans.filter((plan) => {
+      if (filter !== undefined && !filter.allowsServer(plan.name)) return false;
       if (plan.blocked !== null) return plan.blocked.state === "needs-approval";
       const held = this.#held.get(plan.name);
       return held === undefined || held.connection.state !== "connected";
@@ -256,6 +279,8 @@ export class SessionMcp {
     }
     const reachLater = pending.length > 0 && setting !== "false" && setting !== "0";
     if (search || reachLater) tools.push(toolSearchTool, callMcpTool);
+    // The resource tools come with any MCP server, decided here once like the rest.
+    tools.push(...MCP_RESOURCE_TOOLS);
     this.#decision = {
       mode: search ? "search" : "direct",
       tools,
@@ -283,8 +308,10 @@ export class SessionMcp {
 
   /** The server tool a full name names now, among connected servers. */
   #find(fullName: string): { server: string; tool: Tool; connection: McpConnection } | null {
+    const filter = this.#options.filter;
     for (const { plan, connection } of this.#held.values()) {
       if (connection.state !== "connected") continue;
+      if (filter !== undefined && !filter.allowsTool(fullName, plan.name)) continue;
       for (const tool of connection.tools) {
         if (mcpToolName(plan.name, tool.name) === fullName) {
           return { server: plan.name, tool, connection };
@@ -343,17 +370,26 @@ export class SessionMcp {
     const timeoutMs =
       held.plan.definition.parsed.timeoutMs ??
       (Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : MCP_TOOL_TIMEOUT_MS);
+    // The call carries the session and the call, so a request for input it causes reaches
+    // this session's person (elicitation.ts); what came of such requests is noted after.
+    const { caller, notes } = callerFor(ctx);
     try {
       const result = await held.connection.callTool(toolName, input, {
         signal: ctx.signal,
         timeoutMs,
+        caller,
       });
-      return await toolOutput(result, { server, tool: toolName, maxChars: resultCap(env) }, ctx);
+      return withNotes(
+        await toolOutput(result, { server, tool: toolName, maxChars: resultCap(env) }, ctx),
+        notes,
+      );
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      return {
-        content: [{ type: "text", text: `Error: the MCP server ${server} said: ${message}` }],
+      const said =
+        error instanceof McpTimeoutError ? message : `the MCP server ${server} said: ${message}`;
+      const failed: ToolOutput = {
+        content: [{ type: "text", text: `Error: ${said}` }],
         isError: true,
         display: {
           kind: "mcp",
@@ -366,7 +402,47 @@ export class SessionMcp {
           savedTo: null,
         },
       };
+      return withNotes(failed, notes);
     }
+  }
+
+  /** The size an MCP result may put in the conversation, in characters. */
+  resultCap(): number {
+    return resultCap(this.#manager?.env() ?? process.env);
+  }
+
+  /**
+   * A server set up for the session, for the resource tools: its connection (null while it may
+   * not start, with why), or null when no server has that name.
+   */
+  server(name: string): { connection: McpConnection | null; reason: string | null } | null {
+    if (this.#options.filter !== undefined && !this.#options.filter.allowsServer(name)) return null;
+    const held = this.#held.get(name);
+    if (held !== undefined) return { connection: held.connection, reason: held.connection.reason };
+    const plan = this.#plans.find((p) => p.name === name);
+    return plan === undefined ? null : { connection: null, reason: plan.blocked?.reason ?? null };
+  }
+
+  /** The names of the session's servers, sorted. */
+  serverNames(): string[] {
+    const filter = this.#options.filter;
+    return this.#plans
+      .map((p) => p.name)
+      .filter((name) => filter === undefined || filter.allowsServer(name))
+      .sort(compare);
+  }
+
+  /** The connected servers, sorted by name. */
+  connectedServers(): { server: string; connection: McpConnection }[] {
+    const filter = this.#options.filter;
+    return [...this.#held.values()]
+      .filter(
+        (h) =>
+          h.connection.state === "connected" &&
+          (filter === undefined || filter.allowsServer(h.plan.name)),
+      )
+      .map((h) => ({ server: h.plan.name, connection: h.connection }))
+      .sort((a, b) => compare(a.server, b.server));
   }
 
   /** ToolSearch's answer: the matching tools with their full schemas. */
@@ -460,7 +536,13 @@ export class SessionMcp {
       if (held === undefined || seen.has(`${server}\n${uri}`)) continue;
       seen.add(`${server}\n${uri}`);
       try {
-        const result = await held.connection.readResource(uri, signal);
+        // Counted as this session's request, though nobody can be asked during a mention.
+        const result = await held.connection.readResource(uri, signal, {
+          sessionId: this.sessionId,
+          toolCallId: null,
+          ask: null,
+          note: () => {},
+        });
         const parts = result.contents.map((content) =>
           "text" in content && typeof content.text === "string"
             ? content.text
@@ -535,6 +617,14 @@ export class SessionMcp {
         if (held === undefined || held.connection.state !== "connected") {
           throw new CommandError(name, `The MCP server ${plan.name} is not connected now.`);
         }
+        // Added (Phase 4, hooks): UserPromptExpansion hooks may stop it before it expands.
+        const blocked = await ctx.session.commandExpansionHooks({
+          expansionType: "mcp_prompt",
+          name,
+          args: ctx.args,
+          source: "mcp",
+        });
+        if (blocked !== null) throw new CommandError(name, blocked);
         let result: Awaited<ReturnType<McpConnection["getPrompt"]>>;
         try {
           result = await held.connection.getPrompt(
@@ -573,6 +663,18 @@ export class SessionMcp {
     };
   }
 
+  /** Added (round 3, sign-in): a server of the session by name, with its connection. */
+  planNamed(name: string): { plan: McpServerPlan; connection: McpConnection | null } | null {
+    const plan = this.#plans.find((p) => p.name === name);
+    if (plan === undefined) return null;
+    return { plan, connection: this.#held.get(name)?.connection ?? null };
+  }
+
+  /** Added (round 3, sign-in): reads the servers' sign-ins, so `infos` says which hold one. */
+  async loadSignIns(): Promise<void> {
+    await this.#manager?.loadSignIns(this.#plans);
+  }
+
   /** The session's servers as `/mcp` shows them. */
   infos() {
     const manager = this.#manager;
@@ -580,6 +682,14 @@ export class SessionMcp {
     return this.#plans
       .map((plan) => manager.info(plan, this.#held.get(plan.name)?.connection ?? null))
       .sort((a, b) => compare(a.name, b.name));
+  }
+
+  /**
+   * Added (Phase 4, hooks): waits up to `ms` for one server that is still starting, for an
+   * `mcp_tool` hook on an event that can block (../hooks/mcp-tool.ts).
+   */
+  async whenServerSettled(server: string, ms: number): Promise<void> {
+    await this.#held.get(server)?.connection.whenSettled(ms);
   }
 
   /** Lets go of every server; the manager stops those no other session uses. */

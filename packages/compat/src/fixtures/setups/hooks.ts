@@ -110,19 +110,33 @@ export const FIXTURES: Record<string, CompatFixture> = {
     ignoreKinds: ["settings"],
   },
 
-  "hooks/not-yet-supported": {
+  "hooks/other-handler-types": {
     description:
-      "Handler types other than command, tier 2 and 3 events, and an event Claude Code does not document are reported with why (hooks reference).",
+      "Tier 2 events and the http, prompt, agent and mcp_tool handler types run; a model a hook names is mapped (hooks reference, principle 4).",
     files: {
       "project/.claude/settings.json": json({
         hooks: {
           PreToolUse: [
-            { matcher: "Write", hooks: [{ type: "http", url: "http://localhost:8080/check" }] },
+            {
+              matcher: "Write",
+              hooks: [
+                {
+                  type: "http",
+                  url: "http://localhost:8080/check",
+                  headers: { Authorization: "Bearer $HOOK_TOKEN" },
+                  allowedEnvVars: ["HOOK_TOKEN"],
+                },
+              ],
+            },
           ],
           PreCompact: [{ matcher: "auto", hooks: [command("./save-notes.sh")] }],
-          Stop: [{ hooks: [{ type: "prompt", prompt: "Did the tests pass? $ARGUMENTS" }] }],
-          FileChanged: [{ matcher: ".envrc", hooks: [command("direnv reload")] }],
-          BeforeTool: [{ hooks: [command("./never.sh")] }],
+          Stop: [
+            { hooks: [{ type: "prompt", prompt: "Did the tests pass? $ARGUMENTS", model: "haiku" }] },
+          ],
+          PermissionRequest: [
+            { matcher: "Bash", hooks: [{ type: "mcp_tool", server: "policy", tool: "check" }] },
+          ],
+          SubagentStop: [{ hooks: [{ type: "agent", prompt: "Check the agent's work." }] }],
         },
       }),
     },
@@ -133,25 +147,61 @@ export const FIXTURES: Record<string, CompatFixture> = {
           name: "PreToolUse on Write: http://localhost:8080/check",
           scope: "project",
           origin: "claude",
-          status: "not-supported",
-          notes: ["http hooks yet"],
+          status: "loaded",
         },
         {
           kind: "hook",
           name: "PreCompact on auto: ./save-notes.sh",
           scope: "project",
           origin: "claude",
-          status: "not-supported",
-          notes: ["next in Phase 4"],
+          status: "loaded",
         },
         {
           kind: "hook",
           name: "Stop: Did the tests pass? $ARGUMENTS",
           scope: "project",
           origin: "claude",
-          status: "not-supported",
-          notes: ["prompt hooks yet"],
+          status: "loaded",
+          notes: ["mapped to the helper model"],
         },
+        {
+          kind: "hook",
+          name: "PermissionRequest on Bash: policy check",
+          scope: "project",
+          origin: "claude",
+          status: "loaded",
+        },
+        {
+          kind: "hook",
+          name: "SubagentStop: Check the agent's work.",
+          scope: "project",
+          origin: "claude",
+          status: "loaded",
+          notes: ["only read files"],
+        },
+      ],
+      approval: { items: 5 },
+    },
+    ignoreKinds: ["settings"],
+  },
+
+  "hooks/not-yet-supported": {
+    description:
+      "Tier 3 events dawg does not run yet, a handler type on an event Claude Code does not run it on, an address allowedHttpHookUrls leaves out, and an event Claude Code does not document are reported with why (hooks reference).",
+    files: {
+      "project/.claude/settings.json": json({
+        allowedHttpHookUrls: ["https://hooks.example.com/*"],
+        hooks: {
+          FileChanged: [{ matcher: ".envrc", hooks: [command("direnv reload")] }],
+          PreCompact: [{ hooks: [{ type: "prompt", prompt: "Keep the plan." }] }],
+          PermissionRequest: [{ hooks: [{ type: "agent", prompt: "Is this safe?" }] }],
+          PostToolUse: [{ hooks: [{ type: "http", url: "http://localhost:8080/log" }] }],
+          BeforeTool: [{ hooks: [command("./never.sh")] }],
+        },
+      }),
+    },
+    expected: {
+      items: [
         {
           kind: "hook",
           name: "FileChanged on .envrc: direnv reload",
@@ -162,6 +212,30 @@ export const FIXTURES: Record<string, CompatFixture> = {
         },
         {
           kind: "hook",
+          name: "PreCompact: Keep the plan.",
+          scope: "project",
+          origin: "claude",
+          status: "not-supported",
+          notes: ["does not run prompt hooks on PreCompact"],
+        },
+        {
+          kind: "hook",
+          name: "PermissionRequest: Is this safe?",
+          scope: "project",
+          origin: "claude",
+          status: "not-supported",
+          notes: ["does not run agent hooks on PermissionRequest"],
+        },
+        {
+          kind: "hook",
+          name: "PostToolUse: http://localhost:8080/log",
+          scope: "project",
+          origin: "claude",
+          status: "not-supported",
+          notes: ["allowedHttpHookUrls"],
+        },
+        {
+          kind: "hook",
           name: "BeforeTool: ./never.sh",
           scope: "project",
           origin: "claude",
@@ -169,8 +243,8 @@ export const FIXTURES: Record<string, CompatFixture> = {
           notes: ["not an event Claude Code documents"],
         },
       ],
-      // Everything documented counts, so consent given now covers them when they start to run;
-      // the undocumented event never fires, so it is not offered.
+      // Everything documented counts, so consent given now covers them if they ever run; the
+      // undocumented event never fires, so it is not offered.
       approval: { items: 4 },
     },
     ignoreKinds: ["settings"],

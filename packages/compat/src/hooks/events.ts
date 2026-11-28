@@ -1,7 +1,8 @@
 /**
  * The hook events Claude Code documents (code.claude.com/docs/en/hooks, "Hook events"), and how
  * far dawg runs each. The spec (Phase 4, Hooks) builds them in tiers by how often real setups use
- * them; this round runs tier 1 with `command` handlers.
+ * them: tiers 1 and 2 run with every handler type, and tier 3 events run as each underlying
+ * feature exists.
  */
 
 /** Tier 1: the events this build runs. */
@@ -26,10 +27,23 @@ export const TIER_2_EVENTS = [
   "PostCompact",
 ] as const;
 
-/** Tier 2 events dawg runs already: the subagent events (Phase 4, Subagents). */
-export const RUNNING_TIER_2_EVENTS = ["SubagentStart", "SubagentStop"] as const;
-/** Every event dawg runs: tier 1, and the tier 2 events built so far. */
-export type RunningEvent = Tier1Event | (typeof RUNNING_TIER_2_EVENTS)[number];
+export type Tier2Event = (typeof TIER_2_EVENTS)[number];
+
+/** Tier 2 events dawg runs: all of them. */
+export const RUNNING_TIER_2_EVENTS: readonly Tier2Event[] = TIER_2_EVENTS;
+
+/** Tier 3 events dawg runs: those whose feature exists, documented well enough to build. */
+export const RUNNING_TIER_3_EVENTS = [
+  "PostToolBatch",
+  "UserPromptExpansion",
+  "StopFailure",
+  "Elicitation",
+  "ElicitationResult",
+] as const;
+export type RunningTier3Event = (typeof RUNNING_TIER_3_EVENTS)[number];
+
+/** Every event dawg runs. */
+export type RunningEvent = Tier1Event | Tier2Event | RunningTier3Event;
 
 /** Every event the hooks reference documents, in its order. */
 export const DOCUMENTED_EVENTS: readonly string[] = [
@@ -80,11 +94,11 @@ export function isTier1Event(event: string): event is Tier1Event {
   return TIER_1.has(event);
 }
 
-const RUNNING_TIER_2 = new Set<string>(RUNNING_TIER_2_EVENTS);
+const RUNNING_TIER_3 = new Set<string>(RUNNING_TIER_3_EVENTS);
 
 /** Whether dawg runs hooks on this event. */
 export function isRunningEvent(event: string): event is RunningEvent {
-  return TIER_1.has(event) || RUNNING_TIER_2.has(event);
+  return TIER_1.has(event) || TIER_2.has(event) || RUNNING_TIER_3.has(event);
 }
 
 export function eventTier(event: string): 1 | 2 | 3 | null {
@@ -122,3 +136,45 @@ export const EVENTS_WITH_IF: ReadonlySet<string> = new Set([
   "PermissionDenied",
   "PreSkillShellCommand",
 ]);
+
+/**
+ * Events where every handler type runs ("Prompt-based hooks": "Events that support all five hook
+ * types"). Elsewhere `prompt` and `agent` hooks do not run, and PermissionRequest takes every type
+ * but `agent`.
+ */
+const ALL_TYPES_EVENTS: ReadonlySet<string> = new Set([
+  "PermissionDenied",
+  "PostToolBatch",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "PreToolUse",
+  "Stop",
+  "SubagentStop",
+  "TaskCompleted",
+  "TaskCreated",
+  "TeammateIdle",
+  "UserPromptExpansion",
+  "UserPromptSubmit",
+]);
+
+/**
+ * Whether Claude Code runs a handler of this type on this event, as the reference lists them:
+ * command everywhere; http and mcp_tool everywhere but Setup (and http not on SessionStart);
+ * prompt on the all-types events and PermissionRequest; agent on the all-types events only.
+ */
+export function handlerRunsOn(type: string, event: string): boolean {
+  switch (type) {
+    case "command":
+      return true;
+    case "http":
+      return event !== "Setup" && event !== "SessionStart";
+    case "mcp_tool":
+      return event !== "Setup";
+    case "prompt":
+      return ALL_TYPES_EVENTS.has(event) || event === "PermissionRequest";
+    case "agent":
+      return ALL_TYPES_EVENTS.has(event);
+    default:
+      return false;
+  }
+}

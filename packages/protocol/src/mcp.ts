@@ -37,6 +37,21 @@ export const McpToolInfoSchema = z.object({
 });
 export type McpToolInfo = z.infer<typeof McpToolInfoSchema>;
 
+/**
+ * Signing in to a remote server with OAuth (Phase 4 spec, MCP: "Auth"). Never holds a token: they
+ * stay in the engine's credential store.
+ */
+export const McpSignInInfoSchema = z.object({
+  /**
+   * "signed-in": dawg holds a token for it (the server may still refuse it, then the state is
+   * "needs-sign-in"); "signing-in": a browser step is waiting (`mcp.signIn`); "signed-out": none.
+   */
+  status: z.enum(["signed-out", "signing-in", "signed-in"]),
+  /** Why the last sign-in did not finish, in plain words; null when it did or none was tried. */
+  problem: z.string().nullable(),
+});
+export type McpSignInInfo = z.infer<typeof McpSignInInfoSchema>;
+
 export const McpServerInfoSchema = z.object({
   /** The name in its configuration: "github". */
   name: z.string().min(1),
@@ -67,6 +82,11 @@ export const McpServerInfoSchema = z.object({
    * a definition of the same name it overrides.
    */
   notes: z.array(z.string()).default([]),
+  /**
+   * Added (Phase 4, round 3): sign-in for a remote server dawg may sign in to; null for a local
+   * one, or one whose definition sends its own Authorization header.
+   */
+  signIn: McpSignInInfoSchema.nullable().default(null),
 });
 export type McpServerInfo = z.infer<typeof McpServerInfoSchema>;
 
@@ -74,6 +94,11 @@ export type McpServerInfo = z.infer<typeof McpServerInfoSchema>;
 export const McpListParamsSchema = z.object({
   /** An absolute folder, or null for only the person's own servers. */
   projectDir: z.string().min(1).nullable(),
+  /**
+   * Added (Phase 4, round 3): an open session's servers instead, its own (scope "session",
+   * `session.create`'s `mcpServers`) among them. `projectDir` is then the session's.
+   */
+  sessionId: SessionIdSchema.optional(),
 });
 
 export const McpListResultSchema = z.object({
@@ -185,3 +210,46 @@ export const McpSessionResultSchema = z.object({
    */
   prompts: z.array(CommandInfoSchema),
 });
+
+// --- Added (Phase 4, round 3): signing in with OAuth, and a session's own servers ----------------
+
+/**
+ * Starts signing in to a remote server: the engine discovers its authorization server, registers
+ * dawg with it when it allows that, and listens on 127.0.0.1 for the browser's return. The client
+ * opens `url` in the browser; the rest finishes in the background, and `mcp.list` follows it
+ * ("needs-sign-in", then "starting", then "connected", or `signIn.problem` says what went wrong).
+ * InvalidState for a server that cannot sign in (local, waiting for approval, off, or one whose
+ * definition sends its own Authorization header), and in a run with nobody to answer.
+ */
+export const McpSignInParamsSchema = z.object({
+  projectDir: z.string().min(1).nullable(),
+  name: z.string().min(1),
+  /** A server of this open session's (its own ones included), as in `mcp.list`. */
+  sessionId: SessionIdSchema.optional(),
+});
+
+export const McpSignInResultSchema = z.object({
+  /** The authorization server's page, for the browser. Carries no secret: only a PKCE challenge. */
+  url: z.string().min(1),
+});
+
+/** Forgets the server's tokens and dawg's registration with it, and stops a sign-in on its way. */
+export const McpSignOutParamsSchema = McpSignInParamsSchema;
+
+export const McpSignOutResultSchema = z.object({
+  server: McpServerInfoSchema,
+});
+
+/** Stops a sign-in on its way: the browser's return is no longer accepted. */
+export const McpCancelSignInParamsSchema = McpSignInParamsSchema;
+
+export const McpCancelSignInResultSchema = z.object({
+  server: McpServerInfoSchema,
+});
+
+/**
+ * A session's own servers (`session.create`'s `mcpServers`, the command line's `--mcp-config`):
+ * the `mcpServers` object of a `.mcp.json`, server name to definition. Each definition is read as
+ * `.mcp.json`'s are; one that is not valid shows as failed, with why.
+ */
+export const McpSessionServersSchema = z.record(z.string().min(1), z.unknown());

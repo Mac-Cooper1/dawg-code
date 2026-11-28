@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { PROTOCOL_VERSION } from "@dawg/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Message } from "../contracts/index.ts";
 import {
@@ -101,7 +102,7 @@ describe("replaying a session file", () => {
       title: "first",
       cwd: t.project,
       forkedFrom: null,
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
     });
   });
 

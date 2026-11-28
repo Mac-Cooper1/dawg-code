@@ -43,6 +43,11 @@ const PAGES: readonly { id: SettingsPage; label: string; comingLine: string }[] 
     comingLine: "Skills and custom slash commands from your home folder and the project.",
   },
   {
+    id: "subagents",
+    label: "Subagents",
+    comingLine: "The subagents sessions can start: dawg's built-ins and agent files, and new ones.",
+  },
+  {
     id: "mcp",
     label: "MCP servers",
     comingLine: "The MCP servers sessions use, their state and tools, and Claude Code's to import.",
@@ -81,6 +86,8 @@ export interface SettingsViewProps {
   hooksPage?: ReactNode;
   /** Settings → Skills and commands, connected to the store by the container. */
   skillsPage?: ReactNode;
+  /** Settings → Subagents, connected to the store by the container. */
+  subagentsPage?: ReactNode;
   /** Settings → MCP servers, connected to the store by the container. */
   mcpPage?: ReactNode;
   /** Settings → Web, connected to the bridge by the container. */
@@ -176,6 +183,8 @@ export function SettingsView(props: SettingsViewProps) {
             props.hooksPage
           ) : props.page === "skills" && props.skillsPage ? (
             props.skillsPage
+          ) : props.page === "subagents" && props.subagentsPage ? (
+            props.subagentsPage
           ) : props.page === "mcp" && props.mcpPage ? (
             props.mcpPage
           ) : props.page === "web" && props.webPage ? (

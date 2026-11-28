@@ -115,6 +115,7 @@ export function SubagentPanel(props: SubagentPanelProps) {
             onRespondPermission={ignore}
             onRespondQuestion={ignore}
             onRespondPlan={ignore}
+            onRespondElicitation={ignore}
             onOpenLink={props.onOpenLink}
           />
         ) : (

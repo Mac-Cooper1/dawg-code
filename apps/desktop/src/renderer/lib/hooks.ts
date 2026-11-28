@@ -2,7 +2,7 @@
  * Words for hooks and the code a project supplies, shared by the transcript's hook lines, the
  * project trust dialog and Settings → Hooks, so the three say the same thing the same way.
  */
-import type { CompatItemStatus, CompatSource } from "@dawg/protocol";
+import type { CompatItemStatus, CompatSource, HookInfo } from "@dawg/protocol";
 import type { HookItem } from "../state/types.ts";
 import { formatDuration } from "./format.ts";
 
@@ -30,6 +30,51 @@ export const STATUS_LABEL: Record<CompatItemStatus, string> = {
   "not-supported": "Not supported yet",
   invalid: "Could not be read",
 };
+
+/** A handler type in words: "Command", "HTTP", "Prompt", "Agent", "MCP tool". */
+export function handlerTypeLabel(type: string): string {
+  switch (type) {
+    case "command":
+      return "Command";
+    case "http":
+      return "HTTP";
+    case "prompt":
+      return "Prompt";
+    case "agent":
+      return "Agent";
+    case "mcp_tool":
+      return "MCP tool";
+    default:
+      return type;
+  }
+}
+
+/**
+ * What a hook that is not a command reaches, in a few words: "Posts to localhost:8080", "Asks
+ * the helper model", "Asks haiku (mapped to a local model)", "Calls security_scan on my_server".
+ * Null for a command, and for an older engine that does not say.
+ */
+export function hookReach(hook: Pick<HookInfo, "type" | "reaches">): string | null {
+  const reaches = hook.reaches ?? null;
+  if (reaches === null) return null;
+  switch (hook.type) {
+    case "http":
+      return reaches.host === null ? null : `Posts to ${reaches.host}`;
+    case "prompt":
+    case "agent": {
+      const who = hook.type === "agent" ? "A read-only subagent on" : "Asks";
+      return reaches.model === null
+        ? `${who} the helper model, or the session’s model`
+        : `${who} “${reaches.model}”, mapped to the helper model or the session’s`;
+    }
+    case "mcp_tool":
+      return reaches.server === null || reaches.tool === null
+        ? null
+        : `Calls ${reaches.tool} on the MCP server ${reaches.server}`;
+    default:
+      return null;
+  }
+}
 
 /** Hooks take milliseconds more often than seconds: "41 ms", "1.2 s". */
 export function hookDuration(ms: number): string {
@@ -70,7 +115,18 @@ export function hookLine(item: HookItem): string {
         case "Stop":
           return withMessage("Stop hook kept the turn going", item.message);
         case "PostToolUse":
-          return withMessage(`PostToolUse hook gave feedback on ${tool}`, item.message);
+        case "PostToolUseFailure":
+          return withMessage(`${event} hook gave feedback on ${tool}`, item.message);
+        case "PermissionRequest":
+          return withMessage(`PermissionRequest hook denied ${tool}`, item.message);
+        case "SubagentStop":
+          return withMessage("SubagentStop hook kept the agent going", item.message);
+        case "PreCompact":
+          return withMessage("PreCompact hook blocked the compaction", item.message);
+        case "PostToolBatch":
+          return withMessage("PostToolBatch hook ended the turn", item.message);
+        case "UserPromptExpansion":
+          return withMessage("UserPromptExpansion hook blocked the command", item.message);
         default:
           return withMessage(`${event} hook blocked it`, item.message);
       }
@@ -83,6 +139,10 @@ export function hookLine(item: HookItem): string {
       }
       if (event === "PreToolUse" && item.decision === "ask") {
         return withMessage(`PreToolUse hook asked you about ${tool}`, item.message);
+      }
+      // It answered the permission prompt in the person's place.
+      if (event === "PermissionRequest" && item.decision === "allow") {
+        return withMessage(`PermissionRequest hook allowed ${tool}`, item.message);
       }
       return withMessage(`${event} hook ran${forTool(item)}`, item.message);
   }

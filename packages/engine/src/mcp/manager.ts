@@ -21,6 +21,10 @@
  * A server starts when the first session that uses it opens, and stops a few seconds after the
  * last one closes (`lingerMs`), so `/clear`, which closes one session and opens the next, does
  * not restart it.
+ *
+ * Signing in (round 3, oauth.ts): a remote server without an Authorization header of its own
+ * gets its token from the credential store; `signIn` starts the browser step, and once it
+ * finishes every connection to that server starts again with the token.
  */
 import {
   approvedBySettings,
@@ -34,7 +38,9 @@ import {
 import type { McpServerInfo, McpServerState } from "@dawg/protocol";
 import type { CodeTrust } from "../trust/index.ts";
 import { McpConnection } from "./connection.ts";
+import { credentialId, type McpCredentialStore, MemoryCredentialStore } from "./credentials.ts";
 import { mcpToolName } from "./names.ts";
+import { authTarget, McpAuth, type McpAuthTarget, McpSignInError } from "./oauth.ts";
 import { McpSwitches } from "./switches.ts";
 
 /** How long connecting to a server may take (`MCP_TIMEOUT` in the environment overrides it). */
@@ -60,6 +66,13 @@ export interface McpManagerOptions {
   restartDelaysMs?: readonly number[];
   lingerMs?: number;
   clientInfo?: { name: string; version: string };
+  /**
+   * Where sign-ins are kept (credentials.ts). The app and the command line pass the Keychain
+   * store (`createCredentialStore`); without one they last as long as the engine.
+   */
+  credentials?: McpCredentialStore;
+  /** How long a sign-in waits for the browser's return (oauth.ts: five minutes). */
+  signInTimeoutMs?: number;
 }
 
 /** A server that applies to a session or a project, and whether it may start. */
@@ -83,6 +96,8 @@ interface Entry {
   cwd: string;
   name: string;
   scope: McpScope;
+  /** The sign-in it uses (`credentialId`), or null for a server that signs in no way. */
+  authId: string | null;
 }
 
 /** What a session's MCP view needs from the manager (session.ts). */
@@ -117,12 +132,27 @@ export class McpManager {
   readonly #switches: McpSwitches;
   readonly #connections = new Map<string, Entry>();
   readonly #sessions = new Set<McpSessionLink>();
+  /** Signing in to remote servers, and their tokens (oauth.ts). */
+  readonly #auth: McpAuth;
+  /** The server a sign-in on its way is for, to start once it finishes: by `credentialId`. */
+  readonly #signingIn = new Map<string, { plan: McpServerPlan; cwd: string }>();
   #closed = false;
 
   constructor(options: McpManagerOptions) {
     this.homeDir = options.homeDir;
     this.#options = options;
     this.#switches = new McpSwitches(options.storeRoot);
+    this.#auth = new McpAuth({
+      store: options.credentials ?? new MemoryCredentialStore(),
+      env: () => this.env(),
+      ...(options.signInTimeoutMs === undefined ? {} : { timeoutMs: options.signInTimeoutMs }),
+      onSignedIn: (target) => this.#signedIn(target),
+    });
+  }
+
+  /** Where sign-ins are kept. */
+  get credentials(): McpCredentialStore {
+    return this.#auth.store;
   }
 
   env(): Readonly<Record<string, string | undefined>> {
@@ -141,6 +171,8 @@ export class McpManager {
     projectDir: string | null;
     sessionId?: string;
     sessionServers?: Readonly<Record<string, unknown>>;
+    /** Only the session's own servers (`--strict-mcp-config`). */
+    strict?: boolean;
     settingsEnv?: Readonly<Record<string, string>>;
   }): Promise<McpServerPlan[]> {
     const env = { ...this.env(), ...input.settingsEnv };
@@ -150,6 +182,7 @@ export class McpManager {
       homeDir: this.homeDir,
       env,
       ...(input.sessionServers === undefined ? {} : { sessionServers: input.sessionServers }),
+      ...(input.strict === true ? { strict: true } : {}),
     });
     const settings = await readMcpSettings({
       projectDir: input.cwd,
@@ -212,6 +245,7 @@ export class McpManager {
     if (config === null) throw new Error(`The MCP server ${plan.name} cannot start.`);
     let entry = this.#connections.get(plan.key);
     if (entry === undefined) {
+      const target = authTarget(plan.name, plan.scope, config);
       entry = {
         connection: new McpConnection({
           name: plan.name,
@@ -221,12 +255,19 @@ export class McpManager {
           connectTimeoutMs: this.connectTimeoutMs,
           restartDelaysMs: this.#options.restartDelaysMs ?? MCP_RESTART_DELAYS_MS,
           clientInfo: this.#options.clientInfo ?? { name: "dawg-code", version: "0.0.0" },
+          ...(target === null
+            ? {}
+            : {
+                authProvider: this.#auth.transportProvider(target),
+                signInReason: () => this.#auth.reason(target),
+              }),
         }),
         holders: new Set(),
         linger: null,
         cwd,
         name: plan.name,
         scope: plan.scope,
+        authId: target === null ? null : credentialId(target.key),
       };
       this.#connections.set(plan.key, entry);
     }
@@ -305,6 +346,7 @@ export class McpManager {
             }))
             .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
         : [];
+    const target = authTarget(plan.name, plan.scope, definition.parsed.config);
     return {
       name: plan.name,
       scope: plan.scope,
@@ -318,13 +360,30 @@ export class McpManager {
       resources: live && connection !== null ? connection.resources.length : 0,
       enabled: plan.enabled,
       notes: plan.notes,
+      signIn: target === null ? null : this.#auth.status(target),
     };
+  }
+
+  /** Reads the sign-ins of these plans' servers, so `info` can say which are signed in. */
+  async loadSignIns(plans: readonly McpServerPlan[]): Promise<void> {
+    await Promise.all(
+      plans.map((plan) => {
+        const target = authTarget(plan.name, plan.scope, plan.definition.parsed.config);
+        return target === null ? null : this.#auth.load(target);
+      }),
+    );
   }
 
   /** Settings → MCP servers: the servers of a project's sessions (or only the person's). */
   async list(projectDir: string | null): Promise<McpServerInfo[]> {
     const plans = await this.plan({ cwd: projectDir, projectDir });
+    await this.loadSignIns(plans);
     return plans.map((plan) => this.info(plan)).sort((a, b) => (a.name < b.name ? -1 : 1));
+  }
+
+  /** A server a project's sessions get, by name; InvalidParams when there is none. */
+  findPlan(projectDir: string | null, name: string): Promise<McpServerPlan> {
+    return this.#find(projectDir, name);
   }
 
   async #find(projectDir: string | null, name: string): Promise<McpServerPlan> {
@@ -384,9 +443,102 @@ export class McpManager {
     return enabled;
   }
 
+  /** The sign-in of a plan's server, or InvalidState with why it has none. */
+  #target(plan: McpServerPlan): McpAuthTarget {
+    const config = plan.definition.parsed.config;
+    if (plan.blocked !== null) {
+      throw new McpManagerError(
+        "InvalidState",
+        plan.blocked.state === "needs-approval"
+          ? `${plan.name} waits for your approval of the project's code; approve it, then sign in.`
+          : `${plan.name} cannot sign in now: ${plan.blocked.reason}`,
+      );
+    }
+    if (config === null || config.type === "stdio") {
+      throw new McpManagerError(
+        "InvalidState",
+        `${plan.name} runs on this computer; only remote servers sign in.`,
+      );
+    }
+    const target = authTarget(plan.name, plan.scope, config);
+    if (target === null) {
+      throw new McpManagerError(
+        "InvalidState",
+        `${plan.name} sends its own Authorization header, so dawg does not sign in to it. Remove the header to sign in with OAuth.`,
+      );
+    }
+    return target;
+  }
+
+  /**
+   * Starts signing in to a plan's server (`cwd`: where a server started to check it runs) and
+   * resolves with the address for the browser. It finishes in the background: then the server's
+   * connections start again, and one no session uses is started to show it connected.
+   */
+  async signIn(plan: McpServerPlan, cwd: string | null): Promise<string> {
+    if (this.#closed) throw new McpManagerError("InvalidState", "The engine is closing.");
+    const target = this.#target(plan);
+    const id = credentialId(target.key);
+    this.#signingIn.set(id, { plan, cwd: cwd ?? this.homeDir });
+    try {
+      const { url, finished } = await this.#auth.signIn(target);
+      void finished.then(() => {
+        if (this.#signingIn.get(id)?.plan === plan) this.#signingIn.delete(id);
+      });
+      return url;
+    } catch (error) {
+      if (this.#signingIn.get(id)?.plan === plan) this.#signingIn.delete(id);
+      if (error instanceof McpSignInError) throw new McpManagerError("InvalidState", error.message);
+      throw error;
+    }
+  }
+
+  /** Stops a sign-in on its way, if any. */
+  cancelSignIn(plan: McpServerPlan): void {
+    const target = this.#target(plan);
+    this.#signingIn.delete(credentialId(target.key));
+    this.#auth.cancel(target);
+  }
+
+  /** Forgets the server's tokens and registration; its connections start again signed out. */
+  async signOut(plan: McpServerPlan): Promise<void> {
+    const config = plan.definition.parsed.config;
+    const target = authTarget(plan.name, plan.scope, config);
+    if (target === null) {
+      throw new McpManagerError("InvalidState", `${plan.name} has no sign-in to forget.`);
+    }
+    this.#signingIn.delete(credentialId(target.key));
+    await this.#auth.signOut(target);
+    await this.#restartSignIn(credentialId(target.key));
+  }
+
+  /** Every connection using a sign-in starts again; resolves with them once they are on their way. */
+  async #restartSignIn(id: string): Promise<McpConnection[]> {
+    const connections = [...this.#connections.values()]
+      .filter((entry) => entry.authId === id)
+      .map((entry) => entry.connection);
+    await Promise.all(connections.map((c) => c.restart()));
+    return connections;
+  }
+
+  /** A sign-in finished: the server's connections start again with the token. */
+  async #signedIn(target: McpAuthTarget): Promise<void> {
+    const id = credentialId(target.key);
+    const waiting = this.#signingIn.get(id);
+    this.#signingIn.delete(id);
+    if (this.#closed) return;
+    const restarted = await this.#restartSignIn(id);
+    if (restarted.length === 0 && waiting !== undefined && waiting.plan.blocked === null) {
+      // No session uses it: start it, as a restart from Settings does, so it shows connected.
+      this.acquire(waiting.plan, "settings", waiting.cwd);
+      this.release(waiting.plan.key, "settings", MCP_CHECK_LINGER_MS);
+    }
+  }
+
   /** Stops every server. */
   async close(): Promise<void> {
     this.#closed = true;
+    this.#auth.close();
     const entries = [...this.#connections.values()];
     this.#connections.clear();
     await Promise.all(

@@ -132,6 +132,16 @@ describe("hook.ran", () => {
     expect(order(state)).toEqual(["user:t1", "hook:6", "permission:p1", "tool:c1"]);
   });
 
+  it("puts a PermissionRequest hook before its call too, since it answered for the person", () => {
+    const state = live((s) => {
+      turnWithBash(s);
+      s.emit("hook.ran", ran({ event: "PreToolUse" }));
+      s.emit("hook.ran", ran({ event: "PermissionRequest", decision: "allow" }));
+    });
+    expect(order(state)).toEqual(["user:t1", "hook:6", "hook:7", "tool:c1"]);
+    expect(items(state)[2]).toMatchObject({ toolName: "Bash", decision: "allow" });
+  });
+
   it("puts PostToolUse hooks after their call, in the order they ran", () => {
     const state = live((s) => {
       turnWithBash(s);

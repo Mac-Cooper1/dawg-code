@@ -11,13 +11,36 @@
  * prompt). `${VAR}` and `${VAR:-default}` are expanded in the command, arguments, environment,
  * URL and headers, from the environment dawg runs in. A variable that is not set and has no
  * default stays as written, with a note, as the docs describe.
+ *
+ * A remote server's `oauth` object (round 3) says how signing in to it works, in the fields the
+ * docs give: `clientId` for a client registered in advance, `callbackPort` for the loopback port
+ * its redirect URI names, `authServerMetadataUrl` to skip discovery, `scopes` to pin the scopes.
+ * A client secret is never in the file (the docs keep it in the Keychain).
  */
 import type { McpTransport } from "@dawg/protocol";
+
+/** How signing in to a remote server works, from its definition's `oauth` object. */
+export interface McpOAuthSettings {
+  /** A client registered in advance with the authorization server; null to register dawg. */
+  clientId: string | null;
+  /** The port of `http://localhost:PORT/callback`, for a redirect URI registered in advance. */
+  callbackPort: number | null;
+  /** The authorization server's metadata (https), used instead of discovery. */
+  authServerMetadataUrl: string | null;
+  /** The scopes to ask for, space-separated, over what the server advertises. */
+  scopes: string | null;
+}
 
 /** A definition dawg can start, after expansion. */
 export type McpServerConfig =
   | { type: "stdio"; command: string; args: string[]; env: Record<string, string> }
-  | { type: "http" | "sse"; url: string; headers: Record<string, string> };
+  | {
+      type: "http" | "sse";
+      url: string;
+      headers: Record<string, string>;
+      /** Present only when the definition has an `oauth` object. */
+      oauth?: McpOAuthSettings;
+    };
 
 export interface ParsedServer {
   /** "ok": dawg can start it; "not-supported": a valid kind dawg cannot run; "invalid": not a definition. */
@@ -51,14 +74,67 @@ export const PROJECT_WITHHELD_VARIABLES: ReadonlySet<string> = new Set([
 
 const KNOWN_FIELDS = {
   stdio: new Set(["type", "command", "args", "env", "timeout", "alwaysLoad"]),
-  remote: new Set(["type", "url", "headers", "timeout", "alwaysLoad"]),
+  remote: new Set(["type", "url", "headers", "timeout", "alwaysLoad", "oauth"]),
 };
 
 /** Fields the docs describe that dawg does not act on yet, with what that means. */
 const LATER_FIELDS: Record<string, string> = {
   headersHelper: "Its headersHelper command is not run yet, so only its fixed headers are sent.",
-  oauth: "Its OAuth settings are not used yet; signing in to MCP servers arrives later.",
 };
+
+const OAUTH_FIELDS = new Set(["clientId", "callbackPort", "authServerMetadataUrl", "scopes"]);
+
+/**
+ * Reads a remote definition's `oauth` object. A field that is not valid is left out with a note,
+ * so signing in still works the default way.
+ */
+function parseOAuth(value: unknown, notes: string[]): McpOAuthSettings | null {
+  if (value === undefined) return null;
+  if (!isPlainObject(value)) {
+    notes.push("“oauth” should be an object, so signing in works the default way.");
+    return null;
+  }
+  const settings: McpOAuthSettings = {
+    clientId: null,
+    callbackPort: null,
+    authServerMetadataUrl: null,
+    scopes: null,
+  };
+  if (typeof value.clientId === "string" && value.clientId.trim() !== "") {
+    settings.clientId = value.clientId.trim();
+  } else if (value.clientId !== undefined) {
+    notes.push("“oauth.clientId” should be text, so dawg registers itself instead.");
+  }
+  const port = value.callbackPort;
+  if (typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65_535) {
+    settings.callbackPort = port;
+  } else if (port !== undefined) {
+    notes.push("“oauth.callbackPort” should be a port number, so a free port is used.");
+  }
+  const metadata = value.authServerMetadataUrl;
+  if (typeof metadata === "string" && /^https:\/\/[^\s]+$/i.test(metadata.trim())) {
+    settings.authServerMetadataUrl = metadata.trim();
+  } else if (metadata !== undefined) {
+    notes.push(
+      "“oauth.authServerMetadataUrl” should be an https:// address, so discovery is used.",
+    );
+  }
+  if (typeof value.scopes === "string" && value.scopes.trim() !== "") {
+    settings.scopes = value.scopes.trim().split(/\s+/).join(" ");
+  } else if (value.scopes !== undefined) {
+    notes.push("“oauth.scopes” should be text, scopes separated by spaces.");
+  }
+  if (typeof value.clientSecret === "string") {
+    notes.push(
+      "“oauth.clientSecret” is not read from the file: set MCP_CLIENT_SECRET when you sign in.",
+    );
+  }
+  const ignored = Object.keys(value).filter((k) => !OAUTH_FIELDS.has(k) && k !== "clientSecret");
+  if (ignored.length > 0) {
+    notes.push(`dawg does not use ${ignored.map((k) => `“oauth.${k}”`).join(", ")}.`);
+  }
+  return settings;
+}
 
 /** Longest command line or URL shown. */
 const MAX_TARGET_CHARS = 160;
@@ -234,10 +310,12 @@ export function parseServer(
       ...(options.withheld === undefined ? {} : { withheld: options.withheld }),
     };
     const url = expandVariables(entry.url.trim(), expand, result.missing);
+    const oauth = parseOAuth(entry.oauth, result.notes);
     result.config = {
       type: result.transport,
       url,
       headers: expandRecord(headers, expand, result.missing),
+      ...(oauth === null ? {} : { oauth }),
     };
     try {
       const parsed = new URL(url);

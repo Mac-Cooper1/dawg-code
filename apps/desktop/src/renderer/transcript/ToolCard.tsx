@@ -6,7 +6,13 @@
 import type { ContentPart } from "@dawg/protocol";
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { displayPath, formatDuration } from "../lib/format.ts";
-import { mcpCallOf, toolTarget, toolVerb } from "../lib/tools.ts";
+import {
+  LIST_MCP_RESOURCES,
+  mcpCallOf,
+  READ_MCP_RESOURCE,
+  toolTarget,
+  toolVerb,
+} from "../lib/tools.ts";
 import type { ToolCallItem } from "../state/types.ts";
 import { Icon, Spinner } from "../ui/index.ts";
 import { DiffView } from "./DiffView.tsx";
@@ -287,7 +293,11 @@ function ToolBody({ item, env }: { item: ToolCallItem; env: TranscriptEnv }) {
     return <WebToolBody display={display} env={env} />;
   }
   // MCP tools, by their own name or through CallMcpTool: server, tool, arguments and result.
-  if (mcpCallOf(item.toolName, item.input, display) !== null) {
+  if (
+    mcpCallOf(item.toolName, item.input, display) !== null ||
+    item.toolName === LIST_MCP_RESOURCES ||
+    item.toolName === READ_MCP_RESOURCE
+  ) {
     return <McpToolBody item={item} env={env} />;
   }
   return <GenericBody item={item} />;

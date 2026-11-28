@@ -92,6 +92,7 @@ describe("registry", () => {
   it("lists every built-in", () => {
     expect(registry.info().map((c) => c.name)).toEqual([
       "add-dir",
+      "agents",
       "clear",
       "compact",
       "context",

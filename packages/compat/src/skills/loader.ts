@@ -28,6 +28,7 @@ import type { LoadSkillsOptions, SkillDefinition, SkillKind, SkillSet } from "./
  */
 export const DAWG_COMMAND_NAMES: readonly string[] = [
   "add-dir",
+  "agents",
   "allowed-tools",
   "clear",
   "compact",

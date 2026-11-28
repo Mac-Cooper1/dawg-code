@@ -6,7 +6,7 @@ import type { HookHandler } from "@dawg/compat";
 import { describe, expect, it } from "vitest";
 import type { CommandRun } from "./command.ts";
 import { matcherMatches } from "./match.ts";
-import { interpretRun } from "./output.ts";
+import { type HandlerRun, interpretHandler, interpretRun } from "./output.ts";
 
 describe("matchers", () => {
   it.each([
@@ -53,6 +53,16 @@ const handler = (extra: Partial<HookHandler> = {}): HookHandler => ({
   onFailure: null,
   statusMessage: null,
   target: "x",
+  url: null,
+  headers: {},
+  allowedEnvVars: [],
+  prompt: null,
+  model: null,
+  continueOnBlock: false,
+  server: null,
+  tool: null,
+  input: null,
+  once: false,
   unknownKeys: [],
   raw: { type: "command", command: "x" },
   ...extra,
@@ -263,5 +273,399 @@ describe("JSON output", () => {
     });
     expect(result.context[0]?.length).toBeLessThan(10_100);
     expect(result.context[0]).toContain("[cut: 2,000 more characters]");
+  });
+});
+
+describe("tier 2 events: exit codes and JSON output", () => {
+  const json = (event: string, value: unknown, h = handler()) =>
+    interpretRun(event, h, run({ stdout: JSON.stringify(value) }));
+
+  it("PermissionRequest: allow with new input and permission updates, deny with interrupt", () => {
+    const updates = [
+      {
+        type: "addRules",
+        rules: [{ toolName: "Bash", ruleContent: "npm run lint" }],
+        behavior: "allow",
+        destination: "session",
+      },
+    ];
+    expect(
+      json("PermissionRequest", {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: {
+            behavior: "allow",
+            updatedInput: { command: "npm run lint" },
+            updatedPermissions: updates,
+          },
+        },
+      }),
+    ).toMatchObject({
+      outcome: "success",
+      decision: "allow",
+      updatedInput: { command: "npm run lint" },
+      updatedPermissions: updates,
+    });
+    expect(
+      json("PermissionRequest", {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "deny", message: "Not on main", interrupt: true },
+        },
+      }),
+    ).toMatchObject({
+      outcome: "blocked",
+      decision: "deny",
+      reason: "Not on main",
+      interrupt: true,
+    });
+    // Fields that belong to the other behaviour are not read.
+    expect(
+      json("PermissionRequest", {
+        hookSpecificOutput: { decision: { behavior: "deny", updatedInput: { command: "x" } } },
+      }),
+    ).toMatchObject({ decision: "deny", updatedInput: null, interrupt: false });
+    expect(
+      json("PermissionRequest", { hookSpecificOutput: { decision: { behavior: "maybe" } } }),
+    ).toMatchObject({ outcome: "success", decision: null });
+  });
+
+  it("PermissionRequest: exit 2 is not a decision, and onFailure block denies", () => {
+    expect(
+      interpretRun("PermissionRequest", handler(), run({ exitCode: 2, stderr: "nope" })),
+    ).toMatchObject({ outcome: "error", decision: null });
+    expect(
+      interpretRun("PermissionRequest", handler({ onFailure: "block" }), run({ exitCode: 1 })),
+    ).toMatchObject({ outcome: "blocked", decision: "deny" });
+    expect(
+      interpretRun(
+        "PermissionRequest",
+        handler({ onFailure: "block" }),
+        run({ exitCode: null, timedOut: true, durationMs: 1000 }),
+      ),
+    ).toMatchObject({ outcome: "blocked", decision: "deny" });
+  });
+
+  it("PostToolUseFailure: exit 2 and decision block go to the model, context too", () => {
+    expect(
+      interpretRun(
+        "PostToolUseFailure",
+        handler(),
+        run({ exitCode: 2, stderr: "Install express first" }),
+      ),
+    ).toMatchObject({ outcome: "blocked", decision: "block", reason: "Install express first" });
+    expect(
+      json("PostToolUseFailure", { decision: "block", reason: "Retry with --force" }),
+    ).toMatchObject({
+      decision: "block",
+      reason: "Retry with --force",
+    });
+    expect(
+      json("PostToolUseFailure", {
+        hookSpecificOutput: {
+          hookEventName: "PostToolUseFailure",
+          additionalContext: "The cache is stale",
+        },
+      }).context,
+    ).toEqual(["The cache is stale"]);
+    // Plain output is not context here.
+    expect(interpretRun("PostToolUseFailure", handler(), run({ stdout: "hi" })).context).toEqual(
+      [],
+    );
+  });
+
+  it("PreCompact: exit 2 and decision block block it; plain output is the summary's instructions", () => {
+    expect(
+      interpretRun("PreCompact", handler(), run({ exitCode: 2, stderr: "Not during a deploy" })),
+    ).toMatchObject({ outcome: "blocked", decision: "block", reason: "Not during a deploy" });
+    expect(json("PreCompact", { decision: "block", reason: "Later" })).toMatchObject({
+      decision: "block",
+    });
+    expect(
+      interpretRun("PreCompact", handler(), run({ stdout: "Keep the list of open bugs.\n" }))
+        .context,
+    ).toEqual(["Keep the list of open bugs."]);
+    // "Claude Code discards systemMessage and continue."
+    expect(json("PreCompact", { continue: false, systemMessage: "x" })).toMatchObject({
+      outcome: "success",
+      stop: null,
+      systemMessage: null,
+    });
+  });
+
+  it("PostCompact: no decision; exit 2 is shown to the person only", () => {
+    expect(
+      interpretRun("PostCompact", handler(), run({ exitCode: 2, stderr: "log failed" })),
+    ).toMatchObject({ outcome: "error", decision: null, message: "log failed" });
+    expect(json("PostCompact", { decision: "block", continue: false })).toMatchObject({
+      outcome: "success",
+      decision: null,
+      stop: null,
+    });
+  });
+});
+
+describe("tier 3 events: exit codes and JSON output", () => {
+  const json = (event: string, value: unknown) =>
+    interpretRun(event, handler(), run({ stdout: JSON.stringify(value) }));
+
+  it("PostToolBatch and UserPromptExpansion: exit 2 and decision block block; context counts", () => {
+    for (const event of ["PostToolBatch", "UserPromptExpansion"]) {
+      expect(interpretRun(event, handler(), run({ exitCode: 2, stderr: "Not now" }))).toMatchObject(
+        {
+          outcome: "blocked",
+          decision: "block",
+          reason: "Not now",
+        },
+      );
+      expect(json(event, { decision: "block", reason: "No" })).toMatchObject({ decision: "block" });
+      expect(
+        json(event, {
+          hookSpecificOutput: { hookEventName: event, additionalContext: "Note this" },
+        }).context,
+      ).toEqual(["Note this"]);
+    }
+  });
+
+  it("StopFailure: output and exit code change nothing", () => {
+    expect(interpretRun("StopFailure", handler(), run({ exitCode: 2, stderr: "x" }))).toMatchObject(
+      {
+        decision: null,
+      },
+    );
+    expect(
+      json("StopFailure", { continue: false, systemMessage: "x", decision: "block" }),
+    ).toMatchObject({
+      outcome: "success",
+      decision: null,
+      stop: null,
+      systemMessage: null,
+    });
+  });
+});
+
+describe("Elicitation and ElicitationResult: exit codes and JSON output", () => {
+  const json = (event: string, value: unknown) =>
+    interpretRun(event, handler(), run({ stdout: JSON.stringify(value) }));
+
+  it("an action answers: accept with content, decline, cancel; none leaves it to the person", () => {
+    for (const event of ["Elicitation", "ElicitationResult"]) {
+      expect(
+        json(event, {
+          hookSpecificOutput: { hookEventName: event, action: "accept", content: { a: 1 } },
+        }),
+      ).toMatchObject({
+        outcome: "success",
+        decision: "allow",
+        elicitation: { action: "accept", content: { a: 1 } },
+      });
+      expect(
+        json(event, { hookSpecificOutput: { action: "decline", content: { a: 1 } } }),
+      ).toMatchObject({
+        outcome: "blocked",
+        elicitation: { action: "decline", content: null },
+      });
+      expect(json(event, { hookSpecificOutput: { action: "cancel" } })).toMatchObject({
+        decision: null,
+        elicitation: { action: "cancel" },
+      });
+      expect(interpretRun(event, handler(), run({ stdout: "" }))).toMatchObject({
+        outcome: "success",
+        elicitation: null,
+      });
+    }
+  });
+
+  it("exit 2 and a top-level block decline, ignoring the hook's action; reason and systemMessage are discarded", () => {
+    for (const event of ["Elicitation", "ElicitationResult"]) {
+      const accept = JSON.stringify({
+        hookSpecificOutput: { action: "accept", content: { a: 1 } },
+      });
+      expect(
+        interpretRun(event, handler(), run({ exitCode: 2, stdout: accept, stderr: "no" })),
+      ).toMatchObject({ outcome: "blocked", decision: "block", elicitation: null, message: null });
+      expect(
+        json(event, {
+          decision: "block",
+          reason: "secret",
+          systemMessage: "x",
+          continue: false,
+          hookSpecificOutput: { action: "accept", content: { a: 1 } },
+        }),
+      ).toMatchObject({
+        decision: "block",
+        elicitation: null,
+        reason: null,
+        systemMessage: null,
+        stop: null,
+        message: null,
+      });
+      // A failure with onFailure block declines too.
+      expect(
+        interpretRun(event, handler({ onFailure: "block" }), run({ exitCode: 1 })),
+      ).toMatchObject({ outcome: "blocked", decision: "block" });
+    }
+  });
+});
+
+describe("other handler types", () => {
+  const out = (from: "http" | "mcp_tool", text: string): HandlerRun => ({
+    kind: "output",
+    from,
+    text,
+    durationMs: 5,
+  });
+  const verdict = (ok: boolean, reason: string | null = null, impossible = false): HandlerRun => ({
+    kind: "verdict",
+    ok,
+    reason,
+    impossible,
+    durationMs: 5,
+  });
+  const http = handler({ type: "http", command: null, url: "http://localhost/x" });
+  const mcp = handler({ type: "mcp_tool", command: null, server: "s", tool: "t" });
+  const prompt = handler({ type: "prompt", command: null, prompt: "x" });
+  const agent = handler({ type: "agent", command: null, prompt: "x" });
+
+  it("http: an empty 2xx is success, a JSON body decides, other text is an error", () => {
+    expect(interpretHandler("PreToolUse", http, out("http", ""))).toMatchObject({
+      outcome: "success",
+      decision: null,
+      exitCode: null,
+    });
+    expect(
+      interpretHandler(
+        "PreToolUse",
+        http,
+        out(
+          "http",
+          JSON.stringify({
+            hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "No" },
+          }),
+        ),
+      ),
+    ).toMatchObject({ outcome: "blocked", decision: "deny", reason: "No" });
+    expect(interpretHandler("UserPromptSubmit", http, out("http", "Some context"))).toMatchObject({
+      outcome: "error",
+      context: [],
+    });
+    expect(interpretHandler("PreToolUse", http, out("http", "{ nope"))).toMatchObject({
+      outcome: "error",
+    });
+  });
+
+  it("a failed request is non-blocking unless onFailure blocks", () => {
+    const failed: HandlerRun = {
+      kind: "failed",
+      outcome: "error",
+      detail: "It answered with status 500.",
+      durationMs: 3,
+    };
+    expect(interpretHandler("PreToolUse", http, failed)).toMatchObject({
+      outcome: "error",
+      decision: null,
+      message: "It answered with status 500.",
+    });
+    expect(interpretHandler("PreToolUse", { ...http, onFailure: "block" }, failed)).toMatchObject({
+      outcome: "blocked",
+      decision: "deny",
+    });
+    expect(
+      interpretHandler("PreToolUse", http, {
+        kind: "failed",
+        outcome: "timeout",
+        detail: "slow",
+        durationMs: 9,
+      }),
+    ).toMatchObject({ outcome: "timeout" });
+  });
+
+  it("mcp_tool: the text is read like standard output; with onFailure block plain text is a failure", () => {
+    expect(
+      interpretHandler("UserPromptSubmit", mcp, out("mcp_tool", "Branch: main")),
+    ).toMatchObject({
+      outcome: "success",
+      context: ["Branch: main"],
+    });
+    const blocking = { ...mcp, onFailure: "block" as const };
+    expect(interpretHandler("PreToolUse", blocking, out("mcp_tool", "looks risky"))).toMatchObject({
+      outcome: "blocked",
+      decision: "deny",
+    });
+    expect(interpretHandler("PreToolUse", blocking, out("mcp_tool", "{}"))).toMatchObject({
+      outcome: "success",
+    });
+    expect(
+      interpretHandler("PreToolUse", blocking, out("mcp_tool", JSON.stringify({ reason: "x" }))),
+    ).toMatchObject({
+      outcome: "blocked",
+    });
+  });
+
+  it("prompt and agent: ok decides per event, as the response schema says", () => {
+    // ok: true lets the action go on; on PermissionRequest it grants it.
+    expect(interpretHandler("PreToolUse", prompt, verdict(true))).toMatchObject({
+      decision: null,
+      stop: null,
+    });
+    expect(interpretHandler("PermissionRequest", prompt, verdict(true))).toMatchObject({
+      decision: "allow",
+    });
+    // Stop: the reason keeps the turn going, unless impossible.
+    expect(interpretHandler("Stop", prompt, verdict(false, "Tests fail"))).toMatchObject({
+      decision: "block",
+      reason: "Tests fail",
+    });
+    expect(interpretHandler("Stop", prompt, verdict(false, "Cannot", true))).toMatchObject({
+      decision: null,
+    });
+    // An agent hook ignores impossible.
+    expect(interpretHandler("Stop", agent, verdict(false, "Cannot", true))).toMatchObject({
+      decision: "block",
+    });
+    // PreToolUse: denied, and the turn ends unless the reason goes back (continueOnBlock, agent).
+    expect(interpretHandler("PreToolUse", prompt, verdict(false, "Reads .env"))).toMatchObject({
+      decision: "deny",
+      stop: { reason: "Reads .env" },
+    });
+    expect(
+      interpretHandler(
+        "PreToolUse",
+        { ...prompt, continueOnBlock: true },
+        verdict(false, "Reads .env"),
+      ),
+    ).toMatchObject({ decision: "deny", stop: null });
+    expect(interpretHandler("PreToolUse", agent, verdict(false, "Reads .env"))).toMatchObject({
+      decision: "deny",
+      stop: null,
+    });
+    // PostToolUse: the turn ends by default; continueOnBlock feeds the reason back.
+    expect(interpretHandler("PostToolUse", prompt, verdict(false, "Lint fails"))).toMatchObject({
+      decision: null,
+      stop: { reason: "Lint fails" },
+    });
+    expect(
+      interpretHandler(
+        "PostToolUse",
+        { ...prompt, continueOnBlock: true },
+        verdict(false, "Lint fails"),
+      ),
+    ).toMatchObject({ decision: "block", stop: null });
+    // UserPromptSubmit refuses the prompt; PostToolUseFailure tells the model.
+    expect(
+      interpretHandler("UserPromptSubmit", prompt, verdict(false, "No secrets")),
+    ).toMatchObject({
+      decision: "block",
+    });
+    expect(
+      interpretHandler("PostToolUseFailure", prompt, verdict(false, "Try again")),
+    ).toMatchObject({
+      decision: "block",
+    });
+    // PermissionRequest: ok false does not deny.
+    expect(interpretHandler("PermissionRequest", prompt, verdict(false, "Unsure"))).toMatchObject({
+      decision: null,
+      message: "Unsure",
+    });
   });
 });

@@ -46,6 +46,25 @@ function requestIdOf(request: PendingRequest): string {
   return request.kind === "permission" ? request.request.requestId : request.requestId;
 }
 
+/** A remote server with no sign-in, for `mcp.signOut` and `mcp.cancelSignIn`. */
+function signedOut(name: string) {
+  return {
+    name,
+    scope: "user" as const,
+    source: { path: "/Users/me/.dawg/mcp.json", origin: "dawg" as const, scope: "user" as const },
+    transport: "http" as const,
+    target: "https://mcp.example.com/mcp",
+    state: "needs-sign-in" as const,
+    reason: "The server wants you to sign in first.",
+    tools: [],
+    prompts: 0,
+    resources: 0,
+    enabled: true,
+    notes: [],
+    signIn: { status: "signed-out" as const, problem: null },
+  };
+}
+
 export interface FakeEngineOptions {
   /** Versions `initialize` accepts. Default: the protocol's. */
   supportedVersions?: number[];
@@ -156,6 +175,9 @@ export class FakeEngine {
         break;
       case "plan.proposed":
         session.pending.push({ kind: "plan", ...event.payload });
+        break;
+      case "elicitation.requested":
+        session.pending.push({ kind: "elicitation", ...event.payload });
         break;
       case "request.resolved": {
         const id = event.payload.requestId;
@@ -473,12 +495,49 @@ export class FakeEngine {
       "permission.respond": (params) => this.answer(params.sessionId, params.requestId),
       "question.respond": (params) => this.answer(params.sessionId, params.requestId),
       "plan.respond": (params) => this.answer(params.sessionId, params.requestId),
+      "elicitation.respond": (params) => this.answer(params.sessionId, params.requestId),
       // A setup with nothing that needs consent and no hooks; tests override what they need.
       "project.inspect": (params) => ({ projectDir: params.projectDir, items: [], approval: null }),
       "project.trust": (params) => ({ approved: params.approved }),
       "hooks.list": (params) => ({ projectDir: params.projectDir, hooks: [], disabledBy: null }),
       "hooks.setEnabled": (params) => ({ enabled: params.enabled }),
       "project.skills": (params) => ({ projectDir: params.projectDir, skills: [], commands: [] }),
+      "project.subagents": (params) => ({
+        projectDir: params.projectDir,
+        agents: [],
+        folders: {
+          user: "/Users/me/.dawg/agents",
+          project: params.projectDir === null ? null : `${params.projectDir}/.dawg/agents`,
+        },
+      }),
+      "subagent.create": (params) => {
+        const path = `${params.scope === "user" ? "/Users/me" : params.projectDir}/.dawg/agents/${params.name}.md`;
+        return {
+          path,
+          agent: {
+            name: params.name,
+            description: params.description,
+            builtIn: false,
+            source: { path, origin: "dawg", scope: params.scope },
+            tools: params.tools ?? null,
+            disallowedTools: [],
+            model: null,
+            mappedModel: null,
+            permissionMode: null,
+            readOnly: false,
+            maxTurns: null,
+            skills: [],
+            memory: params.memory ?? null,
+            memoryDirectory: null,
+            mcpServers: [],
+            background: false,
+            isolation: null,
+            status: "loaded",
+            overriddenBy: null,
+            notes: [],
+          },
+        };
+      },
       "mcp.list": (params) => ({ projectDir: params.projectDir, servers: [], importable: 0 }),
       "mcp.restart": (params) => ({
         server: {
@@ -500,6 +559,9 @@ export class FakeEngine {
       "mcp.importPreview": () => ({ from: "/Users/me/.claude.json", to: "", hash: null, items: [] }),
       "mcp.import": () => ({ imported: 0, path: "/Users/me/.dawg/mcp.json" }),
       "mcp.session": () => ({ resources: [], prompts: [] }),
+      "mcp.signIn": () => ({ url: "https://auth.example.com/authorize?state=s" }),
+      "mcp.signOut": (params) => ({ server: signedOut(params.name) }),
+      "mcp.cancelSignIn": (params) => ({ server: signedOut(params.name) }),
       // A subagent's latest state is its latest `subagent.updated` in the parent's log.
       "subagent.stop": (params) => {
         const updates = known(params.sessionId).log.flatMap((event) =>

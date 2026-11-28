@@ -11,7 +11,9 @@
  */
 import { z } from "zod";
 import {
+  CompatSourceSchema,
   ErrorInfoSchema,
+  PermissionModeSchema,
   QueuePositionSchema,
   SessionIdSchema,
   SubagentLabelSchema,
@@ -79,4 +81,120 @@ export const SubagentStopParamsSchema = z.object({
 export const SubagentStopResultSchema = z.object({
   /** False when it had already ended. */
   stopped: z.boolean(),
+});
+
+// ---------------------------------------------------------------------------------------------
+// Added (Phase 4, round 3): the subagents a project's sessions can start, for Settings →
+// Subagents and `/agents`, and writing a new agent file
+// ---------------------------------------------------------------------------------------------
+
+/** Where an agent's own lasting memory folder is: the person's, the project's, or the person's for this project. */
+export const SubagentMemoryScopeSchema = z.enum(["user", "project", "local"]);
+export type SubagentMemoryScope = z.infer<typeof SubagentMemoryScopeSchema>;
+
+/**
+ * - loaded: sessions get it as written;
+ * - partly-supported: sessions get it, but some fields are ignored (`notes` names each);
+ * - needs-approval: sessions get it, but the power its project file supplies (tool grants, a
+ *   looser mode, MCP servers of its own) waits for the person to approve the project's code;
+ * - invalid: the file cannot be used (`notes` says why);
+ * - overridden: another definition of the same name is used instead (`overriddenBy`).
+ */
+export const SubagentDefinitionStatusSchema = z.enum([
+  "loaded",
+  "partly-supported",
+  "needs-approval",
+  "invalid",
+  "overridden",
+]);
+export type SubagentDefinitionStatus = z.infer<typeof SubagentDefinitionStatusSchema>;
+
+/** One subagent definition: a built-in, or an agent file, as a session in the project reads it. */
+export const SubagentDefinitionSchema = z.object({
+  /** What the model passes as `subagent_type`. */
+  name: z.string().min(1),
+  description: z.string(),
+  /** dawg's own Explore, Plan or general-purpose. */
+  builtIn: z.boolean(),
+  /** The file; null for a built-in. */
+  source: CompatSourceSchema.nullable(),
+  /** `tools` as written; null when absent (every tool a subagent can have). */
+  tools: z.array(z.string()).nullable(),
+  disallowedTools: z.array(z.string()),
+  /** `model` as written; null when absent or `inherit`. */
+  model: z.string().nullable(),
+  /**
+   * The model it runs on when that is not the session's: null while every name maps to the
+   * session's model (principle 4).
+   */
+  mappedModel: z.string().nullable(),
+  /** `permissionMode` when it names a mode dawg has; null for the parent's. */
+  permissionMode: PermissionModeSchema.nullable(),
+  /** A built-in that only reads: no write tools, plan mode whatever the parent's mode. */
+  readOnly: z.boolean(),
+  maxTurns: z.number().int().positive().nullable(),
+  /** Skills loaded into its context when it starts. */
+  skills: z.array(z.string()),
+  memory: SubagentMemoryScopeSchema.nullable(),
+  /** Its memory folder (absolute) when `memory` is set; null without a project for the project's scopes. */
+  memoryDirectory: z.string().nullable(),
+  /** `mcpServers`: each a configured server's name, or one of its own (`inline`). */
+  mcpServers: z.array(z.object({ name: z.string().min(1), inline: z.boolean() })),
+  background: z.boolean(),
+  isolation: z.enum(["worktree"]).nullable(),
+  status: SubagentDefinitionStatusSchema,
+  /** For `overridden`: the file used instead (absolute). Otherwise null. */
+  overriddenBy: z.string().nullable(),
+  /** Sentences: fields ignored or mapped, what waits for approval, why it is not used. */
+  notes: z.array(z.string()).default([]),
+});
+export type SubagentDefinition = z.infer<typeof SubagentDefinitionSchema>;
+
+/** Settings → Subagents and `/agents`: every subagent a project's new sessions get. Read-only. */
+export const ProjectSubagentsParamsSchema = z.object({
+  /** An absolute folder, or null for only the built-ins and the person's own files. */
+  projectDir: z.string().min(1).nullable(),
+});
+
+export const ProjectSubagentsResultSchema = z.object({
+  projectDir: z.string().nullable(),
+  /**
+   * The built-ins first, then the files: the person's (`~/.claude`, `~/.dawg`), then the
+   * project's from the repository root down (`.claude` before `.dawg` in each folder), each
+   * folder's sorted by name. Invalid and overridden ones included.
+   */
+  agents: z.array(SubagentDefinitionSchema),
+  /** Where `subagent.create` writes: `~/.dawg/agents` and the project's `.dawg/agents` (null without a project). */
+  folders: z.object({ user: z.string(), project: z.string().nullable() }),
+});
+
+/**
+ * Writes a new agent file, `<name>.md` in the person's `~/.dawg/agents` or the project's
+ * `.dawg/agents`, never under `.claude`. A bad name is InvalidParams; a file of that name already
+ * there is InvalidState (it is never overwritten). New sessions pick the file up.
+ */
+export const SubagentCreateParamsSchema = z.object({
+  /** The project; needed for `scope: "project"`, and used to report the new agent's status. */
+  projectDir: z.string().min(1).nullable(),
+  /** user: `~/.dawg/agents`; project: `<projectDir>/.dawg/agents`. */
+  scope: z.enum(["user", "project"]),
+  name: z.string(),
+  description: z.string(),
+  /** The system prompt: the file's body. */
+  prompt: z.string().default(""),
+  /** Tool names; null or absent for every tool a subagent can have. */
+  tools: z.array(z.string().min(1)).nullable().optional(),
+  disallowedTools: z.array(z.string().min(1)).optional(),
+  model: z.string().min(1).nullable().optional(),
+  permissionMode: PermissionModeSchema.nullable().optional(),
+  memory: SubagentMemoryScopeSchema.nullable().optional(),
+  background: z.boolean().optional(),
+  isolation: z.enum(["worktree"]).nullable().optional(),
+});
+
+export const SubagentCreateResultSchema = z.object({
+  /** The file written (absolute). */
+  path: z.string(),
+  /** The new agent as the listing now shows it. */
+  agent: SubagentDefinitionSchema,
 });

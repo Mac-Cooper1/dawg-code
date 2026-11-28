@@ -129,6 +129,16 @@ describe.each(THEMES)("SkillsPage (%s)", (theme) => {
     await waitFor(() => expect(props.listSkills).toHaveBeenLastCalledWith(null));
   });
 
+  it("opens a skill's file in the person's editor", async () => {
+    const onOpenFile = vi.fn();
+    const { user } = setup(theme, { onOpenFile });
+    const skills = await screen.findByRole("list", { name: /^Skills/ });
+    const buttons = within(skills).getAllByRole("button", { name: "Open file" });
+    expect(buttons[0]).toHaveAccessibleDescription(/^\/release/);
+    await user.click(buttons[0] as HTMLElement);
+    expect(onOpenFile).toHaveBeenCalledWith(`${TALLY}/.dawg/skills/release/SKILL.md`);
+  });
+
   it("says when the list could not be read", async () => {
     setup(theme, { listSkills: vi.fn(async () => ({ error: "The engine is not running." })) });
     expect(await screen.findByRole("alert")).toHaveTextContent(

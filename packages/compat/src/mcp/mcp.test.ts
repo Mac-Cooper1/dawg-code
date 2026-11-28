@@ -131,10 +131,80 @@ describe("a server definition", () => {
     expect(parsed.status).toBe("ok");
     expect(parsed.notes).toEqual([
       "Its headersHelper command is not run yet, so only its fixed headers are sent.",
-      "Its OAuth settings are not used yet; signing in to MCP servers arrives later.",
       "dawg does not use “colour”.",
       "${MISSING_HOST} is not set, so it stays as written.",
     ]);
+    expect(parsed.config).toMatchObject({
+      oauth: { clientId: "x", callbackPort: null, authServerMetadataUrl: null, scopes: null },
+    });
+  });
+
+  it("reads a remote server's oauth settings in the documented fields", () => {
+    const parsed = parseServer(
+      {
+        type: "http",
+        url: "https://mcp.example.com/mcp",
+        oauth: {
+          clientId: " my-app ",
+          callbackPort: 8080,
+          authServerMetadataUrl: "https://auth.example.com/.well-known/openid-configuration",
+          scopes: "channels:read   chat:write",
+        },
+      },
+      { env },
+    );
+    expect(parsed.notes).toEqual([]);
+    expect(parsed.config).toEqual({
+      type: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: {},
+      oauth: {
+        clientId: "my-app",
+        callbackPort: 8080,
+        authServerMetadataUrl: "https://auth.example.com/.well-known/openid-configuration",
+        scopes: "channels:read chat:write",
+      },
+    });
+    // Without an oauth object the definition stays as it was, so its connection key does too.
+    expect(parseServer({ type: "http", url: "https://a.example/mcp" }, { env }).config).toEqual({
+      type: "http",
+      url: "https://a.example/mcp",
+      headers: {},
+    });
+  });
+
+  it("leaves out oauth fields that are not valid, and never reads a secret from the file", () => {
+    const parsed = parseServer(
+      {
+        type: "sse",
+        url: "https://mcp.example.com/sse",
+        oauth: {
+          clientId: 7,
+          callbackPort: 70_000,
+          authServerMetadataUrl: "http://auth.example.com/meta",
+          scopes: ["a"],
+          clientSecret: "s3cret",
+          audience: "x",
+        },
+      },
+      { env },
+    );
+    expect(parsed.status).toBe("ok");
+    expect(parsed.config).toMatchObject({
+      oauth: { clientId: null, callbackPort: null, authServerMetadataUrl: null, scopes: null },
+    });
+    expect(JSON.stringify(parsed.config)).not.toContain("s3cret");
+    expect(parsed.notes).toEqual([
+      "“oauth.clientId” should be text, so dawg registers itself instead.",
+      "“oauth.callbackPort” should be a port number, so a free port is used.",
+      "“oauth.authServerMetadataUrl” should be an https:// address, so discovery is used.",
+      "“oauth.scopes” should be text, scopes separated by spaces.",
+      "“oauth.clientSecret” is not read from the file: set MCP_CLIENT_SECRET when you sign in.",
+      "dawg does not use “oauth.audience”.",
+    ]);
+    expect(
+      parseServer({ type: "http", url: "https://a.example", oauth: "yes" }, { env }).notes,
+    ).toEqual(["“oauth” should be an object, so signing in works the default way."]);
   });
 
   it("refuses what is not a definition, and what dawg cannot run", () => {
@@ -192,6 +262,28 @@ describe("where servers come from", () => {
       ["claudeOnly", null],
       ["claudeLocal", project],
     ]);
+  });
+
+  it("with strict, reads only the session's own servers, and names where they came from", async () => {
+    await put(join(project, ".mcp.json"), { mcpServers: { db: { command: "db-mcp" } } });
+    await put(join(home, ".dawg", "mcp.json"), {
+      mcpServers: { mine: { command: "m" } },
+      projects: { [project]: { mcpServers: { local: { command: "l" } } } },
+    });
+    await put(join(home, ".claude.json"), { mcpServers: { claudeOnly: { command: "c" } } });
+    const sources = await readMcpSources({
+      cwd: project,
+      homeDir: home,
+      env: {},
+      sessionServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } },
+      sessionSource: join(project, "servers.json"),
+      strict: true,
+    });
+    expect(sources.definitions.map((d) => [d.name, d.scope, d.source])).toEqual([
+      ["docs", "session", { path: join(project, "servers.json"), origin: "dawg", scope: "flags" }],
+    ]);
+    // Still listed for the import offer, never started.
+    expect(sources.claude.map((d) => d.name)).toEqual(["claudeOnly"]);
   });
 
   it("names a file that is not JSON, and an mcpServers that is not a table", async () => {

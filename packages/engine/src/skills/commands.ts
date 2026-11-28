@@ -45,6 +45,14 @@ export function skillCommand(skill: SkillDefinition): SlashCommand | null {
       if (session.busy) {
         throw new RuntimeError("SessionBusy", `/${name} has to wait until the current turn ends.`);
       }
+      // UserPromptExpansion hooks may stop it before it expands, inline shell and all.
+      const blocked = await session.commandExpansionHooks({
+        expansionType: "slash_command",
+        name,
+        args: ctx.args,
+        source: skill.source.scope === "user" ? "userSettings" : "projectSettings",
+      });
+      if (blocked !== null) throw new CommandError(name, blocked);
       const skills = session.skills;
       const rendered = await skills.render(skill, ctx.args, new AbortController().signal);
       if (!rendered.ok) throw new CommandError(name, rendered.message);

@@ -30,6 +30,9 @@ export const KEYS_WITH_OWN_ITEMS: ReadonlySet<string> = new Set([
   "hooks",
   // Honoured: each hook's item says when it turns them all off.
   "disableAllHooks",
+  // Honoured by HTTP hooks: each hook's item says when the list keeps it from running.
+  "allowedHttpHookUrls",
+  "httpHookAllowedEnvVars",
   "statusLine",
   "outputStyle",
   "enabledPlugins",
@@ -113,8 +116,6 @@ export const LATER_PHASE_4_KEYS: ReadonlySet<string> = new Set([
   "autoMemoryEnabled",
   "autoMemoryDirectory",
   "agent",
-  "allowedHttpHookUrls",
-  "httpHookAllowedEnvVars",
 ]);
 
 /** Environment variables that configure Claude Code itself or Anthropic's API. */

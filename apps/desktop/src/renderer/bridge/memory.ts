@@ -17,6 +17,7 @@ import {
   BadgeCountSchema,
   BRIDGE_VERSION,
   ChooseFolderOptionsSchema,
+  ConfigFilePathSchema,
   type DawgBridge,
   DEFAULT_SETTINGS,
   DEFAULT_WINDOW_STATE,
@@ -122,6 +123,8 @@ export interface MemoryBridge extends DawgBridge {
   readonly menuModel: MenuModel | null;
   /** Test helper: the person chose a menu item meant for this page. */
   chooseMenuItem(actionId: string): void;
+  /** Every agent, skill or command file the page asked to open, in order. */
+  readonly openedConfigFiles: string[];
 }
 
 export const BROWSER_HOME_DIR = "/Users/you";
@@ -172,6 +175,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
   const badgeCounts: number[] = [];
   const openSessionListeners = new Set<(sessionId: string) => void>();
   let menuModel: MenuModel | null = null;
+  const openedConfigFiles: string[] = [];
   const menuActionListeners = new Set<(actionId: string) => void>();
 
   /** The engine sides of the ports handed out, closed on a simulated restart. */
@@ -267,6 +271,10 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
         const valid = validate(ExternalUrlSchema, url, "link");
         globalThis.window?.open(valid, "_blank", "noopener,noreferrer");
       },
+      // A plain browser has no editor to hand a file to: the path is checked and kept.
+      openConfigFile: async (file) => {
+        openedConfigFiles.push(validate(ConfigFilePathSchema, file, "file"));
+      },
     },
     menu: {
       update: (model) => {
@@ -280,6 +288,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     chooseMenuItem(actionId) {
       for (const listener of [...menuActionListeners]) listener(actionId);
     },
+    openedConfigFiles,
     modelManager,
     fakeWorkspace,
     fakeTerminal,

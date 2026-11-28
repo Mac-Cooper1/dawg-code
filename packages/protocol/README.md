@@ -37,10 +37,19 @@ server.notify("message.delta", { sessionId, seq, time: Date.now(), turnId, messa
 
 ## Versioning
 
-`PROTOCOL_VERSION` (currently 1) names one wire format. Additive changes keep it: new methods, new
+`PROTOCOL_VERSION` (currently 2) names one wire format. Additive changes keep it: new methods, new
 events, new optional params, new result or event fields. Anything else bumps it, including adding
 a value to an enum the engine sends (except `ErrorInfo.kind`, where unknown kinds arrive as
 `"other"`).
+
+| Version | Since   | What changed                                                                                                                                                                 |
+| ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2       | Phase 4 | Tool display kinds `web-fetch`, `web-search` and `mcp`; the pending request kind `elicitation`, in `PendingRequest`, `request.resolved` and `session.status` `waitingOn` |
+| 1       | Phase 1 | The first wire format                                                                                                                                                        |
+
+The engine speaks one version, so a client built for version 1 is refused at `initialize` and says
+the app and engine are out of step. Stored sessions keep the version they were written with, and
+version 1 sessions still open: their records are a subset of version 2's.
 
 `initialize` must be the first request. The client sends its version; the engine either speaks it
 and echoes it back, or answers `UnsupportedProtocolVersion` (-32004) with
@@ -57,8 +66,8 @@ or forked on this connection; a connection receives events for the sessions it h
 
 | Method | Purpose | Params | Result |
 | --- | --- | --- | --- |
-| `initialize` | Exchange versions and capabilities | `protocolVersion`, `client {name, version}`, `capabilities {permissionPrompts, questions, planApproval}` (each defaults to true) | `protocolVersion`, `engine {name, version}`, `capabilities {methods[], events[], maxMessageLength}` |
-| `session.create` | Open a new session in a directory | `cwd`, `projectDir?` (when `cwd` is a worktree), `title?`, `mode?`, `model?`, `effort?`, `additionalDirectories?` | `SessionSnapshot` |
+| `initialize` | Exchange versions and capabilities | `protocolVersion`, `client {name, version}`, `capabilities {permissionPrompts, questions, planApproval, elicitation}` (each defaults to true; `elicitation` *added*: an MCP server's requests for input) | `protocolVersion`, `engine {name, version}`, `capabilities {methods[], events[], maxMessageLength}` |
+| `session.create` | Open a new session in a directory | `cwd`, `projectDir?` (when `cwd` is a worktree), `title?`, `mode?`, `model?`, `effort?`, `additionalDirectories?`, `mcpServers?` *added* (the session's own MCP servers, a `.mcp.json` `mcpServers` object; they come first and need no approval), `strictMcpConfig?` *added* (only those) | `SessionSnapshot` |
 | `session.resume` | Open a stored session | `sessionId` | `SessionSnapshot` |
 | `session.fork` | Copy a session up to a point into a new one, and open it | `sessionId`, `point?` (`end`, `beforeTurn {turnId}`, `afterTurn {turnId}`; default end), `title?`, `cwd?` | `SessionSnapshot` of the new session |
 | `session.list` | List stored sessions, newest activity first | `projectDir?`, `query?`, `includeArchived?`, `limit?`, `cursor?` | `sessions: SessionSummary[]`, `nextCursor` |
@@ -78,22 +87,28 @@ or forked on this connection; a connection receives events for the sessions it h
 | `background.stop` | Stop a background command | `sessionId`, `taskId` | `stopped` (false if it had ended) |
 | `subagent.stop` *added* | Stop a subagent of the session that is queued or running (Phase 4, subagents) | `sessionId` (the parent), `agentId` | `stopped` (false if it had ended). `InvalidParams` for an unknown agent |
 | `project.skills` *added* | Every skill and custom command a project's sessions get, for Settings → Skills and commands. Read-only | `projectDir` (absolute, or null for only the person's own) | `projectDir`, `skills: SkillInfo[]`, `commands: SkillInfo[]` (`name`, `kind`, `description`, `argumentHint`, `source`, `userInvocable`, `modelInvocable`, `status`, `notes`), those not used and those in folders inside the project included |
+| `project.subagents` *added* | Every subagent a project's new sessions can start, for Settings → Subagents and `/agents`. Read-only | `projectDir` (absolute, or null for the built-ins and the person's own) | `projectDir`, `agents: SubagentDefinition[]` (the built-ins, then the files in reading order: `name`, `description`, `builtIn`, `source`, `tools`, `disallowedTools`, `model` as written, `mappedModel` (null: the session's), `permissionMode`, `readOnly`, `maxTurns`, `skills`, `memory`, `memoryDirectory`, `mcpServers: {name, inline}[]`, `background`, `isolation`, `status` loaded/partly-supported/needs-approval/invalid/overridden, `overriddenBy`, `notes`), `folders: {user, project}` (where `subagent.create` writes) |
+| `subagent.create` *added* | Writes a new agent file in the documented front matter format, as `<name>.md` in `~/.dawg/agents` or the project's `.dawg/agents`, never under `.claude` and never over a file | `projectDir`, `scope` (user/project), `name`, `description`, `prompt?`, `tools?`, `disallowedTools?`, `model?`, `permissionMode?`, `memory?`, `background?`, `isolation?` | `path`, `agent: SubagentDefinition`. A bad name or no description is `InvalidParams`; a file of that name already there is `InvalidState` |
 | `project.inspect` *added* | The compatibility report for a project and the person's home, with the consent its code needs. An item that would run but waits for consent is `needs-approval` | `projectDir` (absolute, or null for only the person's own) | `CompatReport`: `projectDir`, `items: CompatItem[]`, `approval` (`CodeApproval`: `hash`, `approved`, `items`; null when nothing needs consent) |
 | `project.trust` *added* | Approve (or take back) the code a project supplies: hooks from its settings files and Claude Code's user settings, its skills and commands with `!` shell or `allowed-tools`, its `.mcp.json` servers | `projectDir`, `hash` (the `approval.hash` the person saw), `approved` | `approved`. `InvalidState` when the hash no longer matches the definitions on disk |
 | `hooks.list` *added* | Every hook that applies, for Settings → Hooks | `projectDir` (absolute, or null) | `projectDir`, `hooks: HookInfo[]` (`id`, `event`, `matcher`, `type`, `command`, `timeout`, `source`, `status`, `notes`, `enabled`), `disabledBy` (the file whose `disableAllHooks` is on, or null) |
 | `hooks.setEnabled` *added* | The person's switch for one hook, kept in dawg's data folder | `projectDir`, `id`, `enabled` | `enabled`. `InvalidParams` for an id no longer in the files |
-| `mcp.list` *added* | The MCP servers a project's sessions get, for Settings → MCP servers | `projectDir` (absolute, or null for only the person's own) | `projectDir`, `servers: McpServerInfo[]` (`name`, `scope` session/local/project/user, `source`, `transport` stdio/http/sse or null, `target`, `state` connected/starting/failed/needs-approval/needs-sign-in/off, `reason`, `tools`, `prompts`, `resources`, `enabled`, `notes`), `importable` (Claude Code's servers not in dawg yet) |
+| `mcp.list` *added* | The MCP servers a project's sessions get, for Settings → MCP servers | `projectDir` (absolute, or null for only the person's own), `sessionId?` (an open session's servers instead, its own among them) | `projectDir`, `servers: McpServerInfo[]` (`name`, `scope` session/local/project/user, `source`, `transport` stdio/http/sse or null, `target`, `state` connected/starting/failed/needs-approval/needs-sign-in/off, `reason`, `tools`, `prompts`, `resources`, `enabled`, `notes`, `signIn` (`status` signed-out/signing-in/signed-in, `problem`; null for a server that signs in no way; never a token)), `importable` (Claude Code's servers not in dawg yet) |
 | `mcp.restart` *added* | Stops a server and starts it again; one no session uses is started to check it | `projectDir`, `name` | `server: McpServerInfo`. `InvalidParams` for a name not defined |
 | `mcp.setEnabled` *added* | The person's switch for one server, kept in dawg's data folder; off stops it | `projectDir`, `name`, `enabled` | `enabled` |
 | `mcp.importPreview` *added* | What importing Claude Code's servers (`~/.claude.json`) into `~/.dawg/mcp.json` would copy, secrets named but not shown | `{}` | `McpImportPlan`: `from`, `to`, `hash` (null when nothing to copy), `items` (`name`, `project`, `transport`, `target`, `secrets`, `action` copy/skip, `reason`) |
 | `mcp.import` *added* | Copies the plan the person saw | `hash` | `imported`, `path`. `InvalidState` when Claude Code's file changed since |
 | `mcp.session` *added* | What a session's connected servers offer the composer now | `sessionId` | `resources: McpResourceInfo[]` (`server`, `uri`, `name`, `description`, `mimeType`, `mention`), `prompts: CommandInfo[]` (`/mcp__server__prompt`) |
+| `mcp.signIn` *added* | Starts signing in to a remote server with OAuth: the engine listens on 127.0.0.1 for the browser's return and finishes in the background (`mcp.list` follows it to connected). `InvalidState` for a server that cannot sign in, and for a client that answers nothing (a `-p` run) | `projectDir`, `name`, `sessionId?` | `url`: the authorization page for the client to open |
+| `mcp.signOut` *added* | Forgets a server's tokens and dawg's registration with it | `projectDir`, `name`, `sessionId?` | `server: McpServerInfo` |
+| `mcp.cancelSignIn` *added* | Stops a sign-in on its way | `projectDir`, `name`, `sessionId?` | `server: McpServerInfo` |
 | `permission.respond` | Answer a permission request | `sessionId`, `requestId`, `response` (`allow {scope: once/always, rules?}` or `deny {message?}`) | `{}` |
 | `question.respond` | Answer an ask-the-user question | `sessionId`, `requestId`, `response` (`answered {answers: QuestionAnswer[]}` or `dismissed {message?}`) | `{}` |
 | `plan.respond` | Approve or reject a proposed plan | `sessionId`, `requestId`, `response` (`approve {mode?}` or `reject {message?}`) | `{}` |
+| `elicitation.respond` *added* | Answer an MCP server's request for input (`elicitation.ts`) | `sessionId`, `requestId`, `action` (accept/decline/cancel), `content?` (with accept in form mode: the answers by field name) | `{}`. `InvalidParams` when the content does not fit the fields (`elicitationIssues` says why; the request stays pending) |
 
 `SessionSnapshot` is `session: SessionSummary`, `modelInfo`, `additionalDirectories`, `tasks`,
-`usage` (null before the first request), `pending` (unanswered permission/question/plan requests,
+`usage` (null before the first request), `pending` (unanswered permission/question/plan/elicitation requests,
 oldest first), `activeTurnId`, `commands` (`{name, description, argumentHint, source?, kind?}`
 for the `/` menu: `source` is builtin, user or project, `kind` command or skill; missing means a
 built-in command; the session's own skills and custom commands are in it), and `background` (the
@@ -129,7 +144,7 @@ an estimated split that adds up to `contextUsed`).
 - **One turn at a time.** `session.prompt` while a turn runs (including while it waits on the
   person) fails with `SessionBusy`. Clients queue follow-up messages themselves.
 - **Do not rely on the order of a response and the events it causes.** Match them by `turnId`.
-- `permission.respond`, `question.respond` and `plan.respond` fail with `RequestNotFound` when the
+- `permission.respond`, `question.respond`, `plan.respond` and `elicitation.respond` fail with `RequestNotFound` when the
   request is unknown or already resolved (another window answered, or the turn ended).
 - Session methods other than create, resume, fork, list, rename, archive, delete and replay need
   the session open on this connection, otherwise `InvalidState`. An unknown id is
@@ -148,7 +163,7 @@ table; each exists because a client cannot otherwise rebuild the view from event
 
 | Event | Purpose | Fields |
 | --- | --- | --- |
-| `session.status` | Idle, working, waiting on the person, or error | `status`, `waitingOn` (permission/question/plan or null), `message` (short sidebar line or null), `queuePosition` (while the turn waits for a model busy with other sessions: 1 = next; else null) |
+| `session.status` | Idle, working, waiting on the person, or error | `status`, `waitingOn` (permission/question/plan/elicitation or null), `message` (short sidebar line or null), `queuePosition` (while the turn waits for a model busy with other sessions: 1 = next; else null) |
 | `session.deleted` *added* | The session was deleted. Without it, another window showing the session would not learn it is gone. | none beyond the common fields |
 | `session.updated` *added* | The session's settings, sent whole when one changes (title generated, mode switched by a tool or `/mode`, model, effort, archive, `/add-dir`). Without it a client never learns of changes the engine makes itself. | `title`, `mode`, `model`, `modelInfo`, `effort`, `archived`, `additionalDirectories`, `changed: string[]` |
 | `turn.started` *added* | A turn began. Carries the person's message, which no other event does. | `turnId`, `prompt`, `command {name, args}` or null |
@@ -163,7 +178,8 @@ table; each exists because a client cannot otherwise rebuild the view from event
 | `permission.requested` | A tool call needs permission | `turnId`, `request: PermissionRequest` (requestId, toolCallId, toolName, input, title, reason, suggestions, display?) |
 | `question.asked` | The model asks the person questions | `turnId`, `requestId`, `toolCallId`, `questions: Question[]` |
 | `plan.proposed` | A plan awaits approval | `turnId`, `requestId`, `toolCallId`, `plan` (Markdown), `planPath`, `modeBeforePlan` (the mode approving returns to unless the answer names one) |
-| `request.resolved` *added* | A pending request is no longer pending. Needed so every client (and a replay) can close the card, including when the turn ended without an answer. | `kind` (permission/question/plan), `turnId`, `requestId`, `outcome` (answered/cancelled), `response` (the answer, or null) |
+| `elicitation.requested` *added* | An MCP server asked the person for input while one of the session's calls to it was in progress (`elicitation.ts`) | `turnId`, `requestId`, `toolCallId` (the call, or null when several of the session's calls were open), `server`, `message` (untrusted: show as plain text), `mode` (form/url), `fields: ElicitationField[]` (the form: string with format and length limits, number/integer with minimum and maximum, boolean, select, multiselect, each with `title`, `description`, `required`, `default`; empty in URL mode), `url` (URL mode: open only when the person asks), `agent?` (`SubagentLabel`, when a subagent's call caused it: raised in the parent, as its permission requests are) |
+| `request.resolved` *added* | A pending request is no longer pending. Needed so every client (and a replay) can close the card, including when the turn ended without an answer. | `kind` (permission/question/plan/elicitation), `turnId`, `requestId`, `outcome` (answered/cancelled), `response` (the answer, or null; for an elicitation `{action, content}`) |
 | `tasks.updated` | The whole task list | `tasks: TaskItem[]` |
 | `hook.ran` *added* | One hook handler ran, for the transcript | `turnId` (null at session start and end, and for a refused prompt), `toolCallId` (PreToolUse, PostToolUse), `hook` (`event`, `matcher`, `type`, `command`, `source`), `outcome` (success, blocked, error, timeout), `exitCode`, `durationMs`, `decision` (allow, deny, ask, block, or null), `message` |
 | `hook.skipped` *added* | Hooks were held back because they wait for consent; once per session for each state of the definitions | `turnId`, `projectDir`, `sources: CompatSource[]` |
@@ -190,7 +206,7 @@ Within one session:
    `tool.finished`. Every started call finishes before `turn.finished`, also on interrupt or error
    (outcome "interrupted"). Read-only calls may run concurrently, so events of different calls
    may interleave.
-5. `permission.requested`, `question.asked` and `plan.proposed` are each followed by exactly one
+5. `permission.requested`, `question.asked`, `plan.proposed` and `elicitation.requested` are each followed by exactly one
    `request.resolved` with the same `requestId`, before `turn.finished`. While any request is
    pending, the session's status is "waiting".
 6. `compaction.started` is followed by `compaction.finished` with the same `compactionId`, with no

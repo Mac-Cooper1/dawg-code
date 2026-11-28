@@ -39,6 +39,13 @@ export interface CliOptions {
   approveProjectCode: boolean;
   /** Added (Phase 4, sandbox): `--sandbox`, which turns the sandbox on for shell commands. */
   sandbox: boolean;
+  /**
+   * Added (Phase 4, round 3): `--mcp-config`, each a file or a JSON string holding an
+   * `mcpServers` object, as Claude Code's CLI takes them: the session's own MCP servers.
+   */
+  mcpConfigs: string[];
+  /** `--strict-mcp-config`: only the `--mcp-config` servers, none of the project's or yours. */
+  strictMcpConfig: boolean;
   /** `dawg compat`: the folder to report on (default: the current one). */
   path: string | null;
   /** `dawg compat --json`: the report as JSON. */
@@ -58,7 +65,11 @@ export class UsageError extends Error {
 type Spec =
   | { type: "boolean"; key: keyof CliOptions | "help" | "version" | "skipPermissions" }
   | { type: "value"; key: string; metavar: string }
-  | { type: "list"; key: "allowedTools" | "disallowedTools" | "addDirs"; metavar: string };
+  | {
+      type: "list";
+      key: "allowedTools" | "disallowedTools" | "addDirs" | "mcpConfigs";
+      metavar: string;
+    };
 
 const FLAGS: Record<string, Spec> = {
   "-p": { type: "boolean", key: "print" },
@@ -85,6 +96,8 @@ const FLAGS: Record<string, Spec> = {
   "--verbose": { type: "boolean", key: "verbose" },
   "--approve-project-code": { type: "boolean", key: "approveProjectCode" },
   "--sandbox": { type: "boolean", key: "sandbox" },
+  "--mcp-config": { type: "list", key: "mcpConfigs", metavar: "file or JSON" },
+  "--strict-mcp-config": { type: "boolean", key: "strictMcpConfig" },
   "--json": { type: "boolean", key: "json" },
   "-h": { type: "boolean", key: "help" },
   "--help": { type: "boolean", key: "help" },
@@ -104,13 +117,25 @@ function isDirectory(p: string): boolean {
   }
 }
 
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether a word after a list flag belongs to the list. Rule lists take words shaped like rules,
  * `--add-dir` takes existing directories, so `dawg -p --allowedTools Read "fix the bug"` keeps
  * the prompt out of the list.
  */
-function continuesList(key: "allowedTools" | "disallowedTools" | "addDirs", word: string): boolean {
+function continuesList(
+  key: "allowedTools" | "disallowedTools" | "addDirs" | "mcpConfigs",
+  word: string,
+): boolean {
   if (word.startsWith("-")) return false;
+  if (key === "mcpConfigs") return word.trim().startsWith("{") || isFile(word);
   return key === "addDirs" ? isDirectory(word) : RULE_WORD.test(word.trim());
 }
 
@@ -148,6 +173,7 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     allowedTools: [] as string[],
     disallowedTools: [] as string[],
     addDirs: [] as string[],
+    mcpConfigs: [] as string[],
   };
   const flags = new Set<string>();
   /** Every option as typed, for `dawg compat`, which takes almost none. */
@@ -252,6 +278,8 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
     verbose: flags.has("verbose"),
     approveProjectCode: flags.has("approveProjectCode"),
     sandbox: flags.has("sandbox"),
+    mcpConfigs: lists.mcpConfigs,
+    strictMcpConfig: flags.has("strictMcpConfig"),
     path: null,
     json: false,
   };
@@ -277,6 +305,8 @@ function parseOrThrow(argv: readonly string[]): ParsedArgs {
       options.resume !== null && "--resume",
       options.effort !== null && "--effort",
       options.prompt !== null && "a prompt",
+      options.mcpConfigs.length > 0 && "--mcp-config",
+      options.strictMcpConfig && "--strict-mcp-config",
     ].filter((x): x is string => typeof x === "string");
     if (refused.length > 0) {
       throw new UsageError(`dawg serve does not take ${refused.join(", ")}: clients send those.`);
@@ -317,6 +347,8 @@ function compatOptions(
     verbose: flags.has("verbose"),
     approveProjectCode: false,
     sandbox: false,
+    mcpConfigs: [],
+    strictMcpConfig: false,
     path: positionals[0] ?? null,
     json: flags.has("json"),
   };
@@ -376,6 +408,12 @@ Session:
   --approve-project-code           Approve the hooks, skills and MCP servers the project
                                    defines now, without asking (otherwise -p never runs
                                    them until they are approved)
+
+MCP servers:
+  --mcp-config <file or JSON...>   The session's own servers: a file, or a JSON string, with
+                                   an "mcpServers" object as in .mcp.json. Repeatable; a later
+                                   one wins for the same name. They need no approval
+  --strict-mcp-config              Only the --mcp-config servers, none of the project's or yours
 
 Web search (WebSearch is offered only when a service is set; WebFetch needs nothing):
   DAWG_SEARCH_PROVIDER             brave (the default with a key), tavily or searxng

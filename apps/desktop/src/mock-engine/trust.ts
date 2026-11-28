@@ -20,6 +20,7 @@ import type {
   CompatSource,
   EventPayloadInput,
   HookInfo,
+  HookReaches,
 } from "@dawg/protocol";
 import { ErrorCodes, RpcError } from "@dawg/protocol";
 
@@ -32,8 +33,12 @@ interface MockHook {
   source: CompatSource;
   /** Needs the person's consent (the project's files, or Claude Code's own user files). */
   consent: boolean;
-  /** Runs in this version (a command handler for a tier 1 event). */
+  /** Runs in this version. */
   supported: boolean;
+  /** What a hook that is not a command reaches (Settings → Hooks). */
+  reaches?: HookReaches;
+  /** What it does, for the trust dialog, when it does not run a command. */
+  does?: string;
 }
 
 /** "PreToolUse on Bash: ./scripts/check-command.sh", as the engine names report items. */
@@ -57,8 +62,6 @@ function idOf(hook: MockHook): string {
   return `hook:${hashOf(JSON.stringify([hook.source.path, hook.event, hook.matcher, hook.command]))}`;
 }
 
-const NOT_SUPPORTED_PROMPT =
-  "Prompt hooks ask a model to decide; dawg runs command hooks only in this version.";
 const PROJECT_CODE = "Runs a command from the project's files.";
 
 export class MockTrust {
@@ -126,7 +129,9 @@ export class MockTrust {
         timeout: null,
         source,
         consent: true,
-        supported: false,
+        supported: true,
+        reaches: { host: null, model: null, server: null, tool: null },
+        does: "Asks the model to check each event, with instructions from the project's files.",
       },
       own,
     ];
@@ -146,8 +151,7 @@ export class MockTrust {
 
   #item(hook: MockHook, approved: boolean): CompatItem {
     const notes: string[] = [];
-    if (!hook.supported) notes.push(NOT_SUPPORTED_PROMPT);
-    if (hook.consent) notes.push(PROJECT_CODE);
+    if (hook.consent) notes.push(hook.does ?? PROJECT_CODE);
     return {
       kind: "hook",
       name: itemName(hook),
@@ -206,6 +210,7 @@ export class MockTrust {
         status: item.status,
         notes: item.notes,
         enabled: !this.#off.has(idOf(hook)),
+        reaches: hook.reaches ?? null,
       };
     });
     return { projectDir, hooks, disabledBy: null };

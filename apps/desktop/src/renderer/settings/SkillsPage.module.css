@@ -102,6 +102,11 @@
   gap: 6px 8px;
 }
 
+/* "Open file" sits at the end of the row's first line. */
+.open {
+  margin-left: auto;
+}
+
 .name {
   font-family: var(--mono);
   font-size: var(--text-code);

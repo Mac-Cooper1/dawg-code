@@ -6,7 +6,7 @@
 import { resolve } from "node:path";
 import type { CompatItem } from "@dawg/protocol";
 import type { ReportProvider } from "../report/types.ts";
-import { type HookDefinition, loadHooks } from "./read.ts";
+import { type HookDefinition, type HttpHookPolicy, loadHooks } from "./read.ts";
 import { hookItemName, hookSupport, readsTranscript, TRANSCRIPT_GAP_NOTE } from "./support.ts";
 
 function sentence(text: string): string {
@@ -19,12 +19,12 @@ export function sameHandler(a: HookDefinition, b: HookDefinition): boolean {
   return a.event === b.event && JSON.stringify(a.handler.raw) === JSON.stringify(b.handler.raw);
 }
 
-/** The report item for one handler. */
+/** The report item for one handler. `context.http` is the HTTP hook allowlists in force. */
 export async function hookItem(
   hook: HookDefinition,
-  context: { projectDir: string | null; homeDir: string },
+  context: { projectDir: string | null; homeDir: string; http?: HttpHookPolicy },
 ): Promise<CompatItem> {
-  const support = hookSupport(hook);
+  const support = hookSupport(hook, context.http);
   const notes = [...support.notes];
   let status: CompatItem["status"] = support.status;
   if (status !== "not-supported" && (await readsTranscript(hook, context))) {
@@ -45,7 +45,11 @@ export const hooksReportProvider: ReportProvider = async (context) => {
   for (const file of loaded.files) {
     const placed = new Set<(typeof file.problems)[number]>();
     for (const hook of file.hooks) {
-      const item = await hookItem(hook, { projectDir, homeDir: context.homeDir });
+      const item = await hookItem(hook, {
+        projectDir,
+        homeDir: context.homeDir,
+        http: loaded.http,
+      });
       // A field the handler got wrong but could do without (a bad timeout): said on its item.
       for (const problem of file.problems) {
         if (problem.key?.startsWith(`${hook.location}.`) !== true) continue;

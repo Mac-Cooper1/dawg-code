@@ -112,6 +112,9 @@ export function SessionArea(props: { sessionId: SessionId }) {
             onRespondPlan={(requestId, response) =>
               run(actions.respondPlan(sessionId, requestId, response))
             }
+            onRespondElicitation={(requestId, answer) =>
+              run(actions.respondElicitation(sessionId, requestId, answer))
+            }
             onOpenLink={openExternal}
             onReviewProjectCode={(projectDir) => actions.reviewProjectCode(projectDir)}
             onOpenSubagent={(agentId) => actions.openSubagent(sessionId, agentId)}

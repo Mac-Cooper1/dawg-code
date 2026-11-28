@@ -6,6 +6,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
+  createCredentialStore,
   createEngine,
   createEngineHost,
   createSearchProvider,
@@ -96,6 +97,9 @@ export function createRealEngine(config: RealEngineConfig): RealHostedEngine {
     trust: createTrustStore({ storeRoot: config.dataRoot, homeDir: config.homeDir }),
     // Auto memory: the project's memory folder, MEMORY.md in the prompt (Phase 4, "Memory").
     autoMemory: true,
+    // MCP sign-ins: the Keychain on macOS, shared with the command line through the data root's
+    // service name (DAWG_CREDENTIAL_STORE=file or memory chooses otherwise; tests set file).
+    mcp: { credentials: createCredentialStore({ dataRoot: config.dataRoot }) },
   });
   let disposed: Promise<void> | null = null;
   return {

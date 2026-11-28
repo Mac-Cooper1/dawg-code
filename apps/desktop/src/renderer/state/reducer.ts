@@ -171,6 +171,8 @@ function pendingRef(request: PendingRequest): PendingRef {
       return { kind: "question", requestId: request.requestId, turnId: request.turnId };
     case "plan":
       return { kind: "plan", requestId: request.requestId, turnId: request.turnId };
+    case "elicitation":
+      return { kind: "elicitation", requestId: request.requestId, turnId: request.turnId };
   }
 }
 
@@ -364,6 +366,10 @@ function applyEvent(draft: Draft, event: EngineEvent, live: boolean): void {
     case "plan.proposed":
       touch(session, event.payload.time);
       items.planProposed(draft, session, event.payload);
+      return;
+    case "elicitation.requested":
+      touch(session, event.payload.time);
+      items.elicitationRequested(draft, session, event.payload);
       return;
     case "request.resolved":
       items.requestResolved(draft, session, event.payload);

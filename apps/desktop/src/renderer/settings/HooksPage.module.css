@@ -134,6 +134,14 @@
   overflow-wrap: anywhere;
 }
 
+/* What an http, prompt, agent or mcp_tool hook reaches: its host, model, or server and tool. */
+.reach {
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
 .path {
   font-family: var(--mono);
   font-size: var(--text-code);

@@ -32,6 +32,10 @@ export interface OpenChildRuntimeInput {
     model: string | null;
     effort: string | null;
     additionalDirectories: readonly string[];
+    /** The parent's own MCP servers, which its agents share. */
+    mcpServers?: Readonly<Record<string, unknown>>;
+    /** The parent takes only its own servers (`--strict-mcp-config`). */
+    strictMcpConfig?: boolean;
   };
   connection: ModelConnection;
   capabilities: ClientCapabilities;
@@ -39,6 +43,15 @@ export interface OpenChildRuntimeInput {
   cwd: string;
   create: { title: string; mode: PermissionMode; initialMessages: Message[] } | null;
   role: SubagentRole;
+}
+
+function mcpServersFor(
+  parent: OpenChildRuntimeInput["parent"],
+  role: SubagentRole,
+): { mcpServers?: Readonly<Record<string, unknown>> } {
+  const own = role.fork === null ? (role.mcp?.servers ?? {}) : {};
+  const servers = { ...(parent.mcpServers ?? {}), ...own };
+  return Object.keys(servers).length === 0 ? {} : { mcpServers: servers };
 }
 
 export async function openChildRuntime(input: OpenChildRuntimeInput): Promise<SessionRuntime> {
@@ -115,8 +128,12 @@ export async function openChildRuntime(input: OpenChildRuntimeInput): Promise<Se
       sessionDir: dir,
       sidecar,
       startSource: input.create === null ? "resume" : "startup",
-      memory: null,
+      // Its own memory, when its file sets one (./memory.ts); never the project's.
+      memory: input.role.memory?.index ?? null,
       subagent: input.role,
+      // The parent's own servers, then its own (./mcp.ts): a name of its own wins.
+      ...mcpServersFor(parent, input.role),
+      ...(parent.strictMcpConfig === true ? { strictMcpConfig: true } : {}),
     });
   } catch (error) {
     log?.close();

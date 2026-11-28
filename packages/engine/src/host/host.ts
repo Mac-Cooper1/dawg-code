@@ -22,6 +22,8 @@ import {
   type SessionSnapshot,
   type Transport,
 } from "@dawg/protocol";
+import { createSubagent } from "../agents/create.ts";
+import { projectSubagents } from "../agents/list.ts";
 import { type CommandRegistry, createCommandRegistry } from "../commands/index.ts";
 import type { EndpointDescription } from "../commands/types.ts";
 import { listHooks, setHookEnabled } from "../hooks/list.ts";
@@ -82,6 +84,7 @@ const ALL_ANSWERABLE: ClientCapabilities = {
   permissionPrompts: true,
   questions: true,
   planApproval: true,
+  elicitation: true,
 };
 
 export function createEngineHost(
@@ -201,6 +204,9 @@ export function createEngineHost(
         ...(params.additionalDirectories === undefined
           ? {}
           : { additionalDirectories: params.additionalDirectories }),
+        // The session's own MCP servers come from the person: no project approval is needed.
+        ...(params.mcpServers === undefined ? {} : { mcpServers: params.mcpServers }),
+        ...(params.strictMcpConfig === true ? { strictMcpConfig: true } : {}),
       });
       return attach(runtime);
     },
@@ -402,8 +408,23 @@ export function createEngineHost(
       return projectSkills({ homeDir, projectDir: params.projectDir, builtins: commands });
     },
 
+    // Settings → Subagents and `/agents`: what a project's sessions can start (../agents/list.ts),
+    // and a new agent file under `.dawg` (../agents/create.ts).
+    "project.subagents": async (params) => {
+      if (params.projectDir !== null) absolute(params.projectDir, "projectDir");
+      return projectSubagents({
+        homeDir,
+        storeRoot: engine.storeRoot,
+        projectDir: params.projectDir,
+        trust: engine.trust,
+      });
+    },
+
+    "subagent.create": async (params) =>
+      createSubagent({ homeDir, storeRoot: engine.storeRoot, trust: engine.trust }, params),
+
     // Settings → MCP servers, the import of Claude Code's, and the composer's (../mcp).
-    ...mcpHandlers(engine, requireOpen),
+    ...mcpHandlers(engine, requireOpen, () => capabilities),
 
     "permission.respond": async (params) => {
       const runtime = await requireOpen(params.sessionId);
@@ -420,6 +441,15 @@ export function createEngineHost(
     "plan.respond": async (params) => {
       const runtime = await requireOpen(params.sessionId);
       runtime.respondPlan(params.requestId, params.response);
+      return {};
+    },
+
+    "elicitation.respond": async (params) => {
+      const runtime = await requireOpen(params.sessionId);
+      runtime.respondElicitation(params.requestId, {
+        action: params.action,
+        ...(params.content === undefined ? {} : { content: params.content }),
+      });
       return {};
     },
   };

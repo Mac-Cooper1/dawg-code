@@ -123,6 +123,37 @@ function pendingPlan(engine: FakeEngine): void {
   engine.emit(ID, "session.status", { status: "waiting", waitingOn: "plan", message: null });
 }
 
+function pendingElicitation(engine: FakeEngine): void {
+  runningTurn(engine);
+  engine.emit(ID, "elicitation.requested", {
+    turnId: "t1",
+    requestId: "e1",
+    toolCallId: "c1",
+    server: "tracker",
+    message: "Which project?",
+    mode: "form",
+    fields: [
+      {
+        name: "project",
+        type: "string",
+        title: null,
+        description: null,
+        required: true,
+        format: null,
+        minLength: null,
+        maxLength: null,
+        default: null,
+      },
+    ],
+    url: null,
+  });
+  engine.emit(ID, "session.status", {
+    status: "waiting",
+    waitingOn: "elicitation",
+    message: null,
+  });
+}
+
 /** A turn that has ended: the session has a checkpoint to rewind to. */
 function turnDone(engine: FakeEngine): void {
   runningTurn(engine);
@@ -218,6 +249,42 @@ const REACH: Record<MethodName, Reach> = {
       },
     ],
   },
+  "project.subagents": {
+    wire: [{ action: "listSubagents", call: (a) => a.listSubagents(PROJECT) }],
+    // Settings → Subagents lists them for the project the person picks.
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "listSubagents",
+        uses: "listSubagents=\\{actions\\.listSubagents\\}",
+      },
+    ],
+  },
+  "subagent.create": {
+    wire: [
+      {
+        action: "createSubagent",
+        call: (a) =>
+          a.createSubagent({
+            projectDir: PROJECT,
+            scope: "user",
+            name: "code-reviewer",
+            description: "Reviews code",
+            prompt: "You review code.",
+            tools: null,
+            memory: null,
+          }),
+      },
+    ],
+    // Settings → Subagents' "New subagent" form writes the file.
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "createSubagent",
+        uses: "createSubagent=\\{actions\\.createSubagent\\}",
+      },
+    ],
+  },
   "hooks.setEnabled": {
     wire: [{ action: "setHookEnabled", call: (a) => a.setHookEnabled(PROJECT, "hook:1", false) }],
     components: [
@@ -282,6 +349,38 @@ const REACH: Record<MethodName, Reach> = {
         file: "settings/SettingsContainer.tsx",
         action: "importMcpServers",
         uses: "importMcpServers=\\{actions\\.importMcpServers\\}",
+      },
+    ],
+  },
+  "mcp.signIn": {
+    wire: [{ action: "signInMcpServer", call: (a) => a.signInMcpServer(PROJECT, "linear") }],
+    // "Sign in" on Settings → MCP servers; the page opens the address it gets in the browser.
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "signInMcpServer",
+        uses: "signInMcpServer=\\{actions\\.signInMcpServer\\}",
+      },
+    ],
+  },
+  "mcp.signOut": {
+    wire: [{ action: "signOutMcpServer", call: (a) => a.signOutMcpServer(PROJECT, "linear") }],
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "signOutMcpServer",
+        uses: "signOutMcpServer=\\{actions\\.signOutMcpServer\\}",
+      },
+    ],
+  },
+  "mcp.cancelSignIn": {
+    wire: [{ action: "cancelMcpSignIn", call: (a) => a.cancelMcpSignIn(PROJECT, "linear") }],
+    // Cancel beside "Signing in…".
+    components: [
+      {
+        file: "settings/SettingsContainer.tsx",
+        action: "cancelMcpSignIn",
+        uses: "cancelMcpSignIn=\\{actions\\.cancelMcpSignIn\\}",
       },
     ],
   },
@@ -517,6 +616,22 @@ const REACH: Record<MethodName, Reach> = {
     ],
     components: [
       { file: "app/SessionArea.tsx", action: "respondPlan" },
+      { file: "composer/ComposerContainer.tsx", action: "submit" },
+    ],
+  },
+  "elicitation.respond": {
+    wire: [
+      {
+        action: "respondElicitation",
+        setup: pendingElicitation,
+        call: (a) =>
+          a.respondElicitation(ID, "e1", { action: "accept", content: { project: "tally" } }),
+      },
+      // A message typed while the form waits declines it, and goes on as a queued message.
+      { action: "submit", setup: pendingElicitation, call: (a) => a.submit(ID, "Not that one") },
+    ],
+    components: [
+      { file: "app/SessionArea.tsx", action: "respondElicitation" },
       { file: "composer/ComposerContainer.tsx", action: "submit" },
     ],
   },

@@ -27,6 +27,9 @@ function hostAndPath(url: string): string {
 
 /** The tool that calls an MCP server's tool by name (the engine's `CallMcpTool`). */
 export const MCP_DISPATCHER = "CallMcpTool";
+/** The MCP resource tools, named as Claude Code names them. */
+export const LIST_MCP_RESOURCES = "ListMcpResourcesTool";
+export const READ_MCP_RESOURCE = "ReadMcpResourceTool";
 
 /**
  * The MCP server and tool a call is made to, by its own name (`mcp__github__get_issue`) or
@@ -37,6 +40,7 @@ export function mcpCallOf(
   input: Record<string, unknown>,
   display?: ToolDisplay | null,
 ): { server: string; tool: string } | null {
+  if (toolName === LIST_MCP_RESOURCES || toolName === READ_MCP_RESOURCE) return null;
   if (display?.kind === "mcp") return { server: display.server, tool: display.tool };
   const name = toolName === MCP_DISPATCHER ? (stringField(input, "name") ?? "") : toolName;
   const match = /^mcp__(.+?)__(.+)$/.exec(name);
@@ -80,6 +84,13 @@ export function toolTarget(
     case "WebSearch":
     case "ToolSearch":
       return stringField(input, "query") ?? "";
+    case LIST_MCP_RESOURCES:
+      return stringField(input, "server") ?? "every server";
+    case READ_MCP_RESOURCE: {
+      const server = stringField(input, "server");
+      const uri = stringField(input, "uri") ?? "";
+      return server === null ? uri : `${server} · ${uri}`;
+    }
     default: {
       const mcp = mcpCallOf(toolName, input);
       if (mcp !== null) return `${mcp.server} · ${mcp.tool}`;
@@ -104,6 +115,8 @@ const RUNNING_VERB: Record<string, string> = {
   WebFetch: "Fetching",
   WebSearch: "Searching the web",
   ToolSearch: "Searching MCP tools",
+  [LIST_MCP_RESOURCES]: "Listing MCP resources",
+  [READ_MCP_RESOURCE]: "Reading an MCP resource",
   TodoWrite: "Updating tasks",
   EnterPlanMode: "Entering plan mode",
   ExitPlanMode: "Proposing a plan",
@@ -122,6 +135,8 @@ const DONE_VERB: Record<string, string> = {
   WebFetch: "Fetched",
   WebSearch: "Searched the web",
   ToolSearch: "Searched MCP tools",
+  [LIST_MCP_RESOURCES]: "Listed MCP resources",
+  [READ_MCP_RESOURCE]: "Read an MCP resource",
   TodoWrite: "Updated tasks",
   EnterPlanMode: "Entered plan mode",
   ExitPlanMode: "Proposed a plan",
@@ -173,6 +188,12 @@ export function toolActivity(toolName: string, input: Record<string, unknown>): 
       return "updating the task list";
     case "ToolSearch":
       return "searching MCP tools";
+    case LIST_MCP_RESOURCES:
+      return "listing MCP resources";
+    case READ_MCP_RESOURCE: {
+      const server = stringField(input, "server");
+      return server === null ? "reading an MCP resource" : `reading a resource of ${server}`;
+    }
     default: {
       const mcp = mcpCallOf(toolName, input);
       return mcp === null ? `using ${toolName}` : `using ${mcp.server}’s ${mcp.tool}`;

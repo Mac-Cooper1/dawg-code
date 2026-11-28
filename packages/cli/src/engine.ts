@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import type { SettingsFlags } from "@dawg/compat";
 import {
+  createCredentialStore,
   createEngine,
   createEngineHost,
   createTrustStore,
@@ -62,6 +63,8 @@ export function buildEngine(input: {
   generateTitles: boolean;
   /** The search service WebSearch uses (`searchFromEnvironment`), or none. */
   search?: SearchProvider | null;
+  /** The environment: `DAWG_CREDENTIAL_STORE` picks where MCP sign-ins are kept. */
+  env?: Readonly<Record<string, string | undefined>>;
 }): Engine {
   const { options, paths, models } = input;
   const search = input.search ?? null;
@@ -77,6 +80,13 @@ export function buildEngine(input: {
     trust: createTrustStore({ storeRoot: paths.dawgHome, homeDir: paths.homeDir }),
     // The project's memory folder, shared with the app through the data root.
     autoMemory: true,
+    // MCP sign-ins: the Keychain on macOS, shared with the app (DAWG_CREDENTIAL_STORE picks).
+    mcp: {
+      credentials: createCredentialStore({
+        dataRoot: paths.dawgHome,
+        env: input.env ?? process.env,
+      }),
+    },
     ...(options.maxTurns === null ? {} : { limits: { maxRequestsPerTurn: options.maxTurns } }),
   });
 }

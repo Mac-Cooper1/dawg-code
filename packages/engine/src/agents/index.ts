@@ -1,3 +1,6 @@
+export { agentsCommand } from "./command.ts";
+export { createSubagent } from "./create.ts";
+export { agentFolders, projectSubagents } from "./list.ts";
 export {
   AGENTS_STATE_KEY,
   type AgentHost,
@@ -9,6 +12,13 @@ export {
   type SendMessageInput,
   SubagentManager,
 } from "./manager.ts";
+export { type AgentMcpAccess, agentMcpAccess, FIXED_MCP_TOOLS, isMcpEntry } from "./mcp.ts";
+export {
+  type AgentMemory,
+  loadAgentMemory,
+  MEMORY_TOOLS,
+  renderAgentMemoryPrompt,
+} from "./memory.ts";
 export { openChildRuntime } from "./open.ts";
 export {
   EXPLORE_PROMPT,
@@ -26,6 +36,7 @@ export {
   FORK_TYPE,
   GENERAL_PURPOSE,
   NOT_FOR_SUBAGENTS,
+  wantsMcp,
 } from "./registry.ts";
 export type { SubagentRole } from "./role.ts";
 export { AgentSeats, type Seat, type SeatRequest, seatsFor } from "./seats.ts";

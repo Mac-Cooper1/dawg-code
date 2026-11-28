@@ -26,6 +26,7 @@ const GITHUB: McpServerInfo = {
   resources: 0,
   enabled: true,
   notes: [],
+  signIn: null,
 };
 
 const DB: McpServerInfo = {
@@ -41,6 +42,7 @@ const DB: McpServerInfo = {
   resources: 0,
   enabled: true,
   notes: [],
+  signIn: null,
 };
 
 const BROKEN: McpServerInfo = {
@@ -54,6 +56,29 @@ const BROKEN: McpServerInfo = {
   reason: "Could not start it: fetch failed",
   notes: ["${SEARCH_HOST} is not set, so it stays as written."],
 };
+
+/** A remote server that wants a sign-in. */
+const LINEAR: McpServerInfo = {
+  ...GITHUB,
+  name: "linear",
+  transport: "http",
+  target: "https://mcp.linear.app/mcp",
+  state: "needs-sign-in",
+  reason: "The server wants you to sign in first.",
+  tools: [],
+  prompts: 0,
+  signIn: { status: "signed-out", problem: null },
+};
+
+const SIGNED_IN: McpServerInfo = {
+  ...LINEAR,
+  state: "connected",
+  reason: null,
+  tools: [{ name: "mcp__linear__list_issues", tool: "list_issues", description: "List issues" }],
+  signIn: { status: "signed-in", problem: null },
+};
+
+const AUTHORIZE = "https://mcp.linear.app/authorize?response_type=code&state=x";
 
 const PLAN: McpImportPlan = {
   from: `${HOME}/.claude.json`,
@@ -97,6 +122,10 @@ function setup(theme: "dark" | "light", overrides: Partial<McpPageProps> = {}) {
     setMcpServerEnabled: vi.fn(async () => true),
     previewMcpImport: vi.fn(async () => PLAN),
     importMcpServers: vi.fn(async () => ({ imported: 1, path: `${HOME}/.dawg/mcp.json` })),
+    signInMcpServer: vi.fn(async () => ({ url: AUTHORIZE })),
+    signOutMcpServer: vi.fn(async () => LINEAR),
+    cancelMcpSignIn: vi.fn(async () => LINEAR),
+    onOpenLink: vi.fn(),
     onReview: vi.fn(),
     ...overrides,
   };
@@ -183,6 +212,82 @@ describe.each(THEMES)("McpPage (%s)", (theme) => {
     });
     expect(await screen.findByText("No MCP servers")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Import…" })).toBeNull();
+  });
+
+  it("signs in to a server that wants it: the page opens in the browser, Signing in… offers Cancel", async () => {
+    const user = userEvent.setup();
+    let signingIn = false;
+    const props = setup(theme, {
+      listMcpServers: vi.fn(async (projectDir: string | null) =>
+        listing({
+          projectDir,
+          servers: [
+            GITHUB,
+            signingIn ? { ...LINEAR, signIn: { status: "signing-in", problem: null } } : LINEAR,
+          ],
+        }),
+      ),
+      signInMcpServer: vi.fn(async () => {
+        signingIn = true;
+        return { url: AUTHORIZE };
+      }),
+    });
+    const button = await screen.findByRole("button", { name: "Sign in to linear" });
+    // A server that needs nothing has no sign-in buttons.
+    expect(screen.queryByRole("button", { name: "Sign in to github" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign out of github" })).toBeNull();
+    await user.click(button);
+    expect(props.signInMcpServer).toHaveBeenCalledWith(TALLY, "linear");
+    expect(props.onOpenLink).toHaveBeenCalledWith(AUTHORIZE);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Signing in… Finish in your browser; dawg waits five minutes for it.",
+    );
+    expect(screen.queryByRole("button", { name: "Sign in to linear" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel signing in to linear" }));
+    expect(props.cancelMcpSignIn).toHaveBeenCalledWith(TALLY, "linear");
+  });
+
+  it("signs out of a signed-in server", async () => {
+    const user = userEvent.setup();
+    const props = setup(theme, {
+      listMcpServers: vi.fn(async (projectDir: string | null) =>
+        listing({ projectDir, servers: [SIGNED_IN] }),
+      ),
+    });
+    const row = await screen.findByRole("list", { name: "MCP servers" });
+    expect(row).toHaveTextContent("Connected");
+    expect(within(row).queryByRole("button", { name: "Sign in to linear" })).toBeNull();
+    await user.click(within(row).getByRole("button", { name: "Sign out of linear" }));
+    expect(props.signOutMcpServer).toHaveBeenCalledWith(TALLY, "linear");
+  });
+
+  it("says in plain words why a sign-in did not start or finish", async () => {
+    const user = userEvent.setup();
+    setup(theme, {
+      listMcpServers: vi.fn(async (projectDir: string | null) =>
+        listing({
+          projectDir,
+          servers: [
+            {
+              ...LINEAR,
+              signIn: {
+                status: "signed-out",
+                problem: "The sign-in was declined at the authorization server.",
+              },
+            },
+          ],
+        }),
+      ),
+      signInMcpServer: vi.fn(async () => ({
+        error: "Could not start signing in to linear: fetch failed.",
+      })),
+    });
+    const list = await screen.findByRole("list", { name: "MCP servers" });
+    expect(list).toHaveTextContent("The sign-in was declined at the authorization server.");
+    await user.click(within(list).getByRole("button", { name: "Sign in to linear" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not start signing in to linear: fetch failed.",
+    );
   });
 
   it("names a failure to list them", async () => {

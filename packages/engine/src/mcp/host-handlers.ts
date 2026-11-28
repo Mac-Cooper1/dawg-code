@@ -1,21 +1,31 @@
 /**
  * The protocol's MCP methods, for the host (../host/host.ts): Settings → MCP servers
  * (`mcp.list`, `mcp.restart`, `mcp.setEnabled`), the import of Claude Code's servers
- * (`mcp.importPreview`, `mcp.import`), and what a session's composer offers (`mcp.session`).
+ * (`mcp.importPreview`, `mcp.import`), what a session's composer offers (`mcp.session`), and
+ * signing in to remote servers (`mcp.signIn`, `mcp.signOut`, `mcp.cancelSignIn`, round 3).
  */
 import path from "node:path";
 import { applyMcpImport, McpImportError, planMcpImport } from "@dawg/compat";
-import { ErrorCodes, type Handlers, RpcError } from "@dawg/protocol";
+import { type ClientCapabilities, ErrorCodes, type Handlers, RpcError } from "@dawg/protocol";
 import { CommandRegistry } from "../commands/registry.ts";
 import type { SlashCommand } from "../commands/types.ts";
 import type { Engine } from "../runtime/engine.ts";
 import { RuntimeError } from "../runtime/errors.ts";
 import type { SessionRuntime } from "../runtime/session.ts";
-import { McpManagerError } from "./manager.ts";
+import type { McpConnection } from "./connection.ts";
+import { McpManagerError, type McpServerPlan } from "./manager.ts";
 
 type McpHandlers = Pick<
   Handlers,
-  "mcp.list" | "mcp.restart" | "mcp.setEnabled" | "mcp.importPreview" | "mcp.import" | "mcp.session"
+  | "mcp.list"
+  | "mcp.restart"
+  | "mcp.setEnabled"
+  | "mcp.importPreview"
+  | "mcp.import"
+  | "mcp.session"
+  | "mcp.signIn"
+  | "mcp.signOut"
+  | "mcp.cancelSignIn"
 >;
 
 function absoluteOrNull(value: string | null): void {
@@ -33,20 +43,83 @@ function asRuntimeError(error: unknown): never {
 export function mcpHandlers(
   engine: Engine,
   requireOpen: (sessionId: string) => Promise<SessionRuntime>,
+  /** What the connected client can answer: a run with nobody there never signs in. */
+  capabilities: () => Partial<ClientCapabilities> = () => ({}),
 ): McpHandlers {
   const manager = engine.mcp;
+  /** The server a sign-in method names: the session's, or the project's. */
+  const serverOf = async (params: {
+    projectDir: string | null;
+    name: string;
+    sessionId?: string | undefined;
+  }): Promise<{ plan: McpServerPlan; connection: McpConnection | null; cwd: string | null }> => {
+    absoluteOrNull(params.projectDir);
+    if (params.sessionId !== undefined) {
+      const runtime = await requireOpen(params.sessionId);
+      const found = runtime.mcp.planNamed(params.name);
+      if (found === null) {
+        throw new RuntimeError("InvalidParams", `No MCP server is named ${params.name}.`);
+      }
+      return { ...found, cwd: runtime.mcp.cwd };
+    }
+    try {
+      const plan = await manager.findPlan(params.projectDir, params.name);
+      return { plan, connection: manager.connection(plan), cwd: params.projectDir };
+    } catch (error) {
+      return asRuntimeError(error);
+    }
+  };
   return {
     "mcp.list": async (params) => {
       absoluteOrNull(params.projectDir);
-      const [servers, plan] = await Promise.all([
-        manager.list(params.projectDir),
+      const servers = async () => {
+        if (params.sessionId === undefined) return manager.list(params.projectDir);
+        const runtime = await requireOpen(params.sessionId);
+        await runtime.mcp.loadSignIns();
+        return runtime.mcp.infos();
+      };
+      const [listed, plan] = await Promise.all([
+        servers(),
         planMcpImport(manager.homeDir).catch(() => null),
       ]);
       return {
         projectDir: params.projectDir,
-        servers,
+        servers: listed,
         importable: plan?.items.filter((item) => item.action === "copy").length ?? 0,
       };
+    },
+    "mcp.signIn": async (params) => {
+      const now = capabilities();
+      if (now.permissionPrompts === false && now.questions === false) {
+        throw new RuntimeError(
+          "InvalidState",
+          "Nobody is here to finish signing in, so this run does not start one. Sign in from dawg or Settings → MCP servers first.",
+        );
+      }
+      const { plan, cwd } = await serverOf(params);
+      try {
+        return { url: await manager.signIn(plan, cwd) };
+      } catch (error) {
+        return asRuntimeError(error);
+      }
+    },
+    "mcp.signOut": async (params) => {
+      const { plan, connection } = await serverOf(params);
+      try {
+        await manager.signOut(plan);
+      } catch (error) {
+        return asRuntimeError(error);
+      }
+      return { server: manager.info(plan, connection ?? manager.connection(plan)) };
+    },
+    "mcp.cancelSignIn": async (params) => {
+      const { plan, connection } = await serverOf(params);
+      try {
+        manager.cancelSignIn(plan);
+      } catch (error) {
+        return asRuntimeError(error);
+      }
+      return { server: manager.info(plan, connection ?? manager.connection(plan)) };
     },
     "mcp.restart": async (params) => {
       absoluteOrNull(params.projectDir);

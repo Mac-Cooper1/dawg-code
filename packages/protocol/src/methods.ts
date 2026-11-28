@@ -25,6 +25,7 @@ import {
   TaskItemSchema,
   UsageSchema,
 } from "./common.ts";
+import * as elicitation from "./elicitation.ts";
 import { PendingRequestSchema, ReplayedEventsSchema } from "./events.ts";
 import * as mcp from "./mcp.ts";
 import * as subagents from "./subagents.ts";
@@ -54,6 +55,8 @@ export const ClientCapabilitiesSchema = z
     permissionPrompts: z.boolean().default(true),
     questions: z.boolean().default(true),
     planApproval: z.boolean().default(true),
+    /** An MCP server's requests for input (form and URL modes); headless runs turn it off. */
+    elicitation: z.boolean().default(true),
   })
   .prefault({});
 export type ClientCapabilities = z.infer<typeof ClientCapabilitiesSchema>;
@@ -118,6 +121,10 @@ export const SessionCreateParamsSchema = z.object({
   model: z.string().optional(),
   effort: EffortSchema.optional(),
   additionalDirectories: z.array(AbsolutePathSchema).optional(),
+  /** Added (Phase 4, round 3): the session's own MCP servers, over every other definition. */
+  mcpServers: mcp.McpSessionServersSchema.optional(),
+  /** Added (Phase 4, round 3): only `mcpServers`, none of the project's or the person's. */
+  strictMcpConfig: z.boolean().optional(),
 });
 
 export const SessionResumeParamsSchema = z.object({
@@ -452,6 +459,14 @@ export const methods = {
     result: HooksSetEnabledResultSchema,
   },
   "project.skills": { params: ProjectSkillsParamsSchema, result: ProjectSkillsResultSchema },
+  "project.subagents": {
+    params: subagents.ProjectSubagentsParamsSchema,
+    result: subagents.ProjectSubagentsResultSchema,
+  },
+  "subagent.create": {
+    params: subagents.SubagentCreateParamsSchema,
+    result: subagents.SubagentCreateResultSchema,
+  },
   "mcp.list": { params: mcp.McpListParamsSchema, result: mcp.McpListResultSchema },
   "mcp.restart": { params: mcp.McpRestartParamsSchema, result: mcp.McpRestartResultSchema },
   "mcp.setEnabled": {
@@ -464,9 +479,19 @@ export const methods = {
   },
   "mcp.import": { params: mcp.McpImportParamsSchema, result: mcp.McpImportResultSchema },
   "mcp.session": { params: mcp.McpSessionParamsSchema, result: mcp.McpSessionResultSchema },
+  "mcp.signIn": { params: mcp.McpSignInParamsSchema, result: mcp.McpSignInResultSchema },
+  "mcp.signOut": { params: mcp.McpSignOutParamsSchema, result: mcp.McpSignOutResultSchema },
+  "mcp.cancelSignIn": {
+    params: mcp.McpCancelSignInParamsSchema,
+    result: mcp.McpCancelSignInResultSchema,
+  },
   "permission.respond": { params: PermissionRespondParamsSchema, result: EmptyResultSchema },
   "question.respond": { params: QuestionRespondParamsSchema, result: EmptyResultSchema },
   "plan.respond": { params: PlanRespondParamsSchema, result: EmptyResultSchema },
+  "elicitation.respond": {
+    params: elicitation.ElicitationRespondParamsSchema,
+    result: EmptyResultSchema,
+  },
 } as const satisfies Record<string, { params: z.ZodType; result: z.ZodType }>;
 
 export type MethodName = keyof typeof methods;

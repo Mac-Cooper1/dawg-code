@@ -20,7 +20,8 @@ describe("project trust", () => {
       "UserPromptSubmit: ./scripts/add-ticket-context.sh",
       "Stop: Check that the tests pass before stopping.",
     ]);
-    expect(notes.items.find((item) => item.name.startsWith("Stop"))?.status).toBe("not-supported");
+    // A prompt hook runs too, once approved.
+    expect(notes.items.find((item) => item.name.startsWith("Stop"))?.status).toBe("loaded");
     const tally = await peer.request("project.inspect", { projectDir: TALLY });
     expect(tally.approval).toBeNull();
     // Other kinds of items come from the rest of the mock's report (compat.ts).
@@ -61,9 +62,10 @@ describe("hooks", () => {
     expect(listed.hooks.map((hook) => [hook.event, hook.status, hook.enabled])).toEqual([
       ["PreToolUse", "loaded", true],
       ["UserPromptSubmit", "loaded", true],
-      ["Stop", "not-supported", true],
+      ["Stop", "loaded", true],
       ["Notification", "loaded", true],
     ]);
+    expect(listed.hooks[2]).toMatchObject({ type: "prompt", reaches: { model: null } });
     const check = listed.hooks[0];
     expect(
       await peer.request("hooks.setEnabled", {

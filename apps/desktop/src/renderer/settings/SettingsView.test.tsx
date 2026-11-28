@@ -119,6 +119,7 @@ describe.each(THEMES)("SettingsView (%s)", (theme) => {
       "Project setup",
       "Hooks",
       "Skills and commands",
+      "Subagents",
       "MCP servers",
       "Web",
       "Shortcuts",

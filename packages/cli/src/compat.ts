@@ -132,7 +132,12 @@ export async function runCompat(options: CliOptions, io: Io): Promise<number> {
       options,
       paths,
       models: NO_MODEL,
-      capabilities: { permissionPrompts: false, questions: false, planApproval: false },
+      capabilities: {
+        permissionPrompts: false,
+        questions: false,
+        planApproval: false,
+        elicitation: false,
+      },
       onProblem: verbose,
     });
     try {

@@ -13,6 +13,7 @@ import {
   type BranchList,
   type ChangeSet,
   ChooseFolderOptionsSchema,
+  ConfigFilePathSchema,
   ConnectServerInputSchema,
   CreateWorktreeInputSchema,
   type DesktopSettings,
@@ -332,6 +333,10 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
       openExternal: async (url) => {
         const valid = validate(ExternalUrlSchema, url, "link");
         await ipc.invoke(IPC.openExternal, valid);
+      },
+      openConfigFile: async (path) => {
+        const valid = validate(ConfigFilePathSchema, path, "file");
+        await ipc.invoke(IPC.openConfigFile, valid);
       },
     },
     menu: {

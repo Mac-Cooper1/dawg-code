@@ -44,6 +44,7 @@ export type {
 export {
   type AnyTool,
   DEFAULT_TOOL_LIMITS,
+  type ElicitationRequest,
   type SessionServices,
   type SessionStateBag,
   type ToolContext,

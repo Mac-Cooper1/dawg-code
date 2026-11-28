@@ -123,7 +123,8 @@ async function nextPortReply(trigger: "connect" | "none"): Promise<unknown> {
             id: 1,
             method: "initialize",
             params: {
-              protocolVersion: 1,
+              // PROTOCOL_VERSION in @dawg/protocol; the page cannot import it.
+              protocolVersion: 2,
               client: { name: "dawg-e2e", version: "0.0.0" },
               capabilities: {},
             },

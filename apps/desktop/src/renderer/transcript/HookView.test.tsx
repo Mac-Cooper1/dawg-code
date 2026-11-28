@@ -102,6 +102,44 @@ describe("hookLine", () => {
       hookLine(hookItem({ outcome: "success", exitCode: 0, decision: "allow", message: null })),
     ).toBe("PreToolUse hook allowed Bash");
   });
+
+  it("says what the tier 2 events did", () => {
+    const at = (event: string, fields: Partial<HookItem>) =>
+      hookLine(hookItem({ hook: { ...hookItem().hook, event }, ...fields }));
+    expect(at("PermissionRequest", { outcome: "success", decision: "allow", message: null })).toBe(
+      "PermissionRequest hook allowed Bash",
+    );
+    expect(at("PermissionRequest", { decision: "deny", message: "Not on main" })).toBe(
+      "PermissionRequest hook denied Bash: Not on main",
+    );
+    expect(at("PostToolUseFailure", { decision: "block", message: "Run npm install" })).toBe(
+      "PostToolUseFailure hook gave feedback on Bash: Run npm install",
+    );
+    expect(
+      at("PreCompact", {
+        toolCallId: null,
+        toolName: null,
+        decision: "block",
+        message: "Deploying",
+      }),
+    ).toBe("PreCompact hook blocked the compaction: Deploying");
+    expect(
+      at("SubagentStop", {
+        toolCallId: null,
+        toolName: null,
+        decision: "block",
+        message: "Add tests",
+      }),
+    ).toBe("SubagentStop hook kept the agent going: Add tests");
+    expect(
+      at("PostToolBatch", {
+        toolCallId: null,
+        toolName: null,
+        decision: "block",
+        message: "Run pytest",
+      }),
+    ).toBe("PostToolBatch hook ended the turn: Run pytest");
+  });
 });
 
 describe.each(THEMES)("HookView (%s)", (theme) => {
@@ -128,6 +166,25 @@ describe.each(THEMES)("HookView (%s)", (theme) => {
     expect(screen.getByText("Exit code").nextElementSibling).toHaveTextContent("2");
     expect(screen.getByText(/took 41 ms/)).toBeInTheDocument();
     expect(screen.getByText("Matcher").nextElementSibling).toHaveTextContent("Bash");
+  });
+
+  it("names a hook that is not a command by its type and target, without an exit code", () => {
+    renderInTheme(
+      <HookView
+        item={hookItem({
+          hook: { ...hookItem().hook, type: "http", command: "http://localhost:8080/check" },
+          exitCode: null,
+        })}
+        open
+        env={makeEnv()}
+      />,
+      theme,
+    );
+    expect(screen.getByText("Type").nextElementSibling).toHaveTextContent("HTTP hook");
+    expect(screen.getByText("Address").nextElementSibling).toHaveTextContent(
+      "http://localhost:8080/check",
+    );
+    expect(screen.queryByText("Exit code")).not.toBeInTheDocument();
   });
 
   it("keeps a plain run quiet and marks blocks and failures", () => {

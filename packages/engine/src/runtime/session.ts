@@ -26,6 +26,9 @@ import {
   type ContentPart,
   type ContextBreakdown,
   type Effort,
+  type ElicitationResponse,
+  type ErrorInfo,
+  elicitationIssues,
   type ModelInfo,
   type PendingRequest,
   type PermissionMode,
@@ -38,6 +41,7 @@ import {
   type SessionSummary as ProtocolSummary,
   type QuestionResponse,
   type SessionStatus,
+  type SubagentLabel,
   type TaskItem,
   type ToolDisplay,
 } from "@dawg/protocol";
@@ -56,17 +60,25 @@ import type { PermissionState } from "../contracts/permissions.ts";
 import type { ModelProfile, PromptPrefix, SystemNote } from "../contracts/prompt.ts";
 import type {
   AnyTool,
+  ElicitationRequest,
   SessionServices,
   SessionStateBag,
   ToolContext,
   ToolProbeContext,
 } from "../contracts/tools.ts";
 import type { UtilityModel } from "../contracts/web.ts";
+import type { HookAgents } from "../hooks/agent.ts";
 import { ifRuleMatches } from "../hooks/if-rule.ts";
-import { type HookEffects, SessionHooks } from "../hooks/session-hooks.ts";
+import type { HookMcp } from "../hooks/mcp-tool.ts";
+import { type HookEffects, type HookElicitation, SessionHooks } from "../hooks/session-hooks.ts";
 import { toolResponse } from "../hooks/tool-response.ts";
 import { errorInfo, errorInfoFrom } from "../loop/errors.ts";
-import type { ExecutedCall, HookedCall, ToolHookVerdict } from "../loop/executor.ts";
+import type {
+  ExecutedCall,
+  HookedCall,
+  PermissionHookVerdict,
+  ToolHookVerdict,
+} from "../loop/executor.ts";
 import {
   type ResumedBatch,
   type RoomCheck,
@@ -75,7 +87,7 @@ import {
   type TurnHost,
 } from "../loop/turn.ts";
 import type { Emit, LoopResult } from "../loop/types.ts";
-import { MCP_STATE_KEY, type McpDecision, SessionMcp } from "../mcp/index.ts";
+import { MCP_STATE_KEY, type McpDecision, mcpToolName, SessionMcp } from "../mcp/index.ts";
 import {
   autoMemoryEnabled,
   loadMemoryIndex,
@@ -197,6 +209,8 @@ export interface RuntimeInit {
   memory?: MemoryIndex | null;
   /** The session's own MCP servers (an `mcpServers` object), over every other definition. */
   mcpServers?: Readonly<Record<string, unknown>>;
+  /** Added (round 3): only `mcpServers`, none of the project's or the person's. */
+  strictMcpConfig?: boolean;
   /** Set when this session is a subagent of another (../agents): what makes it one. */
   subagent?: SubagentRole;
   /** A main session's subagents; loaded from its folders when left out. */
@@ -249,6 +263,14 @@ function createStateBag(): SessionStateBag {
       return values.get(key) as T;
     },
   };
+}
+
+/**
+ * What a turn waits on, as the side file keeps it: an MCP server's request for input is left out,
+ * since it goes with the process and the turn cannot carry on after it (waiting-turn.ts).
+ */
+function waitingKind(kind: PendingRequest["kind"] | undefined): Sidecar["waitingOn"] {
+  return kind === undefined || kind === "elicitation" ? null : kind;
 }
 
 function abortError(): Error {
@@ -309,6 +331,8 @@ export class SessionRuntime {
   /** The prefix's MCP segment, fixed once decided. */
   #mcpSegment = "";
   #mcpSettled = false;
+  /** The session's own MCP servers and strictness, which its subagents share (../agents). */
+  readonly #ownMcp: { servers?: Readonly<Record<string, unknown>>; strict: boolean };
   /** Set when this session is a subagent (../agents). */
   readonly #role: SubagentRole | null;
   /** A main session's subagents (../agents); null in a subagent. */
@@ -372,6 +396,8 @@ export class SessionRuntime {
   #frozen = false;
   /** What the turn waits on while it is kept for the next open (runtime.json). */
   #suspendedOn: PendingRequest["kind"] | null = null;
+  /** Subagents' requests for input waiting here: an interrupt of this session's turn stops them. */
+  readonly #agentAsks = new Set<AbortController>();
   #lastOutcome: TurnOutcome | null = null;
   #lastTurnFailed: boolean;
   #closed = false;
@@ -444,6 +470,12 @@ export class SessionRuntime {
       emit: (event, fields) => this.#emit(event, fields),
       queueNote: (text) => this.#queuedNotes.push({ type: "text", text }),
       now: ctx.clock,
+      // What http, prompt, agent and mcp_tool handlers run on, read when a hook runs.
+      services: {
+        model: () => this.#utilityModel(),
+        agents: () => this.#hookAgents(),
+        mcp: () => this.#hookMcp(),
+      },
       ...(this.#role === null
         ? {}
         : {
@@ -483,12 +515,17 @@ export class SessionRuntime {
       this.#tools = [...this.#tools, skillTool];
       this.#toolMap = new Map([...ctx.toolMap, [skillTool.name, skillTool]]);
     }
-    // Subagents (../agents): a subagent gets its role's tools and no MCP tools (a fork its
-    // parent's exactly); a main session gets the Agent and SendMessage tools.
+    // Subagents (../agents): a subagent gets its role's tools, and the MCP tools its role allows
+    // once they are decided (a fork its parent's exactly); a main session gets the Agent and
+    // SendMessage tools.
     this.#baseTools = this.#tools;
+    this.#ownMcp = {
+      ...(init.mcpServers === undefined ? {} : { servers: init.mcpServers }),
+      strict: init.strictMcpConfig === true,
+    };
     const role = this.#role;
     if (role !== null) {
-      this.#mcpSettled = true;
+      this.#mcpSettled = role.fork !== null || (role.mcp ?? null) === null;
       if (role.fork !== null) {
         this.#tools = role.fork.tools;
         this.#toolMap = role.fork.toolMap;
@@ -504,7 +541,9 @@ export class SessionRuntime {
       this.#toolMap = new Map([...this.#toolMap, ...agents.tools.map((t) => [t.name, t] as const)]);
     }
     this.#memory = init.memory ?? null;
-    this.#memoryPrompt = this.#memory === null ? "" : renderMemoryPrompt(this.#memory);
+    // A subagent's own memory has its own instructions (../agents/memory.ts).
+    this.#memoryPrompt =
+      this.#memory === null ? "" : (role?.memory?.prompt ?? renderMemoryPrompt(this.#memory));
     // Always given by `start`, which opens it from the session's folder.
     this.#checkpoints = init.checkpoints as CheckpointStore;
     this.#mcp = SessionMcp.none({ sessionId: this.id, cwd: this.cwd, projectDir: this.projectDir });
@@ -609,14 +648,21 @@ export class SessionRuntime {
     });
     runtime.#bindAgents();
     opened = runtime;
-    // MCP servers start with the session; its first request waits a little for them.
-    runtime.#mcp = await SessionMcp.open(init.ctx.mcp, {
-      sessionId,
-      cwd,
-      projectDir: runtime.projectDir,
-      settingsEnv: () => runtime.#settings.env,
-      ...(init.mcpServers === undefined ? {} : { sessionServers: init.mcpServers }),
-    }).catch(() => runtime.#mcp);
+    // MCP servers start with the session; its first request waits a little for them. A typed
+    // subagent sees only what its role allows, and one with no MCP access opens none (../agents).
+    const role = init.subagent;
+    const noMcp = role !== undefined && role.fork === null && (role.mcp ?? null) === null;
+    if (!noMcp) {
+      runtime.#mcp = await SessionMcp.open(init.ctx.mcp, {
+        sessionId,
+        cwd,
+        projectDir: runtime.projectDir,
+        settingsEnv: () => runtime.#settings.env,
+        ...(init.mcpServers === undefined ? {} : { sessionServers: init.mcpServers }),
+        ...(init.strictMcpConfig === true ? { strictMcpConfig: true } : {}),
+        ...(role?.mcp == null || role.fork !== null ? {} : { filter: role.mcp }),
+      }).catch(() => runtime.#mcp);
+    }
     runtime.#bag.get(MCP_STATE_KEY, () => runtime.#mcp);
     await runtime.#prepare(init.records);
     await runtime.#hooks.reload();
@@ -1124,7 +1170,18 @@ export class SessionRuntime {
       result = { stopReason: "error", finalText: null, error: errorInfoFrom(error) };
       await this.#repairDangling().catch(() => {});
     }
-    for (const entry of [...this.#pending.values()]) this.#cancel(entry);
+    for (const entry of [...this.#pending.values()]) {
+      // A subagent's request for input is the agent's, which may work on in the background;
+      // it goes with this turn only when the turn was interrupted.
+      if (entry.ask.kind === "elicitation" && entry.ask.agent !== undefined) continue;
+      this.#cancel(entry);
+    }
+    if (result.stopReason === "interrupted") {
+      for (const stop of [...this.#agentAsks]) stop.abort();
+    }
+    if (result.stopReason === "error" && result.error !== null) {
+      this.#stopFailureHooks(turnId, result.error);
+    }
     const durationMs = Math.max(0, this.#ctx.clock() - startedAt);
     this.#emit("turn.finished", {
       turnId,
@@ -1289,6 +1346,35 @@ export class SessionRuntime {
     this.#answer("plan", requestId, response);
   }
 
+  /**
+   * Answers an MCP server's request for input (`elicitation.respond`). An accepted form must
+   * match its fields: otherwise `InvalidParams`, and the request stays pending.
+   */
+  respondElicitation(
+    requestId: string,
+    response: { action: ElicitationResponse["action"]; content?: Record<string, unknown> },
+  ): void {
+    const ask = this.#pending.get(requestId)?.ask;
+    const form = ask?.kind === "elicitation" && ask.mode === "form" && response.action === "accept";
+    if (form) {
+      const issues = elicitationIssues(ask.fields, response.content ?? {});
+      if (issues.length > 0) {
+        const named = issues.map((i) =>
+          i.field === null ? i.message : `${i.field}: ${i.message}`,
+        );
+        throw new RuntimeError(
+          "InvalidParams",
+          `The answer does not fit the form. ${named.join(" ")}`,
+        );
+      }
+    }
+    const answer: ElicitationResponse = {
+      action: response.action,
+      content: form ? ((response.content ?? {}) as ElicitationResponse["content"]) : null,
+    };
+    this.#answer("elicitation", requestId, answer);
+  }
+
   /** Requests waiting on the person, oldest first. */
   pending(): PendingRequest[] {
     return [...this.#pending.values()].map((p) => p.ask);
@@ -1336,6 +1422,13 @@ export class SessionRuntime {
           ...base,
           kind: "plan",
           response: response as PlanResponse | null,
+        });
+        break;
+      case "elicitation":
+        this.#emit("request.resolved", {
+          ...base,
+          kind: "elicitation",
+          response: response as ElicitationResponse | null,
         });
         break;
     }
@@ -1408,6 +1501,28 @@ export class SessionRuntime {
             modeBeforePlan: ask.modeBeforePlan,
           });
           break;
+        case "elicitation": {
+          const { kind: _kind, ...asked } = ask;
+          this.#emit("elicitation.requested", asked);
+          // Added (Phase 4, hooks): Notification hooks fire if the form still waits after a few
+          // seconds, as for a permission request.
+          if (this.#hooks.has("Notification")) {
+            const { server, mode } = ask;
+            const timer = setTimeout(() => {
+              if (this.#pending.has(requestId)) {
+                this.#notify(
+                  mode === "url" ? "elicitation_url_dialog" : "elicitation_dialog",
+                  mode === "url"
+                    ? `${server} asks you to open a page`
+                    : `${server} asks for your input`,
+                  ask.turnId,
+                );
+              }
+            }, this.#ctx.limits.permissionNotificationMs);
+            timer.unref?.();
+          }
+          break;
+        }
       }
       this.#refreshStatus();
     });
@@ -1641,8 +1756,49 @@ export class SessionRuntime {
   }): Promise<CompactionOutcome> {
     const ctx = this.#ctx;
     const compactionId = ctx.newId("compaction");
+    // PreCompact hooks (../hooks) may block it, or give instructions for the summary.
+    const pre = await this.#hooks
+      .preCompact({
+        trigger: input.trigger,
+        customInstructions: input.trigger === "manual" ? input.focus : null,
+        turnId: input.turnId,
+        signal: input.signal,
+      })
+      .catch(() => ({ blocked: null, instructions: [] as string[] }));
+    if (input.signal.aborted) return { outcome: "interrupted", summary: null, error: null };
     const before = Math.round(await this.#predictContext());
     const window = this.#contextWindow();
+    if (pre.blocked !== null) {
+      const info = errorInfo(
+        "other",
+        `A PreCompact hook blocked the compaction${pre.blocked.reason === null ? "." : `: ${pre.blocked.reason}`}`,
+        null,
+        false,
+      );
+      // An automatic one is skipped quietly (the hook's line says why); one the person asked for
+      // says it did not happen.
+      if (input.trigger === "manual") {
+        this.#emit("compaction.started", {
+          compactionId,
+          trigger: input.trigger,
+          turnId: input.turnId,
+          contextUsed: before,
+          contextWindow: window,
+          focus: input.focus,
+        });
+        this.#emit("compaction.finished", {
+          compactionId,
+          outcome: "failed",
+          summary: null,
+          contextBefore: before,
+          contextAfter: null,
+          error: info,
+        });
+      }
+      return { outcome: "failed", summary: null, error: info };
+    }
+    const instructions = [input.focus ?? "", ...pre.instructions].filter((t) => t.trim() !== "");
+    const focus = instructions.length === 0 ? null : instructions.join("\n\n");
     this.#emit("compaction.started", {
       compactionId,
       trigger: input.trigger,
@@ -1663,7 +1819,7 @@ export class SessionRuntime {
         prefix: this.#prefix,
         history: this.#writer.snapshot.view,
         client,
-        focus: input.focus,
+        focus,
         tasks: this.tasks,
         recentFiles: await this.#recentFiles(),
         ...(input.from === undefined ? {} : { from: input.from }),
@@ -1718,6 +1874,9 @@ export class SessionRuntime {
         error: null,
       });
       this.#emitUsage();
+      await this.#hooks
+        .postCompact({ trigger: input.trigger, summary: result.summary, turnId: input.turnId })
+        .catch(() => {});
       // SessionStart hooks run again after a compaction (source "compact"); their context
       // waits for the next safe point.
       await this.#runSessionStart("compact");
@@ -1936,7 +2095,14 @@ export class SessionRuntime {
     } catch {
       return; // A failure here leaves the session without MCP tools, not without a turn.
     }
-    const added = decision.tools.filter((t) => !this.#toolMap.has(t.name));
+    // A subagent's servers were filtered already; the tools that come with them stay unless
+    // its file takes them away (../agents/mcp.ts).
+    const access = this.#role?.mcp ?? null;
+    const added = decision.tools.filter(
+      (t) =>
+        !this.#toolMap.has(t.name) &&
+        (access === null || t.name.startsWith("mcp__") || access.keeps(t.name)),
+    );
     if (added.length === 0 && decision.segment === "") return;
     this.#tools = [...this.#tools, ...added];
     this.#toolMap = new Map([...this.#toolMap, ...added.map((t) => [t.name, t] as const)]);
@@ -1947,6 +2113,7 @@ export class SessionRuntime {
       skills: this.#skills.listing,
       mcp: this.#mcpSegment,
       memory: this.#memoryPrompt,
+      ...this.#agentPrefix(),
     });
   }
 
@@ -2001,7 +2168,12 @@ export class SessionRuntime {
       const waitingOn = this.#firstPending()?.ask.kind ?? null;
       if (this.#restoredTurn?.running === false) {
         // Still waiting since it was brought back: it waits on for the next open, as it is.
-      } else if (this.#busy?.kind === "turn" && waitingOn !== null) {
+      } else if (
+        this.#busy?.kind === "turn" &&
+        waitingOn !== null &&
+        // An MCP server's request lives on its connection, which goes with the process.
+        ![...this.#pending.values()].some((p) => p.ask.kind === "elicitation")
+      ) {
         // Waiting on the person: the turn is let go without being ended, so the next open
         // brings the request back (see waiting-turn.ts) instead of closing it as interrupted.
         this.#suspendedOn = waitingOn;
@@ -2243,7 +2415,7 @@ export class SessionRuntime {
 
   #refreshStatus(): void {
     let status: SessionStatus;
-    let waitingOn: "permission" | "question" | "plan" | null = null;
+    let waitingOn: PendingRequest["kind"] | null = null;
     let message: string | null = null;
     let queuePosition: number | null = null;
     const first = this.#pending.values().next().value as PendingEntry | undefined;
@@ -2255,7 +2427,9 @@ export class SessionRuntime {
           ? "Waiting for permission"
           : waitingOn === "question"
             ? "Waiting for an answer"
-            : "Waiting for plan approval";
+            : waitingOn === "elicitation"
+              ? "Waiting for your input"
+              : "Waiting for plan approval";
     } else if (this.#busy !== null) {
       status = "working";
       queuePosition = this.#queuePosition;
@@ -2288,7 +2462,7 @@ export class SessionRuntime {
       effort: this.#effort,
       lastTurnFailed: this.#lastTurnFailed,
       forkPoint: this.#forkPoint,
-      waitingOn: this.#suspendedOn ?? this.#firstPending()?.ask.kind ?? null,
+      waitingOn: this.#suspendedOn ?? waitingKind(this.#firstPending()?.ask.kind),
     });
   }
 
@@ -2297,6 +2471,7 @@ export class SessionRuntime {
     // A subagent's request is not the session's own turn waiting (it ends with the agent).
     for (const entry of this.#pending.values()) {
       if (entry.ask.kind === "permission" && entry.ask.request.agent !== undefined) continue;
+      if (entry.ask.kind === "elicitation" && entry.ask.agent !== undefined) continue;
       return entry;
     }
     return undefined;
@@ -2494,11 +2669,60 @@ export class SessionRuntime {
         }
       }
     }
+    // PostToolBatch hooks (../hooks): once per batch, with every call's result as the model
+    // reads it. What they add goes in before the next request; a block ends the turn here.
+    if (this.#hooks.has("PostToolBatch") && executed.length > 0) {
+      const signal = this.#busy?.controller.signal;
+      const effects = await this.#hooks.postToolBatch({
+        turnId: this.activeTurnId,
+        calls: executed.map((e) => ({
+          toolName: e.call.name,
+          toolInput: parsedArguments(e.call.arguments),
+          toolCallId: e.call.id,
+          toolResponse: promptText(e.result.content) ?? "",
+        })),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      this.#applyHookEffects(effects);
+    }
   }
 
   // -------------------------------------------------------------------------------------------
   // Internals: hooks (../hooks)
   // -------------------------------------------------------------------------------------------
+
+  /**
+   * Added (Phase 4, hooks): UserPromptExpansion hooks for a command the person typed, before it
+   * expands (../skills/commands.ts, ../mcp/session-mcp.ts). Their context waits for the turn's
+   * start. Resolves with what to tell the person when a hook blocked it, else null.
+   */
+  async commandExpansionHooks(command: {
+    expansionType: "slash_command" | "mcp_prompt";
+    name: string;
+    args: string;
+    source: string;
+  }): Promise<string | null> {
+    if (this.#closed || !this.#hooks.has("UserPromptExpansion")) return null;
+    const verdict = await this.#hooks.userPromptExpansion(command);
+    if (verdict.blocked !== null) {
+      return `A UserPromptExpansion hook blocked /${command.name}${verdict.blocked.reason === null ? "." : `: ${verdict.blocked.reason}`}`;
+    }
+    for (const text of verdict.notes) this.#queuedNotes.push({ type: "text", text });
+    return null;
+  }
+
+  /**
+   * StopFailure hooks, when a turn ended because the model's server failed. Their output is
+   * ignored, so nothing waits for them.
+   */
+  #stopFailureHooks(turnId: string, error: ErrorInfo): void {
+    if (this.#closed || !this.#hooks.has("StopFailure")) return;
+    const name = stopFailureError(error);
+    if (name === null) return;
+    void this.#hooks
+      .stopFailure({ turnId, error: name, details: error.detail, message: error.message })
+      .catch(() => {});
+  }
 
   /** Notes and requests hooks left: notes for the next safe point, a stop, a new title. */
   #applyHookEffects(effects: HookEffects): void {
@@ -2611,6 +2835,167 @@ export class SessionRuntime {
     this.#applyHookEffects(effects);
   }
 
+  /**
+   * PermissionRequest hooks, when a call would ask the person: their answer, with the permission
+   * updates an allow carries applied once the allow stands.
+   */
+  async #permissionRequestHooks(
+    call: HookedCall & { suggestions: readonly string[] },
+    signal: AbortSignal,
+  ): Promise<PermissionHookVerdict> {
+    if (!this.#hooks.has("PermissionRequest")) {
+      return { behavior: null, updatedInput: null, message: null };
+    }
+    const verdict = await this.#hooks.permissionRequest({
+      turnId: call.turnId,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      toolInput: call.input,
+      suggestions: call.suggestions,
+      signal,
+      ifMatches: this.#ifMatches(call.toolName, call.input),
+    });
+    this.#applyHookEffects(verdict);
+    // "interrupt: if true, stops Claude": the turn ends at the next safe point.
+    if (verdict.behavior === "deny" && verdict.interrupt) this.#hookStop = true;
+    const updates = verdict.updatedPermissions;
+    return {
+      behavior: verdict.behavior,
+      updatedInput: verdict.updatedInput,
+      message: verdict.message,
+      ...(updates.length === 0 ? {} : { accepted: () => this.#applyPermissionUpdates(updates) }),
+    };
+  }
+
+  /**
+   * A PermissionRequest hook's `updatedPermissions` (reference, "Permission update entries"):
+   * rules added for the session, or saved to the project's personal dawg settings for
+   * `localSettings`; a mode the settings allow; working directories. dawg never writes Claude
+   * Code's files, so `projectSettings` and `userSettings` rules hold for this session only.
+   * `replaceRules` and `removeRules` are not applied. Never throws.
+   */
+  async #applyPermissionUpdates(entries: readonly Record<string, unknown>[]): Promise<void> {
+    const lists = ["allow", "ask", "deny"] as const;
+    for (const entry of entries) {
+      try {
+        if (entry.type === "addRules") {
+          const list = lists.find((l) => l === entry.behavior);
+          const rules = (Array.isArray(entry.rules) ? entry.rules : []).flatMap((r) => {
+            if (r === null || typeof r !== "object") return [];
+            const { toolName, ruleContent } = r as Record<string, unknown>;
+            if (typeof toolName !== "string" || toolName.trim() === "") return [];
+            return [
+              typeof ruleContent === "string" && ruleContent !== ""
+                ? `${toolName}(${ruleContent})`
+                : toolName,
+            ];
+          });
+          if (list === undefined || rules.length === 0) continue;
+          if (this.#role !== null) {
+            // A subagent is judged by its parent's rules: only "always allow" reaches them.
+            if (list === "allow") await this.#role.allowAlways(rules);
+            continue;
+          }
+          if (list === "allow" && entry.destination === "localSettings") {
+            await this.#allowAlways(rules);
+            continue;
+          }
+          const from = { source: "session" as const, origin: null, path: null };
+          const known = new Set(this.#rules[list].map((r) => r.rule));
+          const added = rules.filter((r) => !known.has(r)).map((rule) => ({ rule, from }));
+          this.#rules = { ...this.#rules, [list]: [...added, ...this.#rules[list]] };
+          if (entry.destination === "localSettings") {
+            await addPermissionRules({ projectDir: this.projectDir, list, rules }).catch(() => {});
+          }
+        } else if (entry.type === "setMode" && this.#role === null) {
+          const mode = entry.mode === "manual" ? "default" : entry.mode;
+          const known: readonly PermissionMode[] = [
+            "default",
+            "acceptEdits",
+            "plan",
+            "dontAsk",
+            "bypassPermissions",
+          ];
+          const next = known.find((m) => m === mode);
+          if (next !== undefined && next !== this.#mode && this.#modeAllowed(next)) {
+            this.#applyMode(next);
+          }
+        } else if (entry.type === "addDirectories" && this.#role === null) {
+          const dirs = Array.isArray(entry.directories) ? entry.directories : [];
+          for (const dir of dirs) {
+            if (typeof dir === "string" && dir.trim() !== "") {
+              await this.addDirectory(dir).catch(() => {});
+            }
+          }
+        }
+      } catch {
+        // One entry that cannot be applied does not keep the others, or the call, back.
+      }
+    }
+  }
+
+  /** PostToolUseFailure hooks, after a call that ran and failed; what they say is kept. */
+  async #postToolUseFailureHooks(
+    call: HookedCall & { error: string; isInterrupt: boolean; durationMs: number | null },
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!this.#hooks.has("PostToolUseFailure")) return;
+    const effects = await this.#hooks.postToolUseFailure({
+      turnId: call.turnId,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      toolInput: call.input,
+      error: call.error,
+      isInterrupt: call.isInterrupt,
+      durationMs: call.durationMs,
+      signal,
+      ifMatches: this.#ifMatches(call.toolName, call.input),
+    });
+    this.#applyHookEffects(effects);
+  }
+
+  /** What agent hooks run on: this session's subagents (none in a subagent's own session). */
+  #hookAgents(): HookAgents | null {
+    const agents = this.#agents;
+    return agents === null ? null : { check: (task) => agents.check(task) };
+  }
+
+  /**
+   * What mcp_tool hooks call through: this session's MCP servers, by `dispatch`, so the
+   * arguments are checked against the tool's schema. No permission check or tool hooks: the
+   * settings asked for the call, as they ask for a command.
+   */
+  #hookMcp(): HookMcp {
+    return {
+      call: async ({ server, tool, args, waitMs, signal }) => {
+        if (waitMs > 0) await this.#mcp.whenServerSettled(server, waitMs);
+        const resolved = this.#mcp.dispatch(mcpToolName(server, tool), args);
+        if ("error" in resolved) {
+          return {
+            error: `MCP tool "${tool}" on server "${server}" cannot be called: ${resolved.error
+              .replace(/^Error: /, "")
+              .replace(/ Use ToolSearch.*$/, "")}`,
+          };
+        }
+        const context: ToolContext = {
+          ...this.#toolContext({
+            turnId: this.activeTurnId ?? "hook",
+            toolCallId: this.#ctx.newId("call"),
+            signal,
+          }),
+          // Not a call of the conversation's: nothing to show progress on.
+          progress: () => {},
+        };
+        const output = await resolved.tool.execute(resolved.input, context);
+        const text = output.content
+          .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
+          .map((p) => p.text)
+          .join("\n");
+        return { isError: output.isError === true, text };
+      },
+    };
+  }
+
   /** Stop hooks: true when they keep the turn going, with what they said appended. */
   async #stopHooks(turn: {
     turnId: string;
@@ -2633,7 +3018,16 @@ export class SessionRuntime {
    * Notification hooks when dawg needs the person: a permission request still unanswered after a
    * few seconds ("permission_prompt"), or no new prompt a while after a turn ("idle_prompt").
    */
-  #notify(type: "permission_prompt" | "idle_prompt", message: string, turnId: string | null): void {
+  #notify(
+    type:
+      | "permission_prompt"
+      | "idle_prompt"
+      | "elicitation_dialog"
+      | "elicitation_url_dialog"
+      | "elicitation_response",
+    message: string,
+    turnId: string | null,
+  ): void {
     if (this.#closed || !this.#hooks.has("Notification")) return;
     void this.#hooks.notification({ type, message, title: "dawg", turnId }).catch(() => {});
   }
@@ -2738,7 +3132,77 @@ export class SessionRuntime {
         this.#planApprovedInto = next;
         return { approved: true };
       },
+      // An MCP server's request for input during this call (../mcp/elicitation.ts). A
+      // subagent's goes to its parent, labelled with it, as its permission requests do.
+      elicit: (request, asked) => {
+        const waiting = AbortSignal.any([signal, asked]);
+        if (this.#role === null) return this.#elicit(request, turnId, waiting, null);
+        const parent = this.#role.elicit;
+        if (parent === undefined) return Promise.reject(new NoOneToAskError());
+        return parent(request, turnId, waiting);
+      },
     };
+  }
+
+  /**
+   * An MCP server's request for input, this session's or (with `agent`) one of its subagents'
+   * (../mcp/elicitation.ts): Elicitation hooks may answer in the person's place, so the form is
+   * never shown (also where nobody could answer it); otherwise it is raised here, and
+   * ElicitationResult hooks see the person's answer and may change it before the server gets it.
+   */
+  async #elicit(
+    request: ElicitationRequest,
+    turnId: string,
+    signal: AbortSignal,
+    agent: SubagentLabel | null,
+  ): Promise<ElicitationResponse> {
+    let waiting = signal;
+    // A subagent's outlives the parent's turn, unless that turn is interrupted.
+    const stop = agent === null ? null : new AbortController();
+    if (stop !== null) {
+      this.#agentAsks.add(stop);
+      waiting = AbortSignal.any([signal, stop.signal]);
+    }
+    try {
+      const hooked: HookElicitation = {
+        server: request.server,
+        message: request.message,
+        mode: request.mode,
+        fields: request.fields,
+        requestedSchema: request.requestedSchema ?? null,
+        url: request.url,
+        elicitationId: request.elicitationId ?? null,
+        turnId,
+        toolCallId: request.toolCallId,
+        signal: waiting,
+      };
+      const byHook = await this.#hooks.elicitation(hooked);
+      if (byHook !== null) {
+        this.#notify("elicitation_response", `dawg answered ${request.server}'s request`, turnId);
+        return byHook;
+      }
+      if (!this.#capabilities.elicitation) throw new NoOneToAskError();
+      const answer = await this.#raise<ElicitationResponse>(
+        {
+          kind: "elicitation",
+          turnId,
+          requestId: this.#ctx.newId("request"),
+          toolCallId: request.toolCallId,
+          server: request.server,
+          message: request.message,
+          mode: request.mode,
+          fields: request.fields,
+          url: request.url,
+          ...(agent === null ? {} : { agent }),
+        },
+        waiting,
+      );
+      const final = await this.#hooks.elicitationResult(hooked, answer);
+      this.#notify("elicitation_response", `dawg answered ${request.server}'s request`, turnId);
+      return final;
+    } finally {
+      if (stop !== null) this.#agentAsks.delete(stop);
+    }
   }
 
   #toolContext(call: { turnId: string; toolCallId: string; signal: AbortSignal }): ToolContext {
@@ -2906,6 +3370,8 @@ export class SessionRuntime {
       sleep,
       preToolUse: (call, signal) => this.#preToolUseHooks(call, signal),
       postToolUse: (call, signal) => this.#postToolUseHooks(call, signal),
+      permissionRequest: (call, signal) => this.#permissionRequestHooks(call, signal),
+      postToolUseFailure: (call, signal) => this.#postToolUseFailureHooks(call, signal),
       onStop: (turn) =>
         this.#role !== null ? this.#subagentStopHooks(this.#role, turn) : this.#stopHooks(turn),
       hookStopRequested: () => this.#hookStop,
@@ -2961,6 +3427,9 @@ export class SessionRuntime {
       cwd: this.cwd,
       projectDir: this.projectDir,
       sessionDir: this.#sessionDir,
+      storeRoot: ctx.storeRoot,
+      // An agent's own memory follows the session's auto memory switch (../agents/memory.ts).
+      memoryOn: async () => ctx.autoMemory && (await autoMemoryEnabled(this.#settings.files)),
       hooks: this.#hooks,
       emit: this.#emit,
       now: ctx.clock,
@@ -2970,6 +3439,7 @@ export class SessionRuntime {
       canAskPermission: () => this.#capabilities.permissionPrompts,
       askPermission: (request, turnId, signal) =>
         this.#raise<PermissionResponse>({ kind: "permission", turnId, request }, signal),
+      elicit: (request, turnId, signal, agent) => this.#elicit(request, turnId, signal, agent),
       allowAlways: (rules) => this.#allowAlways(rules),
       activeTurnId: () => this.activeTurnId,
       busy: () => this.#busy !== null,
@@ -3015,6 +3485,9 @@ export class SessionRuntime {
             model: this.#model,
             effort: this.#effort,
             additionalDirectories: this.#dirs,
+            // Its agents share the session's own MCP servers (and `--strict-mcp-config`).
+            ...(this.#ownMcp.servers === undefined ? {} : { mcpServers: this.#ownMcp.servers }),
+            strictMcpConfig: this.#ownMcp.strict,
           },
           connection: this.#connection,
           // Its permission prompts go to whoever answers the parent's; nobody answers its
@@ -3023,6 +3496,7 @@ export class SessionRuntime {
             permissionPrompts: this.#capabilities.permissionPrompts,
             questions: false,
             planApproval: false,
+            elicitation: false,
           },
           childId: input.childId,
           cwd: input.cwd,
@@ -3036,6 +3510,45 @@ export class SessionRuntime {
   /** Reads the session's runtime.json, for tests and tools. */
   static readSidecar(sessionDir: string): Promise<Sidecar | null> {
     return readSidecar(sessionDir);
+  }
+}
+
+/** A call's arguments as an object, for hooks; `{}` when they are not one. */
+function parsedArguments(text: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(text);
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * StopFailure's `error` for a turn that failed, in the reference's names, or null when the turn
+ * did not fail on the model's server (a tool, the transcript, a repeated call).
+ */
+function stopFailureError(error: ErrorInfo): string | null {
+  const said = `${error.message} ${error.detail ?? ""}`;
+  switch (error.kind) {
+    case "model_unavailable":
+      return "server_error";
+    case "context_overflow":
+      return "invalid_request";
+    case "invalid_model_output":
+      return /output limit/i.test(said) ? "max_output_tokens" : null;
+    case "model_error": {
+      const status = Number(/HTTP (\d{3})/.exec(error.message)?.[1] ?? Number.NaN);
+      if (status === 429) return "rate_limit";
+      if (status === 401 || status === 403) return "authentication_failed";
+      if (status === 404) return "model_not_found";
+      if (status >= 400 && status < 500) return "invalid_request";
+      if (status >= 500) return "server_error";
+      return "unknown";
+    }
+    default:
+      return null;
   }
 }
 

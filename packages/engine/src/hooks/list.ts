@@ -6,11 +6,33 @@
  * for one person's choice.
  */
 import path from "node:path";
-import { hookItem, loadHooks } from "@dawg/compat";
-import type { HookInfo } from "@dawg/protocol";
+import { type HookHandler, hookItem, loadHooks } from "@dawg/compat";
+import type { HookInfo, HookReaches } from "@dawg/protocol";
 import { RuntimeError } from "../runtime/errors.ts";
 import { hookId } from "../trust/definitions.ts";
 import type { CodeTrust } from "../trust/index.ts";
+
+/** What a hook that is not a command reaches, for Settings → Hooks; null for a command. */
+export function hookReaches(handler: HookHandler): HookReaches | null {
+  switch (handler.type) {
+    case "http": {
+      let host: string | null = null;
+      try {
+        host = handler.url === null ? null : new URL(handler.url).host;
+      } catch {
+        host = null;
+      }
+      return { host, model: null, server: null, tool: null };
+    }
+    case "prompt":
+    case "agent":
+      return { host: null, model: handler.model, server: null, tool: null };
+    case "mcp_tool":
+      return { host: null, model: null, server: handler.server, tool: handler.tool };
+    default:
+      return null;
+  }
+}
 
 export interface HookList {
   projectDir: string | null;
@@ -36,7 +58,7 @@ export async function listHooks(
   );
   const hooks: HookInfo[] = [];
   for (const hook of loaded.hooks) {
-    const item = await hookItem(hook, { projectDir, homeDir: options.homeDir });
+    const item = await hookItem(hook, { projectDir, homeDir: options.homeDir, http: loaded.http });
     const id = hookId(hook);
     let status = item.status;
     const notes = [...item.notes];
@@ -59,6 +81,7 @@ export async function listHooks(
       status,
       notes,
       enabled: !off.has(id),
+      reaches: hookReaches(hook.handler),
     });
   }
   return { projectDir, hooks, disabledBy: loaded.disabledBy };

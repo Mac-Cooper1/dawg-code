@@ -16,7 +16,12 @@ import { approveProjectCode, hookLine, skippedLine } from "./trust.ts";
 
 type TurnFinished = EventPayload<"turn.finished">;
 
-const NOBODY = { permissionPrompts: false, questions: false, planApproval: false };
+const NOBODY = {
+  permissionPrompts: false,
+  questions: false,
+  planApproval: false,
+  elicitation: false,
+};
 
 async function promptText(options: CliOptions, io: Io): Promise<string> {
   if (options.prompt !== null && options.prompt.trim() !== "") return options.prompt;
@@ -90,7 +95,7 @@ export async function runHeadless(options: CliOptions, io: Io): Promise<number> 
     if (options.approveProjectCode && options.resume === null) {
       await approveProjectCode(client, cwd, log);
     }
-    const snapshot = await openSession(client, options, cwd, log);
+    const snapshot = await openSession(client, options, cwd, log, io.cwd);
     if (options.approveProjectCode && options.resume !== null) {
       await approveProjectCode(client, snapshot.session.projectDir, log);
     }
@@ -214,6 +219,16 @@ export async function runHeadless(options: CliOptions, io: Io): Promise<number> 
       log(`Stopped: the turn reached its limit of ${options.maxTurns ?? "200"} model requests.`);
     }
     if (stopReason === "interrupted") log("Interrupted.");
+    // A run never starts a sign-in: say which servers it went without, and where to sign in.
+    const unsigned = await client
+      .request("mcp.list", { projectDir: snapshot.session.projectDir, sessionId })
+      .then((listed) => listed.servers.filter((s) => s.state === "needs-sign-in"))
+      .catch(() => []);
+    for (const server of unsigned) {
+      log(
+        `The MCP server ${server.name} needs sign-in, so this run went without it. Sign in with /mcp login ${server.name} in dawg, or in Settings → MCP servers.`,
+      );
+    }
 
     if (options.outputFormat === "text") {
       if (result !== "") io.stdout.write(result.endsWith("\n") ? result : `${result}\n`);

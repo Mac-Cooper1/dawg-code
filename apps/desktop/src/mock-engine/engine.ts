@@ -9,9 +9,12 @@
  */
 import {
   createServer,
+  type ElicitationContent,
+  type ElicitationResponse,
   type EngineEvent,
   ErrorCodes,
   EVENT_NAMES,
+  elicitationIssues,
   type ForkPoint,
   type Handlers,
   METHOD_NAMES,
@@ -36,6 +39,7 @@ import {
 import { realClock } from "./clock.ts";
 import { contextText, helpText } from "./commands.ts";
 import { mockSetupItems, sortReportItems } from "./compat.ts";
+import { asksForElicitation, elicitationTurn } from "./elicitation.ts";
 import { type LoadedScenario, pickBranch } from "./format.ts";
 import {
   breakdownAfter,
@@ -65,6 +69,7 @@ import {
 } from "./session.ts";
 import { mockSkills } from "./skills.ts";
 import { requestIdOf, toolCallOf } from "./state.ts";
+import { MockSubagentFiles } from "./subagent-files.ts";
 import { asksForAgent, MockAgents } from "./subagents.ts";
 import { MockTrust } from "./trust.ts";
 import { compactAtFor } from "./usage.ts";
@@ -115,6 +120,8 @@ class Engine implements MockEngine {
   readonly #agents: MockAgents;
   /** MCP servers (mcp.ts). */
   readonly #mcp: MockMcp;
+  /** Subagent definitions and the files the "New subagent" form writes (subagent-files.ts). */
+  readonly #agentFiles: MockSubagentFiles;
   /** Sessions made from scenarios, in the order given. */
   readonly #scenarioSessions: MockSession[];
   #playbackStarted = false;
@@ -127,6 +134,7 @@ class Engine implements MockEngine {
     this.#homeDir = options.homeDir;
     this.#trust = new MockTrust(options.homeDir);
     this.#mcp = new MockMcp(options.homeDir);
+    this.#agentFiles = new MockSubagentFiles(options.homeDir);
     this.#agents = new MockAgents({
       clock: this.#clock,
       speed: this.#speed,
@@ -495,8 +503,16 @@ class Engine implements MockEngine {
         this.#agents.stop(this.#openHere(connection, params.sessionId), params.agentId),
       // Settings → Skills and commands (skills.ts).
       "project.skills": (params) => mockSkills(params.projectDir, this.#homeDir),
+      // Settings → Subagents (subagent-files.ts).
+      "project.subagents": (params) => this.#agentFiles.list(params.projectDir),
+      "subagent.create": (params) => this.#agentFiles.create(params),
       // MCP servers, as the real engine answers for them (mcp.ts).
-      "mcp.list": (params) => this.#mcp.list(params.projectDir),
+      "mcp.list": (params) => this.#mcp.list(params.projectDir, params.sessionId),
+      "mcp.signIn": (params) => this.#mcp.signIn(params.projectDir, params.name, params.sessionId),
+      "mcp.signOut": (params) =>
+        this.#mcp.signOut(params.projectDir, params.name, params.sessionId),
+      "mcp.cancelSignIn": (params) =>
+        this.#mcp.cancelSignIn(params.projectDir, params.name, params.sessionId),
       "mcp.restart": (params) => this.#mcp.restart(params.projectDir, params.name),
       "mcp.setEnabled": (params) =>
         this.#mcp.setEnabled(params.projectDir, params.name, params.enabled),
@@ -510,6 +526,7 @@ class Engine implements MockEngine {
         this.#respond(connection, params, { kind: "question", response: params.response }),
       "plan.respond": (params) =>
         this.#respond(connection, params, { kind: "plan", response: params.response }),
+      "elicitation.respond": (params) => this.#respondElicitation(connection, params),
     };
   }
 
@@ -588,6 +605,8 @@ class Engine implements MockEngine {
       archived: false,
       additionalDirectories: params.additionalDirectories ?? [],
     });
+    // The session's own MCP servers come from the person: no approval (mcp.ts).
+    this.#mcp.setSessionServers(session.id, params.mcpServers, params.strictMcpConfig);
     return this.#open(connection, session).snapshot();
   }
 
@@ -649,6 +668,12 @@ class Engine implements MockEngine {
     if (asksForAgent(text)) {
       // A scripted Agent call (subagents.ts).
       const { turnId, steps } = this.#agents.turn(session, text);
+      this.#play(session, steps);
+      return { turnId };
+    }
+    if (asksForElicitation(text)) {
+      // A scripted MCP server's request for input (elicitation.ts).
+      const { turnId, steps } = elicitationTurn(session, this.#pace.speed, text);
       this.#play(session, steps);
       return { turnId };
     }
@@ -765,6 +790,8 @@ class Engine implements MockEngine {
         return { ...none, output: rewindText(session.log) };
       case "memory":
         return { ...none, output: memoryText(session.settings.projectDir) };
+      case "agents":
+        return { ...none, output: this.#agentFiles.text(session.settings.projectDir) };
       case "context":
         return { ...none, output: contextText(session) };
       case "compact":
@@ -875,6 +902,35 @@ class Engine implements MockEngine {
     ]);
   }
 
+  /** An answer to a server's request for input, checked against its form as the engine does. */
+  #respondElicitation(
+    connection: Connection,
+    params: {
+      sessionId: string;
+      requestId: string;
+      action: ElicitationResponse["action"];
+      content?: ElicitationContent | undefined;
+    },
+  ): Record<string, never> {
+    const session = this.#openHere(connection, params.sessionId);
+    const request = session.state.pending.get(params.requestId);
+    const form =
+      request?.kind === "elicitation" && request.mode === "form" && params.action === "accept";
+    if (form) {
+      const issues = elicitationIssues(request.fields, params.content ?? {});
+      if (issues.length > 0) {
+        throw new RpcError(
+          ErrorCodes.InvalidParams,
+          `The answer does not fit the form. ${issues.map((i) => `${i.field ?? "form"}: ${i.message}`).join(" ")}`,
+        );
+      }
+    }
+    return this.#respond(connection, params, {
+      kind: "elicitation",
+      response: { action: params.action, content: form ? (params.content ?? {}) : null },
+    });
+  }
+
   #respond(
     connection: Connection,
     params: { sessionId: string; requestId: string },
@@ -950,6 +1006,13 @@ function emitAnswer(
     case "plan":
       session.emit("request.resolved", { ...base, kind: "plan", response: decision.response });
       return;
+    case "elicitation":
+      session.emit("request.resolved", {
+        ...base,
+        kind: "elicitation",
+        response: decision.response,
+      });
+      return;
   }
 }
 
@@ -960,6 +1023,7 @@ function raisedRequestId(event: EngineEvent): string | null {
       return event.payload.request.requestId;
     case "question.asked":
     case "plan.proposed":
+    case "elicitation.requested":
       return event.payload.requestId;
     default:
       return null;

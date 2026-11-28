@@ -5,6 +5,7 @@
  * it is judged by, where its questions for the person go, and what happens when it stops.
  */
 import type {
+  ElicitationResponse,
   PermissionMode,
   PermissionRequest,
   PermissionResponse,
@@ -12,7 +13,9 @@ import type {
 } from "@dawg/protocol";
 import type { PermissionState } from "../contracts/permissions.ts";
 import type { PromptPrefix } from "../contracts/prompt.ts";
-import type { AnyTool } from "../contracts/tools.ts";
+import type { AnyTool, ElicitationRequest } from "../contracts/tools.ts";
+import type { AgentMcpAccess } from "./mcp.ts";
+import type { AgentMemory } from "./memory.ts";
 
 export interface SubagentRole {
   label: SubagentLabel;
@@ -41,6 +44,17 @@ export interface SubagentRole {
     turnId: string,
     signal: AbortSignal,
   ): Promise<PermissionResponse>;
+  /**
+   * Added (round 3, MCP elicitation): an MCP server's request for input during one of its calls,
+   * raised in the parent session labelled with it, the parent's hooks run on it. Rejects with
+   * `NoOneToAskError` when the parent's client cannot answer, and when `signal` aborts. Absent:
+   * nobody is asked.
+   */
+  elicit?(
+    request: ElicitationRequest,
+    turnId: string,
+    signal: AbortSignal,
+  ): Promise<ElicitationResponse>;
   /** "Allow always" rules, saved and applied for the parent (and so for every agent of it). */
   allowAlways(rules: readonly string[]): Promise<void>;
   /** Model requests per task before it stops, or null for the engine's limit. */
@@ -54,6 +68,16 @@ export interface SubagentRole {
     lastText: string | null;
     signal: AbortSignal;
   }): Promise<string | null>;
+  /**
+   * Added (round 3): its own memory folder (./memory.ts), loaded when its session opens; absent
+   * or null when its file sets no `memory` or auto memory is off.
+   */
+  memory?: AgentMemory | null;
+  /**
+   * Added (round 3): what it may use of the session's MCP servers (./mcp.ts), with its own
+   * servers; absent or null for none. A fork keeps its parent's tools exactly instead.
+   */
+  mcp?: AgentMcpAccess | null;
   /** The owner whose slot its first request prefers (a fork's parent), or null. */
   preferSlotOf: string | null;
   /**

@@ -70,6 +70,8 @@ family (`qwen3.8`, `qwen3.6`, `laguna-xs-2.1`, `gpt-oss`), else the default prof
 | `--add-dir <dir...>` | More directories the agent may read and edit. Several may follow one flag. |
 | `--verbose` | Diagnostics on standard error: the endpoint chosen, one line per tool call, protocol problems. |
 | `--approve-project-code` | Approve the hooks, skills and MCP servers the project defines now, without asking (see "Project code"). |
+| `--mcp-config <file or JSON...>` | The session's own MCP servers: a file, or a JSON string, holding an `mcpServers` object as `.mcp.json` does. Repeatable (and several may follow one flag); a later one wins for a name. They come before the project's and yours and need no approval. New sessions only. |
+| `--strict-mcp-config` | Only the `--mcp-config` servers, none of the project's or yours. |
 | `-h`, `--help`; `-v`, `--version` | |
 
 Settings are layered as the engine's spec says (flags, then `.dawg/settings.local.json`, then
@@ -159,6 +161,21 @@ definitions: any change asks again. Your own `~/.dawg/settings.json` hooks need 
   opens (so its SessionStart hooks run too), and says what it approved. Use it only in projects
   you trust.
 - Hooks that run show as one line each (interactive), or with `--verbose` (`-p`).
+
+## Signing in to MCP servers
+
+A remote server that wants a sign-in shows as "needs sign-in" in `/mcp`. `/mcp login <name>`
+starts an OAuth sign-in (PKCE, with dynamic registration when the server offers it): dawg prints
+the address and opens it with `open` (or `$BROWSER`; `BROWSER=none` only prints it), waits five
+minutes for the browser to come back to `http://localhost:<port>/callback`, and connects.
+`/mcp logout <name>` forgets the tokens and the registration. A `-p` run never starts a sign-in;
+it says on standard error which servers it went without.
+
+Tokens are kept in the Keychain (macOS), shared with the app; `DAWG_CREDENTIAL_STORE=file` keeps
+them in `<data root>/mcp-credentials.json` (readable by you alone) instead, and `memory` for the
+run only. A definition's `oauth` object takes Claude Code's fields: `clientId` and `callbackPort`
+for a client registered in advance (its secret from `MCP_CLIENT_SECRET` when you sign in),
+`authServerMetadataUrl` and `scopes`.
 
 ## `dawg compat`
 

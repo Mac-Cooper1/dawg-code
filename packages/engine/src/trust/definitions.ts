@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentDefinition,
+  agentServersNeedConsent,
   defineSkill,
   eventTier,
   HANDLER_TYPES,
@@ -22,6 +23,7 @@ import {
   hookItemName,
   hookSources,
   hookSupport,
+  inlineMcpServers,
   isProjectAgentCode,
   isProjectCode,
   type LoadedHooks,
@@ -122,18 +124,32 @@ function offered(hook: HookDefinition): boolean {
 function hookDefinition(hook: HookDefinition): TrustDefinition {
   const fromHome = hook.source.scope === "user";
   const notes: string[] = [];
-  if (hook.handler.type === "command") {
+  const { handler } = hook;
+  const from = fromHome ? "Claude Code's settings in your home folder" : "the project's files";
+  if (handler.type === "command") {
     notes.push(
       fromHome
         ? "Runs a command from Claude Code's settings in your home folder."
         : "Runs a command from the project's files.",
     );
-  } else if (hook.handler.type === "http") {
-    notes.push("Sends each event to this address.");
-  } else {
+  } else if (handler.type === "http") {
+    // The person should see where events go, and which of their variables go with them.
+    const vars = handler.allowedEnvVars.map((name) => `$${name}`);
+    const address = handler.url?.split("?")[0] ?? "an address";
+    const withVars = vars.length === 0 ? "" : `, with ${vars.join(", ")} in its headers`;
+    notes.push(`Sends each event to ${address}${withVars}, from ${from}.`);
+  } else if (handler.type === "prompt") {
+    notes.push(`Asks the model to check each event, with instructions from ${from}.`);
+  } else if (handler.type === "agent") {
     notes.push(
-      `A ${hook.handler.type} hook from ${fromHome ? "Claude Code's settings in your home folder" : "the project's files"}.`,
+      `Starts a subagent that reads files to check each event, with instructions from ${from}.`,
     );
+  } else if (handler.type === "mcp_tool") {
+    notes.push(
+      `Calls the tool ${handler.tool ?? "?"} of the MCP server ${handler.server ?? "?"} on each event, as ${from} ask.`,
+    );
+  } else {
+    notes.push(`A ${handler.type} hook from ${from}.`);
   }
   const support = hookSupport(hook);
   if (support.status === "not-supported") {
@@ -291,8 +307,10 @@ function isAgentFile(file: string): boolean {
 
 /**
  * A project subagent file as a definition, when it supplies power (compat's isProjectAgentCode):
- * the tools it grants itself, and a permission mode looser than asking first. Its prompt is left
- * out of the hash, so rewording it does not ask again.
+ * the tools it grants itself, a permission mode looser than asking first, and (added in round 3)
+ * the MCP servers it defines for itself, each of which runs a program or connects to an address.
+ * Its prompt is left out of the hash, so rewording it does not ask again; a file without servers
+ * of its own hashes as it did before they were read.
  */
 function agentDefinition(def: AgentDefinition): TrustDefinition | null {
   if (!isProjectAgentCode(def) || def.status === "invalid") return null;
@@ -306,20 +324,72 @@ function agentDefinition(def: AgentDefinition): TrustDefinition | null {
     notes.push(`Lets these run without asking while the agent works: ${grants.join(", ")}.`);
   }
   if (mode !== null) notes.push(`Runs in ${mode} mode when the session asks first.`);
+  const servers = agentServers(def);
+  notes.push(...servers.map(serverNote));
+  const what = { kind: "agent", file: skillLabel(def.path), grants, mode };
   return {
-    hash: sha256(canonicalJson({ kind: "agent", file: skillLabel(def.path), grants, mode })),
+    hash: sha256(canonicalJson(servers.length === 0 ? what : { ...what, servers })),
     scope: "project",
     item: { kind: "agent", name: def.name, source: def.source, status: "needs-approval", notes },
   };
 }
 
-/** The project's subagent files that supply power. */
+/** An agent file's own MCP servers, as they are hashed: name and definition as written. */
+function agentServers(def: AgentDefinition): { name: string; config: unknown }[] {
+  return inlineMcpServers(def).map((entry) => ({ name: entry.name, config: entry.inline }));
+}
+
+/** What one of an agent's own servers does, for the person deciding. */
+function serverNote(server: { name: string; config: unknown }): string {
+  const config = server.config as Record<string, unknown>;
+  const args = Array.isArray(config.args)
+    ? config.args.filter((a): a is string => typeof a === "string")
+    : [];
+  return typeof config.command === "string"
+    ? `Starts an MCP server of its own, ${server.name}: ${[config.command, ...args].map(quoteArg).join(" ")}.`
+    : typeof config.url === "string"
+      ? `Connects to an MCP server of its own, ${server.name}, at ${config.url.split("?")[0]}.`
+      : `Defines an MCP server of its own, ${server.name}.`;
+}
+
+/**
+ * Added (round 3): one of Claude Code's agent files in the person's home (`~/.claude/agents`) as
+ * a definition, when it defines MCP servers of its own. Like Claude Code's user hooks they run
+ * code dawg did not write, so they are approved once, for every project (scope "user"). Only the
+ * servers are hashed: that file's tool grants and mode stay the person's own, and its prompt can
+ * be reworded without asking again. `~/.dawg/agents` files need no approval.
+ */
+function userAgentDefinition(def: AgentDefinition): TrustDefinition | null {
+  if (def.status === "invalid" || def.source.scope !== "user") return null;
+  if (!agentServersNeedConsent(def)) return null;
+  const servers = agentServers(def);
+  return {
+    hash: sha256(canonicalJson({ kind: "agent", file: `~/${skillLabel(def.path)}`, servers })),
+    scope: "user",
+    item: {
+      kind: "agent",
+      name: def.name,
+      source: def.source,
+      status: "needs-approval",
+      notes: [
+        ...servers.map(serverNote),
+        "From Claude Code's agent files in your home folder; approving it covers every project.",
+      ],
+    },
+  };
+}
+
+/** The agent files that supply power: the project's, and the MCP servers of Claude Code's own. */
 async function agentDefinitions(options: CollectOptions): Promise<TrustDefinition[]> {
-  if (options.projectDir === null) return [];
   const set = await loadAgents({ homeDir: options.homeDir, cwd: options.projectDir });
   return set.all.flatMap((def) => {
-    if (def.shadowedBy !== null || def.source.scope === "user") return [];
-    const found = agentDefinition(def);
+    if (def.shadowedBy !== null) return [];
+    const found =
+      def.source.scope === "user"
+        ? userAgentDefinition(def)
+        : options.projectDir === null
+          ? null
+          : agentDefinition(def);
     return found === null ? [] : [found];
   });
 }
@@ -400,7 +470,7 @@ export async function collectDefinitions(options: CollectOptions): Promise<Trust
   const hooks = loaded.disabledBy === null ? loaded.hooks.filter(offered).map(hookDefinition) : [];
   const skills = options.projectDir === null ? [] : await skillDefinitions(options);
   const mcp = options.projectDir === null ? [] : await mcpDefinitions(options.projectDir);
-  const agents = options.projectDir === null ? [] : await agentDefinitions(options);
+  const agents = await agentDefinitions(options);
   const hosts = options.projectDir === null ? [] : await sandboxHostDefinitions(options);
   // One handler written identically in two files is one definition for each file: both files
   // must be approved, since either could change on its own.
@@ -410,11 +480,12 @@ export async function collectDefinitions(options: CollectOptions): Promise<Trust
 /** The hashes of the definitions in one file now, for checking a hook still is what was approved. */
 export async function definitionsIn(source: CompatSource): Promise<Set<string>> {
   if (source.path.endsWith(".md")) {
-    if (source.scope === "user") return new Set();
     if (isAgentFile(source.path)) {
-      const found = agentDefinition(await readAgentFile(source.path, source));
+      const def = await readAgentFile(source.path, source);
+      const found = source.scope === "user" ? userAgentDefinition(def) : agentDefinition(def);
       return new Set(found === null ? [] : [found.hash]);
     }
+    if (source.scope === "user") return new Set();
     const isSkill = path.basename(source.path) === "SKILL.md";
     let text: string;
     try {

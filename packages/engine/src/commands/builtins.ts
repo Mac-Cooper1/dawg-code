@@ -14,6 +14,7 @@ import {
   type SessionSummary,
   type Usage,
 } from "@dawg/protocol";
+import { agentsCommand } from "../agents/command.ts";
 import { mcpCommand } from "../mcp/command.ts";
 import { RuntimeError } from "../runtime/errors.ts";
 import type { SessionRuntime } from "../runtime/session.ts";
@@ -670,4 +671,5 @@ export const BUILTIN_COMMANDS: readonly SlashCommand[] = [
   rewindCommand,
   memoryCommand,
   mcpCommand,
+  agentsCommand,
 ].map((c) => ({ ...c, source: "builtin" }));

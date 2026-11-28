@@ -180,6 +180,8 @@ export interface NewSessionOptions extends OpenSessionOptions {
    * project's and the person's, and last while the session is open.
    */
   mcpServers?: Readonly<Record<string, unknown>>;
+  /** Added (round 3): only `mcpServers`, none of the project's or the person's. */
+  strictMcpConfig?: boolean;
 }
 
 export interface ForkSessionOptions extends OpenSessionOptions {

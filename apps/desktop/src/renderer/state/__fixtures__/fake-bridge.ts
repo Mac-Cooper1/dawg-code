@@ -505,6 +505,7 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
     },
     shell: {
       openExternal: async () => {},
+      openConfigFile: async () => {},
     },
     menu: {
       update: (model) => {

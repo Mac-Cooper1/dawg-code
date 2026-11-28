@@ -5,6 +5,11 @@
  * Code's own servers (`~/.claude.json`) are never started from there: "Import…" shows what
  * would be copied into `~/.dawg/mcp.json`, values that may be secrets named, and copies only
  * when the person says so (spec, MCP).
+ *
+ * Signing in (round 3): "Sign in" on a remote server that wants it opens the authorization page
+ * in the browser (through `onOpenLink`, main's validated `openExternal`); the row says "Signing
+ * in…" with Cancel while the engine waits for the browser, and follows the server to connected.
+ * A signed-in server offers "Sign out".
  */
 import type { McpImportPlan, McpServerInfo, McpServerState } from "@dawg/protocol";
 import { Switch } from "radix-ui";
@@ -51,14 +56,28 @@ export interface McpPageProps {
   setMcpServerEnabled(projectDir: string | null, name: string, enabled: boolean): Promise<boolean>;
   previewMcpImport(): Promise<McpImportPlan | { error: string }>;
   importMcpServers(hash: string): Promise<{ imported: number; path: string } | { error: string }>;
+  signInMcpServer(
+    projectDir: string | null,
+    name: string,
+  ): Promise<{ url: string } | { error: string }>;
+  signOutMcpServer(projectDir: string | null, name: string): Promise<McpServerInfo | null>;
+  cancelMcpSignIn(projectDir: string | null, name: string): Promise<McpServerInfo | null>;
+  /** Opens an address in the person's browser (the authorization page). */
+  onOpenLink(url: string): void;
   /** Opens the project trust dialog. */
   onReview(projectDir: string): void;
 }
 
-/** True while the list may change by itself: a server starting or waiting to try again. */
+/**
+ * True while the list may change by itself: a server starting or waiting to try again, or a
+ * sign-in waiting for the browser.
+ */
 function settling(listing: McpListing): boolean {
   return listing.servers.some(
-    (s) => s.state === "starting" || (s.state === "failed" && /tries again/.test(s.reason ?? "")),
+    (s) =>
+      s.state === "starting" ||
+      s.signIn?.status === "signing-in" ||
+      (s.state === "failed" && /tries again/.test(s.reason ?? "")),
   );
 }
 
@@ -156,6 +175,60 @@ export function McpPage(props: McpPageProps) {
       void load(dir);
     },
     [load, replace, setMcpServerEnabled],
+  );
+
+  const signIn = useCallback(
+    async (server: McpServerInfo) => {
+      const dir = shown.current;
+      setProblem(null);
+      replace({ ...server, signIn: { status: "signing-in", problem: null } });
+      busy.current += 1;
+      let result: Awaited<ReturnType<McpPageProps["signInMcpServer"]>>;
+      try {
+        result = await props.signInMcpServer(dir, server.name);
+      } finally {
+        busy.current -= 1;
+      }
+      if ("error" in result) {
+        // Nothing changed on the engine's side; a listing now would clear the notice.
+        replace(server);
+        setProblem(result.error);
+        return;
+      }
+      props.onOpenLink(result.url);
+      void load(dir);
+    },
+    [load, replace, props.signInMcpServer, props.onOpenLink],
+  );
+
+  const signOut = useCallback(
+    async (server: McpServerInfo) => {
+      const dir = shown.current;
+      busy.current += 1;
+      try {
+        const next = await props.signOutMcpServer(dir, server.name);
+        if (next !== null && shown.current === dir) replace(next);
+      } finally {
+        busy.current -= 1;
+      }
+      void load(dir);
+    },
+    [load, replace, props.signOutMcpServer],
+  );
+
+  const cancelSignIn = useCallback(
+    async (server: McpServerInfo) => {
+      const dir = shown.current;
+      busy.current += 1;
+      try {
+        const next = await props.cancelMcpSignIn(dir, server.name);
+        if (next !== null && shown.current === dir) replace(next);
+      } finally {
+        busy.current -= 1;
+      }
+      void load(dir);
+    },
+    [load, replace, props.cancelMcpSignIn],
   );
 
   const openImport = useCallback(async () => {
@@ -289,6 +362,9 @@ export function McpPage(props: McpPageProps) {
                   homeDir={homeDir}
                   onRestart={() => void restart(server)}
                   onToggle={(enabled) => void toggle(server, enabled)}
+                  onSignIn={() => void signIn(server)}
+                  onSignOut={() => void signOut(server)}
+                  onCancelSignIn={() => void cancelSignIn(server)}
                 />
               ))}
             </ul>
@@ -353,8 +429,16 @@ function ServerRow(props: {
   homeDir: string;
   onRestart(): void;
   onToggle(enabled: boolean): void;
+  onSignIn(): void;
+  onSignOut(): void;
+  onCancelSignIn(): void;
 }) {
   const { server } = props;
+  const signIn = server.signIn;
+  const signingIn = signIn?.status === "signing-in";
+  // A sign-in's problem is the state's reason when the server still needs one; said once.
+  const problem =
+    signIn?.problem != null && signIn.problem !== server.reason ? signIn.problem : null;
   const detailId = useId();
   const toolsId = useId();
   const [open, setOpen] = useState(false);
@@ -380,6 +464,12 @@ function ServerRow(props: {
             <span> · {sourceLabel(server.source)}</span>
           </p>
           {server.reason !== null && <p className={styles.reason}>{server.reason}</p>}
+          {problem !== null && <p className={styles.reason}>{problem}</p>}
+          {signingIn && (
+            <p className={styles.signingIn} role="status">
+              Signing in… Finish in your browser; dawg waits five minutes for it.
+            </p>
+          )}
           {server.notes.length > 0 && (
             <ul className={styles.notes}>
               {server.notes.map((note) => (
@@ -420,6 +510,30 @@ function ServerRow(props: {
         )}
       </div>
       <div className={styles.actions}>
+        {signingIn ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={props.onCancelSignIn}
+            aria-label={`Cancel signing in to ${server.name}`}
+          >
+            Cancel
+          </Button>
+        ) : server.state === "needs-sign-in" && signIn !== null && server.enabled ? (
+          <Button size="sm" onClick={props.onSignIn} aria-label={`Sign in to ${server.name}`}>
+            Sign in
+          </Button>
+        ) : null}
+        {!signingIn && signIn?.status === "signed-in" && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={props.onSignOut}
+            aria-label={`Sign out of ${server.name}`}
+          >
+            Sign out
+          </Button>
+        )}
         {canRestart && (
           <Button
             size="sm"

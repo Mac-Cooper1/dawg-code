@@ -11,9 +11,11 @@ import {
   EVENTS_WITHOUT_MATCHER,
   eventTier,
   HANDLER_TYPES,
+  handlerRunsOn,
   isRunningEvent,
 } from "./events.ts";
-import type { HookDefinition } from "./read.ts";
+import { headerVariables, httpHookAllowed } from "./http.ts";
+import type { HookDefinition, HttpHookPolicy } from "./read.ts";
 
 export interface HookSupport {
   status: "loaded" | "partly-supported" | "not-supported";
@@ -49,40 +51,45 @@ export function hookItemName(hook: Pick<HookDefinition, "event" | "matcher" | "h
     : `${hook.event}: ${what}`;
 }
 
-/** Whether dawg runs this handler, and what it ignores. Pure. */
-export function hookSupport(hook: HookDefinition): HookSupport {
+/**
+ * Whether dawg runs this handler, and what it ignores. Pure. `policy` is the HTTP hook
+ * allowlists in force (`LoadedHooks.http`); without it every address counts as allowed.
+ */
+export function hookSupport(hook: HookDefinition, policy?: HttpHookPolicy): HookSupport {
   const { event, handler } = hook;
-  const tier = eventTier(event);
-  if (tier === null) {
+  if (eventTier(event) === null) {
     return {
       status: "not-supported",
       notes: [`“${event}” is not an event Claude Code documents, so it never fires.`],
     };
   }
-  if (tier === 2 && !isRunningEvent(event)) {
-    return {
-      status: "not-supported",
-      notes: [`dawg does not run ${event} hooks yet; they come next in Phase 4.`],
-    };
-  }
-  if (tier === 3) {
+  if (!isRunningEvent(event)) {
     return { status: "not-supported", notes: [`dawg does not run ${event} hooks yet.`] };
   }
-  if (handler.type !== "command") {
-    const known = (HANDLER_TYPES as readonly string[]).includes(handler.type);
+  if (!(HANDLER_TYPES as readonly string[]).includes(handler.type)) {
     return {
       status: "not-supported",
-      notes: [
-        known
-          ? `dawg does not run ${handler.type} hooks yet; only command hooks run in this version.`
-          : `“${handler.type}” is not a hook type Claude Code documents.`,
-      ],
+      notes: [`“${handler.type}” is not a hook type Claude Code documents.`],
     };
   }
-  if (handler.shell !== null && handler.shell !== "bash") {
+  if (!handlerRunsOn(handler.type, event)) {
+    return {
+      status: "not-supported",
+      notes: [`Claude Code does not run ${handler.type} hooks on ${event}, so dawg skips it too.`],
+    };
+  }
+  if (handler.type === "command" && handler.shell !== null && handler.shell !== "bash") {
     return {
       status: "not-supported",
       notes: [`dawg runs hooks with the system shell; “shell: ${handler.shell}” is not supported.`],
+    };
+  }
+  if (policy !== undefined && !httpHookAllowed(handler, policy)) {
+    return {
+      status: "not-supported",
+      notes: [
+        "allowedHttpHookUrls in the settings does not list this address, so it does not run (as in Claude Code).",
+      ],
     };
   }
 
@@ -109,6 +116,36 @@ export function hookSupport(hook: HookDefinition): HookSupport {
     notes.push(
       `${event} hooks have no matcher, so “${hook.matcher}” is ignored (as in Claude Code).`,
     );
+  }
+  if (handler.once) {
+    notes.push(
+      "“once” counts only in a skill's front matter, so in a settings file it is ignored (as in Claude Code).",
+    );
+  }
+  // Principle 4: model names are mapped, not obeyed.
+  if (handler.model !== null) {
+    notes.push(
+      `model “${handler.model}” is mapped to the helper model, or to the session's model when there is no helper.`,
+    );
+  }
+  if (handler.type === "mcp_tool" && event === "SessionStart") {
+    notes.push(
+      "MCP servers connect after a session starts, so this runs only on SessionStart after /clear or a compaction (as in Claude Code).",
+    );
+  }
+  if (handler.type === "http") {
+    const allowed = new Set(handler.allowedEnvVars);
+    const unlisted = [
+      ...new Set(Object.values(handler.headers).flatMap((value) => headerVariables(value))),
+    ].filter((name) => !allowed.has(name));
+    if (unlisted.length > 0) {
+      notes.push(
+        `Its headers name ${unlisted.map((n) => `$${n}`).join(", ")}, which allowedEnvVars does not list, so ${unlisted.length === 1 ? "that variable is" : "those variables are"} sent empty (as in Claude Code).`,
+      );
+    }
+  }
+  if (handler.type === "agent") {
+    notes.push("It runs as a subagent that can only read files (Read, Grep, Glob).");
   }
   return { status: partly ? "partly-supported" : "loaded", notes };
 }

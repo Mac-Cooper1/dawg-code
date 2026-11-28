@@ -46,6 +46,7 @@ export const PLACEHOLDERS = {
   permission: "Waiting on you. A message here denies the command and tells dawg why.",
   question: "Waiting on you. A message here answers the question.",
   plan: "Waiting on you. A message here keeps planning, with your feedback.",
+  elicitation: "Waiting on you. Answer the form above; a message here declines it.",
 } as const;
 
 function sameElements<T>(previous: readonly T[] | undefined, next: T[]): readonly T[] {

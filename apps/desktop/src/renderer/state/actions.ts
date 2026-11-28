@@ -904,6 +904,15 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
           response: { decision: "reject", message: text },
         });
         return true;
+      case "elicitation":
+        // A server's form has nowhere to take a note: the request is declined, and the text goes
+        // on as a message, queued behind the turn that is still running.
+        await connection.request("elicitation.respond", {
+          sessionId,
+          requestId: ref.requestId,
+          action: "decline",
+        });
+        return false;
     }
   }
 
@@ -1380,6 +1389,23 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         return { error: sentence(error) };
       }
     },
+    async listSubagents(projectDir) {
+      try {
+        return await connection.request("project.subagents", { projectDir });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async createSubagent(input) {
+      try {
+        return await connection.request("subagent.create", input);
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async openConfigFile(path) {
+      await attempt("Could not open the file", () => bridge.shell.openConfigFile(path));
+    },
     async listMcpServers(projectDir) {
       try {
         return await connection.request("mcp.list", { projectDir });
@@ -1413,6 +1439,25 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       } catch (error) {
         return { error: sentence(error) };
       }
+    },
+    async signInMcpServer(projectDir, name) {
+      try {
+        return await connection.request("mcp.signIn", { projectDir, name });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async signOutMcpServer(projectDir, name) {
+      const result = await request(`Could not sign out of ${name}`, () =>
+        connection.request("mcp.signOut", { projectDir, name }),
+      );
+      return result?.server ?? null;
+    },
+    async cancelMcpSignIn(projectDir, name) {
+      const result = await request(`Could not stop signing in to ${name}`, () =>
+        connection.request("mcp.cancelSignIn", { projectDir, name }),
+      );
+      return result?.server ?? null;
     },
     async mcpOffer(sessionId) {
       const session = get().sessions[sessionId];
@@ -1472,6 +1517,12 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         if (parsed !== null && parsed.args.trim() === "" && parsed.name === "memory") {
           clearDraftIf(sessionId, text);
           await actions.openMemory(sessionId);
+          return;
+        }
+        // `/agents` opens Settings → Subagents; the engine's command only lists, for other clients.
+        if (parsed !== null && parsed.args.trim() === "" && parsed.name === "agents") {
+          clearDraftIf(sessionId, text);
+          actions.setSettingsPage("subagents");
           return;
         }
         const isCommand = parsed !== null;
@@ -1712,6 +1763,16 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     async respondPermission(sessionId, requestId, response) {
       await request("Could not send your answer", () =>
         connection.request("permission.respond", { sessionId, requestId, response }),
+      );
+    },
+    async respondElicitation(sessionId, requestId, answer) {
+      await request("Could not send your answer", () =>
+        connection.request("elicitation.respond", {
+          sessionId,
+          requestId,
+          action: answer.action,
+          ...(answer.content === undefined ? {} : { content: answer.content }),
+        }),
       );
     },
     async respondQuestion(sessionId, requestId, response) {

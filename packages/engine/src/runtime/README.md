@@ -44,7 +44,7 @@ filled in.
 | `tools?` | Fixed order; default `[...CORE_TOOLS, ...INTERACTIVE_TOOLS, ...WEB_TOOLS]`. A tool with `offered(services)` is listed only in sessions opened while it answers true (WebSearch: while a search service is set); a session's list never changes after it opens |
 | `webSearch?` | `() => SearchProvider \| null`: the search service WebSearch uses, read when a session opens and on every search (default none). WebFetch's prompt goes to the session's `utility` model (`ToolContext.utility`), see `tools/web-fetch/web-fetch.ts` |
 | `toolLimits?`, `limits?` | `ToolLimits`; `RuntimeLimits` (turn limit 200 requests, result spill at 100,000 characters, retries, repeat thresholds 3 and 5, compaction file copies, mention size) |
-| `capabilities?` | `{ permissionPrompts, questions, planApproval }`, each default true; a session may override |
+| `capabilities?` | `{ permissionPrompts, questions, planApproval, elicitation }`, each default true; a session may override |
 | `checkpointRetention?` | How many of a session's latest checkpoints keep their files (default 100); see "Checkpoints and rewind" |
 | `autoMemory?` | Auto memory (default false; the app and the CLI turn it on); see "Memory" |
 | `trust?` | `CodeTrust`: consent for the code a setup supplies (`../trust/`). Default `NO_CODE_TRUST`, under which only the person's own `~/.dawg` hooks run; the app and the CLI pass `createTrustStore({ storeRoot, homeDir })` |
@@ -375,6 +375,30 @@ Claude Code's `~/.claude.json` only through the import (`mcp.importPreview`, `mc
   and replaced by their start and the path. `@server:scheme://…` in a prompt attaches that
   resource; prompts are `/mcp__server__prompt` commands (the host adds them to the session's
   registry as servers connect).
+- **Signing in** (`../mcp/oauth.ts`, `../mcp/credentials.ts`): a remote server without an
+  Authorization header of its own takes its token from the engine's `McpCredentialStore`
+  (`EngineOptions.mcp.credentials`; the CLI and the app pass `createCredentialStore`, the
+  Keychain on macOS) through the transport's auth provider, which renews a refused token with
+  the refresh token, one renewal at a time. Without one it is "needs sign-in";
+  `McpManager.signIn` (`mcp.signIn`, `/mcp login`) starts the browser step and restarts the
+  server's connections once it finishes, so an open session reaches it by search. A session's own
+  servers can be the only ones (`NewSessionOptions.strictMcpConfig`).
+- `ListMcpResourcesTool` and `ReadMcpResourceTool` (`../mcp/resource-tools.ts`) are in the list
+  whenever the decision gave the session MCP at all; no permission asked, rules naming them apply.
+  Results are wrapped as `<mcp-resource>` data and capped like other MCP results; blobs are saved
+  to `tool-results/` (an image also goes to a model that can see).
+- **Requests for input** (`../mcp/elicitation.ts`): the connection declares form and URL modes.
+  Each call (`callTool`, `readResource`) carries an `McpCaller` (session, call, the session's
+  `SessionServices.elicit`), so a server's `elicitation/create` is raised in the session whose
+  calls are in flight: `elicitation.requested`, answered by `respondElicitation` (content checked
+  with the protocol's `elicitationIssues`), then `request.resolved`. A subagent's goes to its
+  parent (`SubagentRole.elicit`), labelled with the agent (`agent`), the parent's hooks run on it;
+  it outlives the parent's turn unless that turn is interrupted. Calls of two sessions in flight,
+  none at all, a client without the `elicitation` capability (the parent's, for a subagent), a
+  URL that is not http(s) or is over 8,192 characters: declined, with a note in the call's
+  result. An
+  interrupt answers "cancel". The call's clock stops while the person is asked. A turn waiting on
+  one is not kept across a close (`waiting-turn.ts` cannot bring a server's request back).
 
 ## Subagents
 
@@ -392,9 +416,22 @@ The `Agent` and `SendMessage` tools and what they start (`../agents/`, spec: Pha
   its transcript is `<session dir>/subagents/<id>-agent-<n>.jsonl` with its own side folder;
   `engine.replay` serves it (live or stored), listings never see it. A typed agent's prefix
   replaces the core instructions with `SUBAGENT_CORE` and its role (`PromptAssembler.prefix`'s
-  `agent`), with its tool subset and no MCP tools; a fork keeps its parent's prefix and tools and
-  starts from a copy of its view (every open call given a result), so it shares the cache. The
-  child is closed after each task and reopened by `SendMessage`.
+  `agent`), with its tool subset; a fork keeps its parent's prefix and tools and starts from a
+  copy of its view (every open call given a result), so it shares the cache. The child is closed
+  after each task and reopened by `SendMessage`, which an agent the person stopped refuses.
+- **MCP** (`../agents/mcp.ts`). A typed agent's session opens the parent's servers (its own
+  `mcpServers` and `--strict-mcp-config` included) through a filter (`SessionMcpOptions.filter`)
+  and decides its MCP tools before its first request like any session: all of them with no
+  `tools` list; with one, the names it lists (`mcp__s__t`, `mcp__s__*`, `mcp__*`, `mcp__s`);
+  every tool of a server `mcpServers` names; less `disallowedTools`. ToolSearch, CallMcpTool and
+  the resource tools see only that. An inline `mcpServers` definition is the child's own server
+  (started with it, let go when it closes); from a project file it needs the project's code
+  approved (trust hash) and never gets the withheld variables, and from `~/.claude/agents` it
+  needs approval once for every project (user scope), as Claude Code's user hooks do. Read-only agents get none.
+- **Memory** (`../agents/memory.ts`). `memory: user | project | local` with auto memory on: the
+  folder's MEMORY.md (200 lines, 25 KB) and how to keep it are the child's memory segment, Read,
+  Write and Edit join a `tools` list, and the folder is its `memoryDirectories`. Loaded at the
+  agent's first task and kept for its later ones, so its prefix holds.
 - **Permissions.** Calls are judged by the parent's rules, live, plus a file's `Tool(spec)`
   grants; the mode is the parent's unless the file sets one (`agentMode`: a parent in bypass,
   acceptEdits or plan keeps its mode). Project files' grants and a mode looser than the parent's
@@ -473,9 +510,11 @@ that sets `autoMemoryEnabled` sets it false.
 - **Permissions.** The folder is the permission state's `memoryDirectories`: the file tools read
   and change files in it without asking, in every mode but plan, while deny and ask rules and
   protected names inside it still apply; shell commands get nothing from it.
-- **Subagents** get their scopes' folders from `agentMemoryDirectory({ scope, agentName,
-  storeRoot, projectDir })` (`user`: `<storeRoot>/agent-memory/<agent>`; `project` and `local`:
-  `<project root>/.dawg/agent-memory[-local]/<agent>`), to pass as their `memoryDirectories`.
+- **Subagents** with `memory` in their file get their scope's folder from
+  `agentMemoryDirectory({ scope, agentName, storeRoot, projectDir })` (`user`:
+  `<storeRoot>/agent-memory/<agent>`; `project` and `local`:
+  `<project root>/.dawg/agent-memory[-local]/<agent>`) as their own memory (see "Subagents");
+  they never get the project's.
 - `/memory` makes the folder and an empty MEMORY.md when there are none, and lists them with the
   instruction files.
 

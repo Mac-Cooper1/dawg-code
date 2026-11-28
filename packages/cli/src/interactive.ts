@@ -24,9 +24,11 @@ import {
   type SessionSnapshot,
 } from "@dawg/protocol";
 import type { CliOptions } from "./args.ts";
+import { answerElicitation } from "./elicitation.ts";
 import { cliVersion } from "./engine.ts";
 import { EXIT } from "./exit-codes.ts";
 import type { Io } from "./io.ts";
+import { openInBrowser, signInFromTerminal } from "./mcp-sign-in.ts";
 import { agentLine, diffLines, permissionLines, sandboxLine, toolLine } from "./render.ts";
 import { editorCommand, openInEditor, rewindInteractively } from "./rewind.ts";
 import { openSession, runErrorFrom } from "./session.ts";
@@ -35,7 +37,7 @@ import { approveProjectCode, askProjectCode, hookLine, skippedLine } from "./tru
 
 type RequestEvent = Extract<
   EngineEvent,
-  { event: "permission.requested" | "question.asked" | "plan.proposed" }
+  { event: "permission.requested" | "question.asked" | "plan.proposed" | "elicitation.requested" }
 >;
 
 /** Lines from the input, in order; `next` resolves null at the end of input. */
@@ -129,7 +131,12 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
 
   try {
     running = await start(options, io, {
-      capabilities: { permissionPrompts: true, questions: true, planApproval: true },
+      capabilities: {
+        permissionPrompts: true,
+        questions: true,
+        planApproval: true,
+        elicitation: true,
+      },
       generateTitles: true,
       log: err,
       verbose,
@@ -151,7 +158,7 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
       }
     };
     if (options.resume === null) await consent(cwd);
-    current = await openSession(client, options, cwd, err);
+    current = await openSession(client, options, cwd, err, io.cwd);
     if (options.resume !== null) await consent(current.session.projectDir);
     err(
       `dawg ${cliVersion()}: ${current.modelInfo?.id ?? "model"} in ${current.session.cwd}, ` +
@@ -160,6 +167,8 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
     err("Type /help for commands, /exit to quit. Ctrl+C interrupts a turn.");
 
     const view = new View(io, () => current?.session.cwd ?? cwd);
+    /** Aborted to stop waiting for a line at the prompt, when a request needs asking there. */
+    let idleWait: AbortController | null = null;
     const requests: RequestEvent[] = [];
     /** Aborted when a request closes without our answer, so its prompt stops waiting. */
     const closers = new Map<string, AbortController>();
@@ -171,7 +180,8 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
       if (
         event.event === "permission.requested" ||
         event.event === "question.asked" ||
-        event.event === "plan.proposed"
+        event.event === "plan.proposed" ||
+        event.event === "elicitation.requested"
       ) {
         requests.push(event);
         closers.set(requestIdOf(event), new AbortController());
@@ -181,6 +191,9 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
           for (const l of permissionLines(event.payload.request, view.cwd())) view.line(l);
           view.write(`${ALLOW_QUESTION}\n`);
         }
+        // A background agent's request for input takes several answers: stop waiting at the
+        // prompt, and the loop below asks it field by field.
+        if (active === null && event.event === "elicitation.requested") idleWait?.abort();
       }
       if (event.event === "request.resolved") {
         const id = event.payload.requestId;
@@ -205,7 +218,7 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
         const request = requests.shift();
         if (request !== undefined) {
           const closer = closers.get(requestIdOf(request)) ?? new AbortController();
-          await answer(client, request, lines, view, err, closer.signal);
+          await answer(client, request, lines, view, err, closer.signal, io.env);
           continue;
         }
         await new Promise<void>((resolve) => (wake = resolve));
@@ -223,6 +236,16 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
         return;
       }
       try {
+        // `/mcp login <name>`: the address is printed and opened in the browser here.
+        const login =
+          command?.name === "mcp" ? /^(?:login|sign-in)\s+(.+)$/i.exec(command.args) : null;
+        if (login !== null) {
+          await signInFromTerminal(client, session.session, (login[1] as string).trim(), {
+            line: (text) => view.line(text),
+            env: io.env,
+          });
+          return;
+        }
         // `/rewind` asks here which point and what to restore (./rewind.ts).
         if (command !== null && command.name === "rewind" && command.args === "") {
           finished.delete(`${sessionId}/compaction`);
@@ -308,13 +331,30 @@ export async function runInteractive(options: CliOptions, io: Io): Promise<numbe
     }
     if (options.prompt !== null && options.prompt.trim() !== "") await send(options.prompt);
     while (!quitting) {
+      // Between turns, a background agent's request for input is asked here.
+      const asking = requests[0];
+      if (active === null && asking?.event === "elicitation.requested") {
+        requests.shift();
+        const closer = closers.get(requestIdOf(asking)) ?? new AbortController();
+        await answer(client, asking, lines, view, err, closer.signal, io.env);
+        continue;
+      }
       if (tty) {
         rl.prompt();
         // A rewound message comes back on the line, to send again or change.
         if (refill !== null) rl.write(refill);
       }
       refill = null;
-      const line = await lines.next();
+      idleWait = new AbortController();
+      let line: string | null;
+      try {
+        line = await lines.next(idleWait.signal);
+      } catch (error) {
+        if (error instanceof RequestClosed) continue;
+        throw error;
+      } finally {
+        idleWait = null;
+      }
       if (line === null) break;
       // Between turns, a line answers a background agent's permission request first.
       const idle = requests[0];
@@ -503,6 +543,10 @@ function requestEventOf(sessionId: string, pending: PendingRequest): RequestEven
           modeBeforePlan: pending.modeBeforePlan,
         },
       };
+    case "elicitation": {
+      const { kind: _kind, ...asked } = pending;
+      return { event: "elicitation.requested", payload: { ...base, ...asked } };
+    }
   }
 }
 
@@ -533,6 +577,7 @@ async function answer(
   view: View,
   err: (line: string) => void,
   signal: AbortSignal,
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<void> {
   const sessionId = request.payload.sessionId;
   try {
@@ -561,6 +606,21 @@ async function answer(
           sessionId,
           requestId: request.payload.requestId,
           response,
+        });
+        return;
+      }
+      case "elicitation.requested": {
+        // An MCP server's request for input, field by field (./elicitation.ts).
+        view.endLine();
+        const response = await answerElicitation(request.payload, {
+          ask: (question) => ask(lines, view, question, signal),
+          line: (text) => view.line(text),
+          open: (url) => openInBrowser(url, env),
+        });
+        await client.request("elicitation.respond", {
+          sessionId,
+          requestId: request.payload.requestId,
+          ...response,
         });
         return;
       }

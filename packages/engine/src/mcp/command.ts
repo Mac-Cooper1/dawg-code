@@ -1,12 +1,15 @@
 /**
- * `/mcp`: the session's MCP servers and their state; `/mcp restart|on|off <name>`; and the import
- * of Claude Code's own servers, which first shows what would be copied and copies only when run
- * again with the code that list ends with (spec, MCP: an explicit, one-time action).
+ * `/mcp`: the session's MCP servers and their state; `/mcp restart|on|off <name>`; signing in to
+ * a remote server and out again (`/mcp login|logout <name>`, round 3: the address to open in the
+ * browser; the command line opens it itself); and the import of Claude Code's own servers, which
+ * first shows what would be copied and copies only when run again with the code that list ends
+ * with (spec, MCP: an explicit, one-time action).
  */
 import { applyMcpImport, McpImportError, planMcpImport } from "@dawg/compat";
 import type { McpImportPlan, McpServerInfo } from "@dawg/protocol";
 import { CommandError, type SlashCommand } from "../commands/types.ts";
-import { McpManagerError } from "./manager.ts";
+import { McpManagerError, type McpServerPlan } from "./manager.ts";
+import { SIGN_IN_TIMEOUT_MS } from "./oauth.ts";
 
 const STATE_WORDS: Record<McpServerInfo["state"], string> = {
   connected: "connected",
@@ -32,7 +35,27 @@ export function serverLine(server: McpServerInfo): string {
       ? `, ${server.tools.length === 1 ? "1 tool" : `${server.tools.length} tools`}`
       : "";
   const reason = server.reason === null ? "" : `: ${server.reason}`;
-  return `- **${server.name}** (${SCOPE_WORDS[server.scope]}, ${transport}): ${STATE_WORDS[server.state]}${tools}${reason}`;
+  const signIn =
+    server.signIn?.status === "signing-in"
+      ? " Signing in: waiting for the browser."
+      : server.signIn?.status === "signed-in" && server.state !== "needs-sign-in"
+        ? " Signed in."
+        : "";
+  // After a reason, which ends a sentence; otherwise the state's words need their full stop.
+  const tail = signIn === "" || reason !== "" ? signIn : `.${signIn}`;
+  return `- **${server.name}** (${SCOPE_WORDS[server.scope]}, ${transport}): ${STATE_WORDS[server.state]}${tools}${reason}${tail}`;
+}
+
+/** The words for a sign-in's address, in Markdown, with what happens next. */
+export function signInText(name: string, url: string): string {
+  const minutes = Math.round(SIGN_IN_TIMEOUT_MS / 60_000);
+  return [
+    `Open this address in your browser to sign in to **${name}**:`,
+    "",
+    `<${url}>`,
+    "",
+    `dawg waits ${minutes} minutes for the browser to come back, then connects to ${name}.`,
+  ].join("\n");
 }
 
 /** The code `/mcp import <code>` takes: the start of the plan's hash. */
@@ -69,16 +92,21 @@ export function importText(plan: McpImportPlan): string {
 
 export const mcpCommand: SlashCommand = {
   name: "mcp",
-  description: "Show the MCP servers, restart or turn one off, or import Claude Code's",
-  argumentHint: "[import | restart <name> | on <name> | off <name>]",
+  description:
+    "Show the MCP servers, sign in to one, restart or turn one off, or import Claude Code's",
+  argumentHint: "[login <name> | logout <name> | restart <name> | on <name> | off <name> | import]",
   async run(ctx) {
     const manager = ctx.engine.mcp;
     const [verb = "", ...rest] = ctx.args.split(/\s+/).filter(Boolean);
     const name = rest.join(" ");
     const projectDir = ctx.session.projectDir;
+    /** The session's server of that name (its own ones included), or the project's. */
+    const planOf = async (): Promise<McpServerPlan> =>
+      ctx.session.mcp.planNamed(name)?.plan ?? (await manager.findPlan(projectDir, name));
     try {
       switch (verb.toLowerCase()) {
         case "": {
+          await ctx.session.mcp.loadSignIns();
           const servers = ctx.session.mcp.infos();
           const plan = await planMcpImport(manager.homeDir);
           const importable = plan.items.filter((i) => i.action === "copy").length;
@@ -88,6 +116,13 @@ export const mcpCommand: SlashCommand = {
                   "No MCP servers are set up for this session. Add them to the project's .mcp.json or to ~/.dawg/mcp.json.",
                 ]
               : ["MCP servers of this session:", "", ...servers.map(serverLine)];
+          const waiting = servers.filter((s) => s.state === "needs-sign-in" && s.signIn !== null);
+          if (waiting.length > 0) {
+            lines.push(
+              "",
+              `To sign in, run ${waiting.map((s) => `\`/mcp login ${s.name}\``).join(" or ")}.`,
+            );
+          }
           if (importable > 0) {
             lines.push(
               "",
@@ -112,6 +147,30 @@ export const mcpCommand: SlashCommand = {
             text: `Copied ${result.imported === 1 ? "1 server" : `${result.imported} servers`} into ${result.path}. Sessions opened from now on start them.`,
           };
         }
+        case "login":
+        case "sign-in": {
+          if (name === "") throw new CommandError("mcp", `Name the server: /mcp ${verb} <name>`);
+          if (
+            ctx.capabilities.permissionPrompts === false &&
+            ctx.capabilities.questions === false
+          ) {
+            throw new CommandError(
+              "mcp",
+              `Nobody is here to finish signing in, so this run does not start one. Sign in to ${name} from dawg or Settings → MCP servers first.`,
+            );
+          }
+          const url = await manager.signIn(await planOf(), ctx.session.mcp.cwd);
+          return { kind: "output", text: signInText(name, url) };
+        }
+        case "logout":
+        case "sign-out": {
+          if (name === "") throw new CommandError("mcp", `Name the server: /mcp ${verb} <name>`);
+          await manager.signOut(await planOf());
+          return {
+            kind: "output",
+            text: `Signed out of ${name}: dawg forgot its tokens and its registration with the server.`,
+          };
+        }
         case "restart": {
           if (name === "") throw new CommandError("mcp", "Name the server: /mcp restart <name>");
           const server = await manager.restart(projectDir, name);
@@ -133,7 +192,7 @@ export const mcpCommand: SlashCommand = {
         default:
           throw new CommandError(
             "mcp",
-            `Unknown /mcp ${verb}. Use /mcp, /mcp import, /mcp restart <name>, /mcp on <name> or /mcp off <name>.`,
+            `Unknown /mcp ${verb}. Use /mcp, /mcp login <name>, /mcp logout <name>, /mcp restart <name>, /mcp on <name>, /mcp off <name> or /mcp import.`,
           );
       }
     } catch (error) {

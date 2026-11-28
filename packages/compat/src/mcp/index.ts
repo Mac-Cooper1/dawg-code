@@ -2,6 +2,7 @@ export {
   commandLine,
   type ExpandOptions,
   expandVariables,
+  type McpOAuthSettings,
   type McpServerConfig,
   type ParsedServer,
   PROJECT_WITHHELD_VARIABLES,

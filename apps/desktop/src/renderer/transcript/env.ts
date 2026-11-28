@@ -4,6 +4,7 @@
  * re-render when the app shell passes new callback functions.
  */
 import type { PermissionResponse, PlanResponse, QuestionResponse } from "@dawg/protocol";
+import type { ElicitationAnswer } from "../state/types.ts";
 
 export interface TranscriptEnv {
   /** The session's working directory, to show paths relative to it. */
@@ -14,6 +15,8 @@ export interface TranscriptEnv {
   respondPermission(requestId: string, response: PermissionResponse): void;
   respondQuestion(requestId: string, response: QuestionResponse): void;
   respondPlan(requestId: string, response: PlanResponse): void;
+  /** Answers an MCP server's request for input. */
+  respondElicitation(requestId: string, answer: ElicitationAnswer): void;
   openLink(url: string): void;
   /** Absent until the Changes pane exists; the "Open in Changes" link is hidden then. */
   openInChanges: ((filePath: string) => void) | null;

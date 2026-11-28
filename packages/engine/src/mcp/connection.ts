@@ -6,7 +6,8 @@
  *
  * A remote server that answers 401 or 403 is "needs sign-in", as Claude Code's `/mcp` shows it,
  * unless the definition sends its own Authorization header (then the header was refused, and it
- * failed). Signing in with OAuth arrives later: `authProvider` is where it plugs in.
+ * failed). Signing in with OAuth (oauth.ts) plugs in through `authProvider`, and a sign-in that
+ * stops working during a call (its renewal refused) makes it "needs sign-in" again.
  */
 import type { McpServerConfig } from "@dawg/compat";
 import {
@@ -19,6 +20,7 @@ import {
   type Prompt,
   type ReadResourceResult,
   type Resource,
+  type ResourceTemplateType,
   SSEClientTransport,
   StreamableHTTPClientTransport,
   type Tool,
@@ -26,6 +28,7 @@ import {
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { type McpCaller, McpElicitations } from "./elicitation.ts";
 
 export type ConnectionState = "starting" | "connected" | "failed" | "needs-sign-in" | "stopped";
 
@@ -41,8 +44,10 @@ export interface ConnectionOptions {
   /** The pauses before each new start after a failure; once they run out it stays failed. */
   restartDelaysMs: readonly number[];
   clientInfo: { name: string; version: string };
-  /** For signing in (later): the SDK's provider for a remote server's tokens. */
+  /** For signing in: the SDK's provider for a remote server's tokens (oauth.ts). */
   authProvider?: AuthProvider | OAuthClientProvider;
+  /** Why it needs a sign-in now (a renewal refused), for its reason; default a plain sentence. */
+  signInReason?: () => string;
 }
 
 /** A call to a server that is not connected. */
@@ -82,6 +87,8 @@ export class McpConnection {
   prompts: Prompt[] = [];
   /** What the server asked to be told to the model, or null. */
   instructions: string | null = null;
+  /** The calls in flight, and the server's requests for input they cause (elicitation.ts). */
+  readonly elicitations: McpElicitations;
 
   #client: Client | null = null;
   /** Each start gets a number, so callbacks of an older one are ignored. */
@@ -96,6 +103,7 @@ export class McpConnection {
     this.name = options.name;
     this.config = options.config;
     this.#options = options;
+    this.elicitations = new McpElicitations(options.name);
   }
 
   get state(): ConnectionState {
@@ -226,7 +234,9 @@ export class McpConnection {
     this.#stderr = [];
     this.#set("starting", null);
     const client = new Client(this.#options.clientInfo, {
-      capabilities: {},
+      // Both modes, as Claude Code declares them; the requests reach a person through the
+      // session whose call caused them (elicitation.ts).
+      capabilities: { elicitation: { form: {}, url: {} } },
       listChanged: {
         tools: {
           onChanged: (error, items) => {
@@ -258,6 +268,9 @@ export class McpConnection {
     };
     // Errors after the start are reported by the calls they break; nothing more to do here.
     client.onerror = () => {};
+    client.setRequestHandler("elicitation/create", (request, ctx) =>
+      this.elicitations.handle(request.params as Record<string, unknown>, ctx.mcpReq.signal),
+    );
     let transport: Transport;
     try {
       transport = this.#transport();
@@ -303,7 +316,7 @@ export class McpConnection {
       ) {
         this.#set(
           "needs-sign-in",
-          "The server wants you to sign in first. Signing in to MCP servers arrives later in dawg.",
+          this.#options.signInReason?.() ?? "The server wants you to sign in first.",
         );
         return;
       }
@@ -348,20 +361,66 @@ export class McpConnection {
     return this.#client;
   }
 
+  /**
+   * Calls a tool for `caller` (the session's call, so a request for input reaches the right
+   * person). `timeoutMs` does not count time spent waiting for the person (elicitation.ts).
+   */
   async callTool(
     name: string,
     args: Record<string, unknown>,
-    options: { signal: AbortSignal; timeoutMs: number },
+    options: { signal: AbortSignal; timeoutMs: number; caller?: McpCaller | null },
   ): Promise<CallToolResult> {
     const client = this.#connected();
-    return (await client.callTool(
-      { name, arguments: args },
-      { signal: options.signal, timeout: options.timeoutMs, resetTimeoutOnProgress: true },
-    )) as CallToolResult;
+    return this.elicitations.run(
+      options.caller ?? null,
+      { signal: options.signal, timeoutMs: options.timeoutMs, what: name },
+      async (signal) =>
+        // The clock is ours, so the SDK's own is set as far out as a timer goes.
+        (await client
+          .callTool({ name, arguments: args }, { signal, timeout: 2_147_483_647 })
+          .catch((error: unknown) => this.#signInLost(error))) as CallToolResult,
+    );
   }
 
-  async readResource(uri: string, signal: AbortSignal): Promise<ReadResourceResult> {
-    return this.#connected().readResource({ uri }, { signal });
+  /**
+   * A call refused for want of a sign-in (its token ran out and could not be renewed): the
+   * server is "needs sign-in" from now on, as it would be on its next start. Rethrows.
+   */
+  #signInLost(error: unknown): never {
+    const status = httpStatus(error);
+    const unauthorized =
+      error instanceof UnauthorizedError ||
+      (status === 401 && this.#options.authProvider !== undefined);
+    if (unauthorized && this.#state === "connected") {
+      this.#generation += 1;
+      const client = this.#client;
+      this.#client = null;
+      this.#set(
+        "needs-sign-in",
+        this.#options.signInReason?.() ?? "The server wants you to sign in first.",
+      );
+      void client?.close().catch(() => {});
+    }
+    throw error;
+  }
+
+  async readResource(
+    uri: string,
+    signal: AbortSignal,
+    caller: McpCaller | null = null,
+  ): Promise<ReadResourceResult> {
+    const client = this.#connected();
+    // The SDK's usual limit, on the clock that stops while the person is asked.
+    return this.elicitations.run(caller, { signal, timeoutMs: 60_000, what: uri }, (s) =>
+      client.readResource({ uri }, { signal: s, timeout: 2_147_483_647 }),
+    );
+  }
+
+  /** The server's resource templates (URIs with `{placeholders}`); empty when it has none. */
+  async resourceTemplates(signal: AbortSignal): Promise<ResourceTemplateType[]> {
+    const client = this.#connected();
+    if (!client.getServerCapabilities()?.resources) return [];
+    return (await client.listResourceTemplates(undefined, { signal })).resourceTemplates;
   }
 
   async getPrompt(

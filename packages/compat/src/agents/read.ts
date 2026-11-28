@@ -9,7 +9,7 @@
 import type { CompatSource, PermissionMode } from "@dawg/protocol";
 import { readFrontMatter } from "../report/files.ts";
 import { booleanField, listField, textField } from "../skills/frontmatter.ts";
-import type { AgentDefinition } from "./types.ts";
+import type { AgentDefinition, AgentMcpServer, AgentMemoryScope } from "./types.ts";
 
 /** Every field the documentation lists. */
 export const AGENT_KEYS = [
@@ -74,19 +74,109 @@ export function toolGrants(def: Pick<AgentDefinition, "tools">): string[] {
   });
 }
 
+/** The `mcpServers` entries that define a server of the agent's own (which runs a program or connects somewhere). */
+export function inlineMcpServers(
+  def: Pick<AgentDefinition, "mcpServers">,
+): (AgentMcpServer & { inline: Readonly<Record<string, unknown>> })[] {
+  return (def.mcpServers ?? []).filter(
+    (entry): entry is AgentMcpServer & { inline: Readonly<Record<string, unknown>> } =>
+      entry.inline !== null,
+  );
+}
+
 /**
  * Whether a definition is power the project supplies (spec, principle 3): a project file that
- * grants its agent tools (`tools` entries with a specifier) or sets a mode looser than asking
- * first. Its grants and its mode apply only once the person has approved the project's code;
- * until then the agent runs with the parent's mode and rules, which is still safe. The prompt
- * itself is text, not code, and loads either way.
+ * grants its agent tools (`tools` entries with a specifier), sets a mode looser than asking
+ * first, or defines MCP servers of its own (each runs a program or connects to an address). Its
+ * grants, its mode and its servers apply only once the person has approved the project's code;
+ * until then the agent runs with the parent's mode and rules and without those servers, which is
+ * still safe. The prompt itself is text, not code, and loads either way.
  */
 export function isProjectAgentCode(
-  def: Pick<AgentDefinition, "source" | "tools" | "permissionMode">,
+  def: Pick<AgentDefinition, "source" | "tools" | "permissionMode"> &
+    Partial<Pick<AgentDefinition, "mcpServers">>,
 ): boolean {
   if (!PROJECT_SCOPES.has(def.source.scope)) return false;
   const loose = def.permissionMode !== null && LOOSE_MODES.has(def.permissionMode);
-  return loose || toolGrants(def).length > 0;
+  return (
+    loose ||
+    toolGrants(def).length > 0 ||
+    inlineMcpServers({ mcpServers: def.mcpServers ?? [] }).length > 0
+  );
+}
+
+/**
+ * Whether an agent file's own MCP servers wait for the person's approval before they start:
+ * those of every file but the person's own dawg ones (`~/.dawg/agents`). A project's are project
+ * code; those in Claude Code's agent files in the home folder (`~/.claude/agents`) run code dawg
+ * did not write, so, like Claude Code's user hooks, they are approved once for every project.
+ * That file's tool grants and mode stay the person's own.
+ */
+export function agentServersNeedConsent(
+  def: Pick<AgentDefinition, "source" | "mcpServers">,
+): boolean {
+  const own = def.source.scope === "user" && def.source.origin === "dawg";
+  return !own && inlineMcpServers(def).length > 0;
+}
+
+const MEMORY_SCOPES: ReadonlySet<string> = new Set<AgentMemoryScope>(["user", "project", "local"]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * `mcpServers` as documented: a list whose entries are a configured server's name or a
+ * one-key map from a name to a full server definition. A map of names to definitions is read
+ * the same way. Anything else is noted and left out.
+ */
+function readMcpServers(value: unknown, notes: Notes): AgentMcpServer[] {
+  const out: AgentMcpServer[] = [];
+  const taken = new Set<string>();
+  const add = (name: string, inline: Record<string, unknown> | null) => {
+    const trimmed = name.trim();
+    if (trimmed === "" || taken.has(trimmed)) {
+      if (trimmed !== "")
+        notes.add(`mcpServers names “${trimmed}” twice; the first is used.`, true);
+      return;
+    }
+    taken.add(trimmed);
+    out.push({ name: trimmed, inline });
+  };
+  const entry = (name: string, config: unknown) => {
+    if (isPlainObject(config)) add(name, config);
+    else
+      notes.add(
+        `The mcpServers entry “${name}” is not a server definition, so it is ignored.`,
+        true,
+      );
+  };
+  if (value === null || value === undefined) return out;
+  if (typeof value === "string") {
+    for (const name of value.split(/[\s,]+/)) if (name !== "") add(name, null);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === "string") add(item, null);
+      else if (isPlainObject(item) && Object.keys(item).length === 1) {
+        const [name, config] = Object.entries(item)[0] as [string, unknown];
+        entry(name, config);
+      } else {
+        notes.add(
+          "An mcpServers entry is neither a server's name nor a definition, so it is ignored.",
+          true,
+        );
+      }
+    }
+    return out;
+  }
+  if (isPlainObject(value)) {
+    for (const [name, config] of Object.entries(value)) entry(name, config);
+    return out;
+  }
+  notes.add("mcpServers is not a list of servers, so it is ignored.", true);
+  return out;
 }
 
 class Notes {
@@ -132,6 +222,8 @@ export function emptyAgent(path: string, source: CompatSource): AgentDefinition 
     skills: [],
     background: false,
     isolation: null,
+    memory: null,
+    mcpServers: [],
     prompt: "",
     path,
     source,
@@ -222,10 +314,18 @@ export function defineAgent(
       notes.add(`isolation “${rawIsolation}” is not a documented value, so it is ignored.`, true);
   }
 
+  let memory: AgentMemoryScope | null = null;
+  const rawMemory = textField(fields, "memory");
+  if (rawMemory !== null) {
+    const scope = rawMemory.toLowerCase();
+    if (MEMORY_SCOPES.has(scope)) memory = scope as AgentMemoryScope;
+    else notes.add(`memory “${rawMemory}” is not user, project or local, so it is ignored.`, true);
+  }
+
+  const mcpServers = "mcpServers" in fields ? readMcpServers(fields.mcpServers, notes) : [];
+
   const ignored: [key: string, why: string][] = [
-    ["mcpServers", "mcpServers is ignored: subagents do not get MCP tools in dawg yet."],
     ["hooks", "hooks in an agent file are not run yet; hooks from settings still apply."],
-    ["memory", "memory is ignored: subagents have no memory folder of their own yet."],
     ["omitClaudeMd", "omitClaudeMd is ignored: the instruction files are always loaded."],
     ["effort", "effort is ignored: the session's effort applies."],
     ["autoCompactWindow", "autoCompactWindow is ignored: the session's compaction limit applies."],
@@ -247,19 +347,31 @@ export function defineAgent(
     skills: listField(fields, "skills"),
     background: background ?? false,
     isolation,
+    memory,
+    mcpServers,
     prompt: body.trim(),
   };
   if (isProjectAgentCode(def)) {
+    const servers = inlineMcpServers(def).map((entry) => entry.name);
     const what = [
       toolGrants(def).length > 0 ? "tool grants" : "",
       def.permissionMode !== null && LOOSE_MODES.has(def.permissionMode)
         ? `permissionMode ${def.permissionMode}`
         : "",
+      servers.length === 0
+        ? ""
+        : `MCP server${servers.length === 1 ? "" : "s"} ${servers.join(", ")}`,
     ]
       .filter((part) => part !== "")
       .join(" and ");
     notes.add(
       `Project code: its ${what} take effect only once you approve the project's code.`,
+      false,
+    );
+  } else if (agentServersNeedConsent(def)) {
+    const servers = inlineMcpServers(def).map((entry) => entry.name);
+    notes.add(
+      `Its MCP server${servers.length === 1 ? "" : "s"} ${servers.join(", ")} start${servers.length === 1 ? "s" : ""} only once you approve ${servers.length === 1 ? "it" : "them"}: Claude Code's agent files in your home folder run code dawg did not write.`,
       false,
     );
   }

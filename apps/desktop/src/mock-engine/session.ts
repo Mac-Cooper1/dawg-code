@@ -80,6 +80,11 @@ const BUILTIN_COMMANDS: readonly Omit<CommandInfo, "source" | "kind">[] = [
     description: "Show the memory folder and instruction files, to edit them",
     argumentHint: null,
   },
+  {
+    name: "agents",
+    description: "Show the subagents this project's sessions can start",
+    argumentHint: null,
+  },
 ];
 
 export const COMMANDS: readonly CommandInfo[] = BUILTIN_COMMANDS.map((command) => ({

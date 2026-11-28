@@ -4,6 +4,8 @@
  */
 import type {
   ContentPart,
+  ElicitationField,
+  ElicitationResponse,
   PermissionMode,
   Question,
   QuestionAnswer,
@@ -90,6 +92,30 @@ export interface SessionServices {
   askUser(questions: Question[]): Promise<QuestionAnswer[]>;
   /** Presents a plan for approval. Rejects if the turn is interrupted. */
   proposePlan(plan: string): Promise<{ approved: boolean; message?: string }>;
+  /**
+   * Shows an MCP server's request for input to the person and resolves with the answer (Phase 4,
+   * MCP elicitation, `../mcp/elicitation.ts`). Rejects with `NoOneToAskError` when nobody can
+   * answer, and when the turn is interrupted or `signal` aborts. Absent where nobody ever can.
+   */
+  elicit?(request: ElicitationRequest, signal: AbortSignal): Promise<ElicitationResponse>;
+}
+
+/** An MCP server's request for input, as a session shows it. */
+export interface ElicitationRequest {
+  server: string;
+  /** The server's words. Untrusted text. */
+  message: string;
+  mode: "form" | "url";
+  /** The form; empty in URL mode. */
+  fields: ElicitationField[];
+  /** The page to open in URL mode; null in form mode. */
+  url: string | null;
+  /** The call it came during, or null when several of the session's calls were in progress. */
+  toolCallId: string | null;
+  /** Added (Phase 4, hooks): the server's `requestedSchema` as sent, for Elicitation hooks. */
+  requestedSchema?: unknown;
+  /** Added (Phase 4, hooks): the server's `elicitationId` (URL mode), when it sent one. */
+  elicitationId?: string | null;
 }
 
 /** The subset of the context available while a call is only being judged, not run. */

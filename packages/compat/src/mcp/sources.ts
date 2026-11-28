@@ -54,6 +54,11 @@ export interface McpSourcesOptions {
   sessionServers?: Readonly<Record<string, unknown>>;
   /** Where the session's own servers came from, for people (a file given on the command line). */
   sessionSource?: string;
+  /**
+   * Only the session's own servers (`--strict-mcp-config`): the project's and the person's files
+   * are not read for servers. Claude Code's own are still listed, for the import offer.
+   */
+  strict?: boolean;
 }
 
 export interface McpSources {
@@ -181,7 +186,8 @@ export async function readMcpSources(options: McpSourcesOptions): Promise<McpSou
   }
 
   const dawgPath = dawgMcpPath(home);
-  const dawg = await readJsonObject(dawgPath);
+  const dawg: JsonFile =
+    options.strict === true ? { kind: "missing" } : await readJsonObject(dawgPath);
   if (dawg.kind === "invalid") problems.push({ path: dawgPath, message: dawg.message });
   if (dawg.kind === "ok" && projectDir !== null && projectDir !== home) {
     for (const { servers } of await projectServers(dawg.data.projects, projectDir)) {
@@ -192,7 +198,7 @@ export async function readMcpSources(options: McpSourcesOptions): Promise<McpSou
   }
 
   // The project's own file; the home folder as a project has none of its own.
-  if (cwd !== null && cwd !== home) {
+  if (cwd !== null && cwd !== home && options.strict !== true) {
     const path = join(cwd, ".mcp.json");
     const file = await readJsonObject(path);
     if (file.kind === "invalid") problems.push({ path, message: file.message });

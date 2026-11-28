@@ -2,7 +2,7 @@
  * Subagents on the command line: one compact line per agent as its state changes, its
  * permission prompts labelled with it, and headless runs that wait for background agents.
  */
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type ScriptReply, text, toolCall } from "@dawg/mock-model";
 import type { PermissionRequest, SubagentInfo } from "@dawg/protocol";
@@ -145,5 +145,38 @@ describe("headless runs", () => {
     const result = await h.run(["-p", "Count in the background", "--endpoint", h.mock.baseUrl]);
     expect(result.code).toBe(EXIT.ok);
     expect(result.stdout).toBe("The agent says 42.\n");
+  });
+});
+
+describe("/agents", () => {
+  it("prints the subagents a session here can start, with where each comes from", async () => {
+    h = await startHarness({ script: [] });
+    await mkdir(path.join(h.project, ".claude", "agents"), { recursive: true });
+    await writeFile(
+      path.join(h.project, ".claude", "agents", "test-runner.md"),
+      "---\nname: test-runner\ndescription: Runs the tests and reports failures\ntools: Read, Bash(npm test *)\n---\nRun the tests.\n",
+    );
+    await mkdir(path.join(h.home, ".dawg", "agents"), { recursive: true });
+    await writeFile(
+      path.join(h.home, ".dawg", "agents", "scribe.md"),
+      "---\nname: scribe\ndescription: Keeps notes\nmemory: user\n---\nKeep notes.\n",
+    );
+    const child = h.spawn(["--endpoint", h.mock.baseUrl]);
+    const stdin = child.process.stdin;
+    if (stdin === null) throw new Error("no stdin");
+    // The project's grant is project code: dawg asks first, and "not now" keeps it off.
+    stdin.write("n\n/agents\n");
+    await child.waitForStdout("New sessions pick up changes");
+    stdin.end();
+    const result = await child.exited;
+    expect(result.code).toBe(EXIT.ok);
+    const out = result.stdout;
+    expect(out).toContain("Subagents for new sessions here:");
+    expect(out).toContain("Built in\n  Explore\n");
+    expect(out).toContain("  scribe  ~/.dawg/agents/scribe.md\n    Keeps notes\n    memory: user");
+    expect(out).toContain(
+      "  test-runner (waits for approval)  .claude/agents/test-runner.md\n    Runs the tests and reports failures",
+    );
+    expect(out).toContain("its tool grants (Bash(npm test *)) wait for you to approve");
   });
 });

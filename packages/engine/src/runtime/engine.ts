@@ -94,6 +94,7 @@ export class Engine {
         permissionPrompts: true,
         questions: true,
         planApproval: true,
+        elicitation: true,
         ...options.capabilities,
       },
       settingsFlags: options.settingsFlags,
@@ -144,6 +145,11 @@ export class Engine {
     return () => {
       this.#listeners.delete(listener);
     };
+  }
+
+  /** The data root (`~/.dawg`): sessions, plans, the person's agents' memory. */
+  get storeRoot(): string {
+    return this.#ctx.storeRoot;
   }
 
   /** Consent for the code a setup supplies (hooks, MCP servers). */
@@ -226,6 +232,7 @@ export class Engine {
     });
     return this.#start(writer, cwd, {
       ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
+      ...(options.strictMcpConfig === true ? { strictMcpConfig: true } : {}),
       settings,
       settingsStamp,
       instructions,
@@ -522,6 +529,8 @@ export class Engine {
       startSource: "startup" | "resume" | "clear" | "fork";
       /** The session's own MCP servers. */
       mcpServers?: Readonly<Record<string, unknown>>;
+      /** Only `mcpServers` (`--strict-mcp-config`). */
+      strictMcpConfig?: boolean;
     },
   ): Promise<SessionRuntime> {
     const ctx = this.#ctx;
@@ -550,6 +559,7 @@ export class Engine {
         sidecar: init.sidecar,
         startSource: init.startSource,
         ...(init.mcpServers === undefined ? {} : { mcpServers: init.mcpServers }),
+        ...(init.strictMcpConfig === true ? { strictMcpConfig: true } : {}),
       });
       this.#open.set(sessionId, runtime);
       return runtime;

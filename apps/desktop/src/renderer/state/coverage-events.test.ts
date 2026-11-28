@@ -362,6 +362,60 @@ const COVERAGE: Record<EventName, Scenario[]> = {
         }),
     },
   ],
+  "elicitation.requested": [
+    {
+      shows: { view: "transcript", what: "the server's form, labelled with the server" },
+      before: (s) => {
+        running(s);
+        replyWithCall(s, "mcp__tracker__create_issue");
+        s.emit("tool.started", {
+          turnId: "t1",
+          messageId: "m1",
+          toolCallId: "c1",
+          toolName: "mcp__tracker__create_issue",
+          input: {},
+        });
+      },
+      event: (s) =>
+        s.emit("elicitation.requested", {
+          turnId: "t1",
+          requestId: "e1",
+          toolCallId: "c1",
+          server: "tracker",
+          message: "Which project?",
+          mode: "form",
+          fields: [
+            {
+              name: "project",
+              type: "string",
+              title: null,
+              description: null,
+              required: true,
+              format: null,
+              minLength: null,
+              maxLength: null,
+              default: null,
+            },
+          ],
+          url: null,
+        }),
+    },
+    {
+      shows: { view: "sidebar", what: "“Needs you: open a page for tracker”" },
+      before: running,
+      event: (s) =>
+        s.emit("elicitation.requested", {
+          turnId: "t1",
+          requestId: "e2",
+          toolCallId: null,
+          server: "tracker",
+          message: "Sign in",
+          mode: "url",
+          fields: [],
+          url: "https://tracker.example.com/connect",
+        }),
+    },
+  ],
   "request.resolved": [
     {
       shows: { view: "transcript", what: "the card closes to its one-line record" },

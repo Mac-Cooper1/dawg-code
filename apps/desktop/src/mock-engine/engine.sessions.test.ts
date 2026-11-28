@@ -146,6 +146,7 @@ describe("opening sessions", () => {
       "clear",
       "rewind",
       "memory",
+      "agents",
     ]);
     const other = await peer.request("session.create", {
       cwd: "/work/app/.dawg/worktrees/x",
@@ -432,7 +433,7 @@ describe("commands", () => {
     expect(help.turnId).toBeNull();
     expect(help.openedSession).toBeNull();
     expect(help.output).toContain("| `/compact [focus]` |");
-    expect(help.output?.split("\n").filter((l) => l.startsWith("| `/"))).toHaveLength(6);
+    expect(help.output?.split("\n").filter((l) => l.startsWith("| `/"))).toHaveLength(7);
     const one = await peer.request("session.command", {
       sessionId: "fix-split",
       name: "help",

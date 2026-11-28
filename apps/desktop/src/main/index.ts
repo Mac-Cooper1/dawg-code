@@ -32,6 +32,7 @@ import {
 } from "../shared/bridge.ts";
 import type { MainToHost } from "../shared/engine-host-messages.ts";
 import { appLocation, appUrl, describeRefusedSender, isTrustedSender } from "./app-url.ts";
+import { checkConfigFile } from "./config-files.ts";
 import { spawnEngineHost } from "./engine-host-process.ts";
 import { createEngineSupervisor, type EngineSupervisor } from "./engine-supervisor.ts";
 import {
@@ -507,6 +508,10 @@ function registerIpc(): void {
       return result.canceled ? null : (result.filePaths[0] ?? null);
     },
     openExternal: (url) => shell.openExternal(url),
+    openConfigFile: async (file) => {
+      const failure = await shell.openPath(await checkConfigFile(file));
+      if (failure !== "") throw new Error(failure);
+    },
   });
 
   for (const [channel, handler] of Object.entries({

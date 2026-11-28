@@ -156,6 +156,13 @@
   color: var(--ink-2);
 }
 
+/* A sign-in waiting for the browser: the accent, as a server starting reads. */
+.signingIn {
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+  color: var(--acc);
+}
+
 .path,
 .toolName {
   font-family: var(--mono);

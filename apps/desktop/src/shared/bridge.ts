@@ -1024,6 +1024,16 @@ export const ExternalUrlSchema = z
     }
   }, "Only http and https links can be opened");
 
+/**
+ * An agent, skill or command file to open in the person's own editor: an absolute `.md` path.
+ * Main also checks it is under an `agents`, `skills` or `commands` folder of `.claude` or `.dawg`
+ * and is a regular file (main/config-files.ts), since opening a file can start a program.
+ */
+export const ConfigFilePathSchema = AbsolutePathSchema.refine(
+  (value) => value.toLowerCase().endsWith(".md"),
+  "Only Markdown files can be opened",
+);
+
 // ---------------------------------------------------------------------------------------------
 // The API
 // ---------------------------------------------------------------------------------------------
@@ -1222,6 +1232,11 @@ export interface DawgBridge {
   readonly shell: {
     /** Opens an http(s) URL in the system browser. Other schemes reject. */
     openExternal(url: string): Promise<void>;
+    /**
+     * Opens an agent, skill or command file (`.md` under `agents`, `skills` or `commands` of a
+     * `.claude` or `.dawg` folder) in the app macOS opens Markdown with. Anything else rejects.
+     */
+    openConfigFile(path: string): Promise<void>;
   };
 
   /** The menu bar and the Dock menu, built in the window from the action registry. */
@@ -1306,6 +1321,7 @@ export const IPC = {
   webCheck: "dawg:web:check",
   chooseFolder: "dawg:dialogs:choose-folder",
   openExternal: "dawg:shell:open-external",
+  openConfigFile: "dawg:shell:open-config-file",
   menuUpdate: "dawg:menu:update",
   menuAction: "dawg:menu:action",
   platform: "dawg:platform",

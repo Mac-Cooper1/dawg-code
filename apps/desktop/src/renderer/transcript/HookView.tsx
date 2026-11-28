@@ -6,7 +6,14 @@
  */
 import { memo, useId } from "react";
 import { shortenPath } from "../lib/format.ts";
-import { hookDuration, hookLine, hookTone, skippedLine, sourceLabel } from "../lib/hooks.ts";
+import {
+  handlerTypeLabel,
+  hookDuration,
+  hookLine,
+  hookTone,
+  skippedLine,
+  sourceLabel,
+} from "../lib/hooks.ts";
 import type { HookItem, HookSkippedItem } from "../state/types.ts";
 import { Button, Icon, type IconName } from "../ui/index.ts";
 import type { TranscriptEnv } from "./env.ts";
@@ -22,6 +29,15 @@ const TONE_ICON: Record<keyof typeof TONE_CLASS, IconName> = {
   quiet: "terminal",
   blocked: "shield",
   error: "alert",
+};
+
+/** What the row naming a hook's target is called, by handler type. */
+const TARGET_LABEL: Readonly<Record<string, string>> = {
+  command: "Command",
+  http: "Address",
+  prompt: "Prompt",
+  agent: "Prompt",
+  mcp_tool: "Server and tool",
 };
 
 function clockTime(time: number): string {
@@ -79,18 +95,35 @@ export const HookView = memo(function HookView({
               </dd>
             </>
           )}
-          <dt>{hook.type === "command" ? "Command" : "Runs"}</dt>
+          {hook.type !== "command" && (
+            <>
+              <dt>Type</dt>
+              <dd>{handlerTypeLabel(hook.type)} hook</dd>
+            </>
+          )}
+          <dt>{TARGET_LABEL[hook.type] ?? "Runs"}</dt>
           <dd>
             <code className={`${styles.code} ${styles.command}`}>{hook.command}</code>
           </dd>
-          <dt>Exit code</dt>
-          <dd>
-            {item.exitCode !== null
-              ? item.exitCode
-              : item.outcome === "timeout"
-                ? "None: it was stopped at its time limit"
-                : "None"}
-          </dd>
+          {hook.type === "command" ? (
+            <>
+              <dt>Exit code</dt>
+              <dd>
+                {item.exitCode !== null
+                  ? item.exitCode
+                  : item.outcome === "timeout"
+                    ? "None: it was stopped at its time limit"
+                    : "None"}
+              </dd>
+            </>
+          ) : (
+            item.outcome === "timeout" && (
+              <>
+                <dt>Answer</dt>
+                <dd>None: it was stopped at its time limit</dd>
+              </>
+            )
+          )}
           <dt>Ran</dt>
           <dd>
             {clockTime(item.time - item.durationMs)} · took {hookDuration(item.durationMs)}

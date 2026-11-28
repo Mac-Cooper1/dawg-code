@@ -64,7 +64,14 @@ export async function start(
   let engine: Engine | null = null;
   try {
     const search = await searchFromEnvironment(io.env, paths.dawgHome, input.log);
-    engine = buildEngine({ options, paths, models, generateTitles: input.generateTitles, search });
+    engine = buildEngine({
+      options,
+      paths,
+      models,
+      generateTitles: input.generateTitles,
+      search,
+      env: io.env,
+    });
     const { client, host } = await connectInProcess({
       engine,
       options,

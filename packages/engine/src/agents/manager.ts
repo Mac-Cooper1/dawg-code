@@ -22,6 +22,7 @@
 import path from "node:path";
 import type {
   CompatSource,
+  ElicitationResponse,
   ErrorInfo,
   PermissionMode,
   PermissionRequest,
@@ -32,7 +33,7 @@ import type {
 import type { Message } from "../contracts/messages.ts";
 import type { PermissionState } from "../contracts/permissions.ts";
 import type { PromptPrefix } from "../contracts/prompt.ts";
-import type { AnyTool, ToolContext, ToolOutput } from "../contracts/tools.ts";
+import type { AnyTool, ElicitationRequest, ToolContext, ToolOutput } from "../contracts/tools.ts";
 import type { SessionHooks } from "../hooks/session-hooks.ts";
 import type { Emit } from "../loop/types.ts";
 import type { SlotScheduler } from "../model/slots.ts";
@@ -40,6 +41,8 @@ import type { LoggedEvent } from "../runtime/event-log.ts";
 import type { SessionRuntime } from "../runtime/session.ts";
 import type { TurnOutcome } from "../runtime/types.ts";
 import type { SessionSkills } from "../skills/session-skills.ts";
+import { agentMcpAccess } from "./mcp.ts";
+import { type AgentMemory, loadAgentMemory } from "./memory.ts";
 import { subagentSystemText } from "./prompts.ts";
 import {
   AgentRegistry,
@@ -48,6 +51,7 @@ import {
   agentTools,
   FORK_TYPE,
   GENERAL_PURPOSE,
+  wantsMcp,
 } from "./registry.ts";
 import type { SubagentRole } from "./role.ts";
 import { type Seat, seatsFor } from "./seats.ts";
@@ -77,6 +81,10 @@ export interface AgentHost {
   readonly projectDir: string;
   /** The parent's side folder: the agents' transcripts go in its `subagents/`. */
   readonly sessionDir: string;
+  /** Added (round 3): the engine's data root, where the person's agents keep their memory. */
+  readonly storeRoot?: string;
+  /** Added (round 3): whether auto memory is on for the session, so its agents' memory is too. */
+  memoryOn?(): Promise<boolean>;
   readonly hooks: SessionHooks;
   readonly emit: Emit;
   now(): number;
@@ -91,6 +99,16 @@ export interface AgentHost {
     signal: AbortSignal,
   ): Promise<PermissionResponse>;
   allowAlways(rules: readonly string[]): Promise<void>;
+  /**
+   * Added (round 3, MCP elicitation): raises an MCP server's request for input in the parent,
+   * labelled with `agent`, its hooks run on it. Absent: nobody is asked.
+   */
+  elicit?(
+    request: ElicitationRequest,
+    turnId: string,
+    signal: AbortSignal,
+    agent: SubagentLabel,
+  ): Promise<ElicitationResponse>;
   activeTurnId(): string | null;
   busy(): boolean;
   closed(): boolean;
@@ -151,6 +169,10 @@ interface Agent {
   task: Task | null;
   /** SubagentStop continuations in a row this task. */
   stopRuns: number;
+  /** Added (round 3): its own memory as first loaded, kept for its later tasks; undefined until then. */
+  memory?: AgentMemory | null;
+  /** Added (round 3): the person stopped it, so it takes no more messages (as documented). */
+  stoppedByPerson?: boolean;
 }
 
 type TaskResult =
@@ -332,9 +354,11 @@ export class SubagentManager {
       return text(`There is no agent type "${type}". Use one of: ${known}.`, true);
     }
     const description = oneLine(input.description, 120) || oneLine(input.prompt, 60);
+    const memory = !fork && spec !== undefined ? await this.#memoryFor(spec) : null;
     if (!fork && spec !== undefined && spec !== null) {
-      const tools = agentTools(spec, host.offeredTools());
-      if (tools.length === 0) {
+      const tools = agentTools(spec, host.offeredTools(), { memory: memory !== null });
+      // MCP tools join when its session decides them, so a list of only those is fine.
+      if (tools.length === 0 && !wantsMcp(spec)) {
         return text(
           `The ${spec.name} agent would have no tools: none of the tools its file lists (${(spec.tools ?? []).join(", ")}) is available to subagents. Fix its tools field, or use another agent.`,
           true,
@@ -343,8 +367,13 @@ export class SubagentManager {
     }
     const background = input.run_in_background === true || (spec?.background ?? false);
     const isolation = input.isolation ?? spec?.isolation ?? null;
+    // Consent is asked of the trust store only for what needs it: a project file's power, and
+    // the servers of an agent file that is not the person's own dawg one (./mcp.ts).
     const approved =
-      spec?.projectCode === true && spec.source !== null
+      spec !== undefined &&
+      spec !== null &&
+      (spec.projectCode || spec.serversNeedConsent === true) &&
+      spec.source !== null
         ? await host.allows(spec.source).catch(() => false)
         : true;
 
@@ -381,6 +410,7 @@ export class SubagentManager {
       runtime: null,
       task: null,
       stopRuns: 0,
+      memory,
     };
     this.#agents.set(agentId, agent);
 
@@ -451,6 +481,15 @@ export class SubagentManager {
         true,
       );
     }
+    if (agent.stoppedByPerson === true) {
+      return text(
+        `${agent.info.agentId} was stopped by the user, so it takes no more messages. Start a new agent if the work still needs doing.`,
+        true,
+      );
+    }
+    if (agent.memory === undefined && agent.spec !== null) {
+      agent.memory = await this.#memoryFor(agent.spec);
+    }
     if (agent.spec === null && !agent.info.fork) {
       return text(
         `${agent.info.agentId} cannot be sent more: its agent type "${agent.info.agentType}" is no longer defined.`,
@@ -503,6 +542,9 @@ export class SubagentManager {
     if (agent === undefined) throw new Error(`There is no agent ${agentId} in this session.`);
     const task = agent.task;
     if (task === null) return false;
+    // Only the person stops an agent this way (the Tasks pane); as documented, it then takes no
+    // more messages from the model.
+    agent.stoppedByPerson = true;
     task.controller.abort();
     await task.done;
     return true;
@@ -525,6 +567,90 @@ export class SubagentManager {
     );
     this.#stopEvents?.();
     this.#stopEvents = null;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Added (Phase 4, hooks): an agent hook's check
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * An `agent` hook's check (../hooks/agent.ts): a subagent that only reads (Read, Grep, Glob),
+   * with a turn limit, started like any other agent (its own transcript, a model slot, shown in
+   * the list) while the hook waits. It fires no SubagentStart or SubagentStop hooks, so a hook
+   * cannot start itself again. Resolves with its final message, or with why it could not run.
+   */
+  async check(task: {
+    description: string;
+    prompt: string;
+    maxTurns: number;
+    turnId: string | null;
+    toolCallId: string | null;
+    signal: AbortSignal;
+  }): Promise<{ text: string } | { error: string }> {
+    const host = this.#host;
+    if (host === null || this.#closing || host.closed())
+      return { error: "The session is closing." };
+    const spec = hookCheckSpec(task.maxTurns);
+    const number = this.#next;
+    this.#next += 1;
+    const agentId = `agent-${number}`;
+    const childId = childSessionId(host.sessionId, number);
+    const agent: Agent = {
+      info: {
+        agentId,
+        sessionId: childId,
+        agentType: spec.name,
+        description: oneLine(task.description, 120),
+        toolCallId: task.toolCallId,
+        turnId: task.turnId,
+        fork: false,
+        background: false,
+        status: "queued",
+        queuePosition: null,
+        worktree: null,
+        startedAt: host.now(),
+        endedAt: null,
+        toolUses: 0,
+        activity: null,
+        result: null,
+        error: null,
+      },
+      spec,
+      cwd: host.cwd,
+      worktree: null,
+      approved: true,
+      runtime: null,
+      task: null,
+      stopRuns: 0,
+    };
+    this.#agents.set(agentId, agent);
+    try {
+      agent.runtime = await host.open({
+        childId,
+        cwd: agent.cwd,
+        create: {
+          title: agent.info.description,
+          mode: this.#modeOf(agent),
+          initialMessages: [await host.sessionContext(agent.cwd)],
+        },
+        role: { ...this.#role(agent), onStop: async () => null },
+      });
+    } catch (error) {
+      this.#agents.delete(agentId);
+      return {
+        error: `The agent could not start: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    this.#emit(agent);
+    const result = await this.#foreground(agent, task.prompt, task.signal);
+    switch (result.kind) {
+      case "completed":
+        return { text: result.text };
+      case "failed":
+        return { error: `The agent failed: ${result.error.message}` };
+      case "stopped":
+        return { error: "The agent was stopped before it answered." };
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -780,6 +906,9 @@ export class SubagentManager {
       }
     } else {
       out.push(await host.sessionContext(agent.cwd));
+      // Servers of its own that cannot start, and why, so it does not look for their tools.
+      const left = this.#mcpOf(agent)?.notes ?? [];
+      if (left.length > 0) out.push(host.note(left.join("\n")));
     }
     const hookContext = await host.hooks
       .subagentStart({
@@ -814,6 +943,35 @@ export class SubagentManager {
     return out;
   }
 
+  /** An agent type's own memory, when its file sets `memory` and auto memory is on (./memory.ts). */
+  async #memoryFor(spec: AgentSpec | null): Promise<AgentMemory | null> {
+    const host = this.#requireHost();
+    if (spec === null || (spec.memory ?? null) === null || host.storeRoot === undefined) {
+      return null;
+    }
+    const on = (await host.memoryOn?.().catch(() => false)) ?? false;
+    if (!on) return null;
+    return loadAgentMemory({
+      scope: spec.memory as NonNullable<AgentSpec["memory"]>,
+      agentName: spec.name,
+      storeRoot: host.storeRoot,
+      projectDir: host.projectDir,
+    }).catch(() => null);
+  }
+
+  /** What a typed agent may use of the session's MCP servers (./mcp.ts); none for a read-only one. */
+  #mcpOf(agent: Agent) {
+    const spec = agent.spec;
+    if (spec === null || spec.readOnly) return null;
+    return agentMcpAccess({
+      tools: spec.tools,
+      disallowedTools: spec.disallowedTools,
+      mcpServers: spec.mcpServers ?? [],
+      inlineAllowed: agent.approved || spec.serversNeedConsent !== true,
+      fromProject: spec.source !== null && spec.source.scope !== "user",
+    });
+  }
+
   #role(agent: Agent): SubagentRole {
     const host = this.#requireHost();
     const label: SubagentLabel = {
@@ -828,12 +986,17 @@ export class SubagentManager {
         ? spec.grants.map((rule) => ({ rule, from: GRANTED }))
         : [];
     const fork = agent.info.fork ? host.forkBasis() : null;
+    const memory = agent.memory ?? null;
+    const elicit = host.elicit;
     return {
       label,
       systemText: spec === null ? null : subagentSystemText(spec.prompt),
       fork:
         fork === null ? null : { prefix: fork.prefix, tools: fork.tools, toolMap: fork.toolMap },
-      tools: (offered) => (spec === null ? offered : agentTools(spec, offered)),
+      tools: (offered) =>
+        spec === null ? offered : agentTools(spec, offered, { memory: memory !== null }),
+      memory,
+      mcp: this.#mcpOf(agent),
       mode: () =>
         spec === null
           ? host.mode()
@@ -859,6 +1022,13 @@ export class SubagentManager {
         }
         return host.askPermission({ ...request, agent: label }, turnId, signal);
       },
+      // A server's request for input during its call goes to the parent, labelled with it.
+      ...(elicit === undefined
+        ? {}
+        : {
+            elicit: (request: ElicitationRequest, turnId: string, signal: AbortSignal) =>
+              elicit.call(host, request, turnId, signal, label),
+          }),
       allowAlways: (rules) => host.allowAlways(rules),
       maxTurns: spec?.maxTurns ?? null,
       onStop: async (turn) => {
@@ -909,6 +1079,27 @@ export class SubagentManager {
       // A session closing under the agent has nowhere to report it.
     }
   }
+}
+
+/** An agent hook's subagent: it reads, with a turn limit, and answers with the hook's verdict. */
+function hookCheckSpec(maxTurns: number): AgentSpec {
+  return {
+    name: "hook",
+    description: "Checks a condition for an agent hook in the settings.",
+    prompt:
+      "You check one condition for a hook the user set up in their settings, before the main agent goes on. Look only at what you need with Read, Grep and Glob; change nothing. Then give your verdict exactly as the instructions ask.",
+    tools: ["Read", "Grep", "Glob"],
+    disallowedTools: [],
+    grants: [],
+    permissionMode: "plan",
+    readOnly: true,
+    maxTurns,
+    skills: [],
+    background: false,
+    isolation: null,
+    source: null,
+    projectCode: false,
+  };
 }
 
 /** Tools whose permission prompts a read-only agent may still raise: reading outside the project. */

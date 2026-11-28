@@ -26,6 +26,7 @@ import { findItemIndex, findPermissionIndex, itemsMoved } from "./item-index.ts"
 import type {
   AssistantTextItem,
   CompactionItem,
+  ElicitationItem,
   ErrorItem,
   HookItem,
   HookSkippedItem,
@@ -63,6 +64,7 @@ export const itemIds = {
   permission: (requestId: string) => `permission:${requestId}`,
   question: (requestId: string) => `question:${requestId}`,
   plan: (requestId: string) => `plan:${requestId}`,
+  elicitation: (requestId: string) => `elicitation:${requestId}`,
   compaction: (compactionId: string) => `compaction:${compactionId}`,
   error: (seq: number) => `error:${seq}`,
   turnError: (turnId: string) => `error:turn:${turnId}`,
@@ -215,6 +217,7 @@ export function closeTurnItems(
       case "permission":
       case "question":
       case "plan":
+      case "elicitation":
         if (item.state === "pending") {
           replace(index, { ...item, state: "cancelled" });
           removePending(draft, session.id, item.requestId);
@@ -711,6 +714,39 @@ export function planProposed(
   addPending(draft, session.id, { kind: "plan", requestId: p.requestId, turnId: p.turnId });
 }
 
+/** An MCP server asks for input: the card goes after the call that is waiting on it. */
+export function elicitationRequested(
+  draft: Draft,
+  session: MutableSession,
+  p: EventPayload<"elicitation.requested">,
+): void {
+  const id = itemIds.elicitation(p.requestId);
+  if (indexOfId(readItems(draft, session.id), id) === -1) {
+    const item: ElicitationItem = {
+      kind: "elicitation",
+      id,
+      turnId: p.turnId,
+      seq: p.seq,
+      requestId: p.requestId,
+      toolCallId: p.toolCallId,
+      server: p.server,
+      message: p.message,
+      mode: p.mode,
+      fields: p.fields,
+      url: p.url,
+      ...(p.agent === undefined ? {} : { agent: p.agent }),
+      state: "pending",
+      response: null,
+    };
+    writeItems(draft, session.id).push(item);
+  }
+  addPending(draft, session.id, {
+    kind: "elicitation",
+    requestId: p.requestId,
+    turnId: p.turnId,
+  });
+}
+
 export function requestResolved(
   draft: Draft,
   session: MutableSession,
@@ -727,6 +763,8 @@ export function requestResolved(
   } else if (item?.kind === "question" && p.kind === "question") {
     items[index] = { ...item, state, response: p.response };
   } else if (item?.kind === "plan" && p.kind === "plan") {
+    items[index] = { ...item, state, response: p.response };
+  } else if (item?.kind === "elicitation" && p.kind === "elicitation") {
     items[index] = { ...item, state, response: p.response };
   }
 }
@@ -833,7 +871,8 @@ function ofCall(item: TranscriptItem | undefined, toolCallId: string): boolean {
 function hookPosition(items: readonly TranscriptItem[], toolCallId: string, event: string): number {
   const index = toolIndex(items, toolCallId);
   if (index === -1) return -1;
-  if (event === "PreToolUse") {
+  // PreToolUse and PermissionRequest hooks ran before the call did.
+  if (event === "PreToolUse" || event === "PermissionRequest") {
     const permission = permissionIndexForCall(items, toolCallId);
     return permission !== -1 && permission < index ? permission : index;
   }

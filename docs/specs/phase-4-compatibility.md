@@ -69,6 +69,16 @@ A pre-tool-use decision feeds the permission engine: `deny` wins over everything
 
 **Known gap.** Hooks get a transcript path, and some scripts parse that file. Our transcript format is our own, so those scripts will not work unchanged. The compatibility report flags hooks that read the transcript.
 
+As built (2026-11-27, round 3): tiers 1 and 2 run with all five handler types, each on the events the reference lists for it (an agent hook on PermissionRequest, or a prompt hook on PreCompact, is reported and skipped). Tier 3 runs PostToolBatch, UserPromptExpansion (skills, custom commands and MCP prompts, checked before they expand, so a block also stops a skill's inline shell; `command_source` is `userSettings`, `projectSettings` or `mcp`), StopFailure, and Elicitation and ElicitationResult. Where the docs leave room, dawg settles it so:
+
+- **PermissionRequest** runs only where a prompt would be shown, or where nobody can answer one (headless, a client without prompts); its allow then runs the call instead of refusing it. Deny wins over allow. A new input is checked against the tool's schema and the rules again: a deny rule refuses it, and an ask rule asks the person with the new input. `updatedPermissions`: `addRules` for the session, or saved to the project's personal dawg file for `localSettings`; `projectSettings` and `userSettings` hold for the session only, since dawg never writes Claude Code's files; `setMode` only to a mode the settings allow; `addDirectories`. `replaceRules` and `removeRules` are not applied. A prompt hook's `ok: true` grants the request; `ok: false` leaves the prompt to the person.
+- **PostToolUseFailure** runs after a call that ran and failed (it threw, or its result is an error), not after one the person stopped or one that was refused. A shell command's `error` starts with `Exit code N`.
+- **PreCompact and PostCompact** run around `/compact`, "summarise from here" and automatic compaction, not around trimming one oversized result. A blocked manual compaction ends as failed, with the reason; a blocked automatic one is skipped, and a context overflow then fails the request.
+- **http**: redirects are not followed, so `allowedHttpHookUrls` holds for the address the event reaches; an empty list allows nothing. **prompt** asks the helper model, else the session's, with any `model` mapped. On PreToolUse, `ok: true` lets the call go on to the usual permission check; it is not an allow. **agent** runs as a read-only subagent (Read, Grep, Glob, 50 requests at most), listed with the session's agents as type "hook"; it fires no subagent hooks of its own, and a subagent's own agent hooks fail, since subagents start no agents. **mcp_tool** calls go through the session's servers with no permission check, wait for a server still connecting on events that can block, and are skipped on SessionStart at launch.
+- **Elicitation** hooks run before the form is shown, also where nobody could answer it (headless): an accepted form must pass the same check as the person's answer, or it is refused and the person is asked; a decline wins over a cancel, and a cancel over an accept. When a hook answers, ElicitationResult hooks do not run. **ElicitationResult** runs on every answer the person gives; an accept without `content` keeps theirs, and the result is checked against the form too. Notification hooks get `elicitation_dialog` (or `elicitation_url_dialog`) when a request has waited as long as a permission prompt would, and `elicitation_response` once it is answered. A subagent's request runs the parent session's hooks, since it is shown there.
+- `once` is ignored in settings files and `async` is honoured on command hooks only, as documented; a project's hooks of every type wait for consent, and the trust dialog says where an http hook sends events and which variables go with them.
+- Left for later in tier 3: InstructionsLoaded, PermissionDenied (no auto mode), CwdChanged, DirectoryAdded, ConfigChange, FileChanged, PreSkillShellCommand, WorktreeCreate and WorktreeRemove, PreModelSwitch and PostModelSwitch, Setup, MessageDisplay, and the task and teammate events.
+
 ### Skills
 
 **Source.** `<root>/skills/<name>/SKILL.md` with front matter, where root is `~/.claude`, `~/.dawg`, a project's `.claude` or `.dawg`, or a nested directory's.
@@ -108,6 +118,14 @@ Skills added while a session is running appear in the next session, so the cache
 
 **Scheduling on one model.** Each running agent needs a cache slot. The main agent holds slot 0; subagents take free slots and run in parallel when there are enough, and queue when there are not. The UI shows queued agents as queued. A fork is cheap to start because it shares the parent's cached prefix.
 
+As built (2026-11-27, round 3):
+
+- `memory` and `mcpServers` are honoured too. Settings → Subagents (named so because "Agents" is kept for a later feature) lists every definition a project's new sessions get, built-ins included, as loaded, partly supported, needs approval, invalid or overridden (`project.subagents`), with "Open file". Its "New subagent" form writes `<name>.md` (lowercase words joined by hyphens, as the docs describe names) to `~/.dawg/agents` or the project's `.dawg/agents`, never under `.claude` and never over an existing file (`subagent.create`). `/agents` opens that page in the app and prints the listing, with the session's own agents, in `dawg`; Claude Code's own `/agents` now only says where the files go.
+- MCP for typed agents: with no `tools` list an agent gets the session's MCP tools; a list narrows them by exact name, by a prefix ending in `*`, or by a server alone (`mcp__github`, as permission rules name a server); `disallowedTools` takes them away the same way, by prefix as documented. dawg settles what the docs leave open: a server named in `mcpServers` (by reference or inline) is granted whole beside a `tools` list, and inline servers add to the session's rather than replace them. ToolSearch, CallMcpTool and the resource tools reach only the agent's servers and tools. Read-only built-ins get no MCP tools.
+- An inline server in a project's agent file is project code: it is in the trust hash and starts only once the project's code is approved, and never gets the variables a project's server is denied. One in Claude Code's agent files in the home folder (`~/.claude/agents`) runs code dawg did not write, so, like Claude Code's user hooks, it waits for approval given once for every project (decided 2026-11-27); that file's tool grants and mode need none. One in the person's own `~/.dawg/agents` needs no approval.
+- As documented, the model cannot send more work to an agent the person stopped.
+- Left: the `Agent` tool's `name`, `model` and `effort` parameters (and `SendMessage` by name); the `--agents` flag; the `hooks`, `effort`, `omitClaudeMd`, `initialPrompt`, `autoCompactWindow` and `color` fields (reported as partly supported); Claude Code's newer default of starting custom agents in the background.
+
 ### MCP
 
 Built on the official TypeScript SDK.
@@ -136,6 +154,23 @@ Built on the official TypeScript SDK.
 - Servers that connect after the session started are reachable through the search path.
 
 The threshold between the two modes, and whether the dispatcher costs accuracy, are settled on the eval suite (tasks 11 and 12 switch on in this phase).
+
+As built (2026-11-27), signing in and a session's own servers:
+
+- Sign-in runs on the SDK's `auth()`: discovery (RFC 9728, then RFC 8414), dynamic registration when offered, PKCE S256, `state` checked. The browser comes back to `http://localhost:PORT/callback` (the form Claude Code documents), served on 127.0.0.1 and, as a best effort, on ::1 at the same port: one flow, the first matching return wins, both close together, five minutes. Only "Sign in" (Settings → MCP servers, `/mcp login`, `mcp.signIn`) starts one; a plain connect never registers dawg. A `-p` run never signs in and names the servers it went without.
+- A definition's `oauth` object takes the documented `clientId`, `callbackPort`, `authServerMetadataUrl` and `scopes`. Claude Code keeps a client secret in its Keychain from `claude mcp add`; dawg has no `add`, so it reads `MCP_CLIENT_SECRET` (the variable Claude Code documents for skipping its prompt) at sign-in and keeps it with the sign-in. The app has no field for a secret yet.
+- Tokens and registrations go through `McpCredentialStore`, keyed by scope, name and URL origin. The Keychain (one generic-password item per server, service `dawg-code.mcp.<hash of the data root>`, secrets on `security -i`'s standard input) is the default on macOS for the app and the CLI; `DAWG_CREDENTIAL_STORE=file` (0600) or `memory` choose otherwise. `security -i` cuts lines at 4,095 characters, so an unusually large sign-in spans a few numbered items.
+- A refused token is first checked against the store (the other process may have renewed it), then renewed with the refresh token, one renewal at a time; a refused renewal makes the server "needs sign-in" with that reason.
+- `--mcp-config` (repeatable, a later one wins) and `--strict-mcp-config`, and `session.create`'s `mcpServers` and `strictMcpConfig`, apply to new sessions only; `mcp.list` and the sign-in methods take an optional `sessionId` to reach them.
+
+As built (2026-11-27), elicitation and the resource tools:
+
+- dawg declares both modes (`elicitation: {form: {}, url: {}}`), as Claude Code does. A request is shown in the session whose call to that server is in flight; the SDK does not say which call a server's request relates to, so when calls of two sessions sharing the server are in flight, or none is, dawg declines rather than guess, and the calls' results say so. One session's form is never shown in another.
+- Nobody to ask (a `-p` run, a client without the `elicitation` capability): declined at once, with a note in the tool result. An interrupt answers "cancel". A subagent's request is shown in the parent session, labelled with the agent (app and CLI, a background agent's at the CLI prompt too), and the parent's hooks run on it; it outlives the parent's turn unless that turn is interrupted. A turn waiting on a request is not kept across quitting, since the server's request goes with the process.
+- The form is checked against the requested schema in the engine, the app and the CLI alike (`elicitationIssues`). URL mode shows the site and the full address and opens it only when the person asks; only http and https addresses up to 8,192 characters are offered.
+- Time spent waiting for the person does not count against a call's timeout: the clock stops while the request waits and goes on with what was left.
+- `ListMcpResourcesTool` (one server's or all, templates included, MCP Apps pages left out) and `ReadMcpResourceTool` (by server and URI) ask no permission, as documented. They are in a session's tool list whenever it has MCP servers when the list is decided; results are wrapped as data and capped like other MCP results, and binary contents are saved to a file.
+- Not yet: the `URLElicitationRequiredError` (-32042) answer to a call, and `notifications/elicitation/complete` (ignored, as unknown ids must be). The `Elicitation` and `ElicitationResult` hooks are under Hooks.
 
 ### Checkpoints and rewind
 
@@ -193,6 +228,8 @@ Fetched pages and search results are untrusted. They are wrapped and labelled as
 - The model maintains it with the ordinary file tools, under instructions for when to save and when not to.
 - `/memory` opens the instruction files and the memory folder for editing.
 - Subagent memory scopes (user, project, local) from the agent front matter map to folders under `~/.dawg` and the project.
+
+As built (2026-11-27, round 3), subagent memory: the scopes map to `<data root>/agent-memory/<agent>/` (`user`, `~/.dawg/agent-memory/` by default), `<project root>/.dawg/agent-memory/<agent>/` (`project`, meant to be committed) and `<project root>/.dawg/agent-memory-local/<agent>/` (`local`), where the project root is the main working tree, as for the project's memory. As documented, the agent's prompt holds instructions and the first 200 lines (25 KB) of its MEMORY.md, Read, Write and Edit join its tools, and its file tools work in the folder without asking; it does nothing with auto memory off. The index is read at the agent's first task and kept for its later ones in the session. Claude Code's `.claude/agent-memory*` folders are not read, as its project memory is not.
 
 ### Compatibility report
 

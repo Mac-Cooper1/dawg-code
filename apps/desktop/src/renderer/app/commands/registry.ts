@@ -776,6 +776,13 @@ const SETTINGS: Command[] = [
     run: openSettings("skills"),
   },
   {
+    id: "settings.subagents",
+    title: "Settings: Subagents",
+    group: "Settings",
+    keywords: ["agents", "subagent", "agent files", "new subagent", "claude code", "preferences"],
+    run: openSettings("subagents"),
+  },
+  {
     id: "settings.mcp",
     title: "Settings: MCP servers",
     group: "Settings",

@@ -7,8 +7,12 @@
 import { z } from "zod";
 import { CommandSandboxSchema } from "./sandbox.ts";
 
-/** Additive changes keep this number. Breaking changes bump it. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * Additive changes keep this number. Breaking changes bump it, including a value added to an enum
+ * the engine sends (README, "Versioning"). 2: Phase 4 (new tool display kinds, the "elicitation"
+ * pending request). 1: Phases 1 to 3.
+ */
+export const PROTOCOL_VERSION = 2;
 
 // ---------------------------------------------------------------------------------------------
 // Modes and status
@@ -700,6 +704,18 @@ export const CompatReportSchema = z.object({
 });
 export type CompatReport = z.infer<typeof CompatReportSchema>;
 
+/** Added (Phase 4, hooks): what an http, prompt, agent or mcp_tool hook reaches. */
+export const HookReachesSchema = z.object({
+  /** http: the URL's host, with its port when it has one. */
+  host: z.string().nullable(),
+  /** prompt and agent: `model` as written (mapped to a local model), or null for the default. */
+  model: z.string().nullable(),
+  /** mcp_tool: the MCP server and its tool. */
+  server: z.string().nullable(),
+  tool: z.string().nullable(),
+});
+export type HookReaches = z.infer<typeof HookReachesSchema>;
+
 /**
  * One hook handler as Settings → Hooks lists it (Phase 4): where it comes from, what it runs,
  * whether dawg runs it, and the person's switch for it.
@@ -729,6 +745,11 @@ export const HookInfoSchema = z.object({
   notes: z.array(z.string()).default([]),
   /** The person's own switch (Settings → Hooks). An off hook never runs. */
   enabled: z.boolean(),
+  /**
+   * Added (Phase 4, hooks): what a hook that is not a command reaches, for people. Null (or
+   * absent, from an older engine) for a command hook.
+   */
+  reaches: HookReachesSchema.nullable().optional(),
 });
 export type HookInfo = z.infer<typeof HookInfoSchema>;
 

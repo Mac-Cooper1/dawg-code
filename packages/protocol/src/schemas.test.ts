@@ -41,6 +41,7 @@ describe("methods", () => {
       permissionPrompts: true,
       questions: true,
       planApproval: true,
+      elicitation: true,
     });
     const command = methods["session.command"].params.parse({ sessionId: "s1", name: "help" });
     expect(command.args).toBe("");

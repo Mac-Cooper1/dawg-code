@@ -11,6 +11,7 @@ import {
   type ChangeSet,
   type ChooseFolderOptions,
   ChooseFolderOptionsSchema,
+  ConfigFilePathSchema,
   ConnectServerInputSchema,
   CreateWorktreeInputSchema,
   type DesktopSettings,
@@ -96,6 +97,8 @@ export interface MainServices<Sender> {
   /** The native picker for one `.gguf` file; null when cancelled. */
   chooseModelFile(sender: Sender): Promise<string | null>;
   openExternal(url: string): Promise<void>;
+  /** Opens an agent, skill or command file in the person's editor (main/config-files.ts checks it). */
+  openConfigFile(path: string): Promise<void>;
 }
 
 export type InvokeHandler<Sender> = (sender: Sender, args: readonly unknown[]) => Promise<unknown>;
@@ -200,6 +203,8 @@ export function createInvokeHandlers<Sender>(
       ),
     [IPC.openExternal]: async (_sender, [url]): Promise<void> =>
       services.openExternal(validateInput(ExternalUrlSchema, url, "link")),
+    [IPC.openConfigFile]: async (_sender, [file]): Promise<void> =>
+      services.openConfigFile(validateInput(ConfigFilePathSchema, file, "file")),
   };
 }
 

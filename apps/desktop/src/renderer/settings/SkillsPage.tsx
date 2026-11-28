@@ -11,7 +11,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { basename, shortenPath } from "../lib/format.ts";
 import { sourceLabel } from "../lib/hooks.ts";
 import type { SkillsListing } from "../state/types.ts";
-import { Icon, IconButton, Tag, type TagTone } from "../ui/index.ts";
+import { Button, Icon, IconButton, Tag, type TagTone } from "../ui/index.ts";
 import type { PermissionsProject } from "./PermissionsPage.tsx";
 import settingsStyles from "./Settings.module.css";
 import styles from "./SkillsPage.module.css";
@@ -30,6 +30,8 @@ export interface SkillsPageProps {
   initialProject: string | null;
   homeDir: string;
   listSkills(projectDir: string | null): Promise<SkillsListing | { error: string }>;
+  /** Opens a skill or command file in the person's editor; absent, no "Open file" buttons. */
+  onOpenFile?(path: string): void;
 }
 
 /** Who may start it, in one sentence. */
@@ -149,15 +151,30 @@ export function SkillsPage(props: SkillsPageProps) {
         </div>
       ) : (
         <>
-          <SkillSection title="Skills" items={listing.skills} homeDir={homeDir} />
-          <SkillSection title="Commands" items={listing.commands} homeDir={homeDir} />
+          <SkillSection
+            title="Skills"
+            items={listing.skills}
+            homeDir={homeDir}
+            onOpenFile={props.onOpenFile}
+          />
+          <SkillSection
+            title="Commands"
+            items={listing.commands}
+            homeDir={homeDir}
+            onOpenFile={props.onOpenFile}
+          />
         </>
       )}
     </div>
   );
 }
 
-function SkillSection(props: { title: string; items: readonly SkillInfo[]; homeDir: string }) {
+function SkillSection(props: {
+  title: string;
+  items: readonly SkillInfo[];
+  homeDir: string;
+  onOpenFile: ((path: string) => void) | undefined;
+}) {
   const headingId = useId();
   if (props.items.length === 0) return null;
   return (
@@ -172,6 +189,7 @@ function SkillSection(props: { title: string; items: readonly SkillInfo[]; homeD
             key={`${item.source.path}\u0000${item.name}`}
             item={item}
             homeDir={props.homeDir}
+            onOpenFile={props.onOpenFile}
           />
         ))}
       </ul>
@@ -179,8 +197,13 @@ function SkillSection(props: { title: string; items: readonly SkillInfo[]; homeD
   );
 }
 
-function SkillRow(props: { item: SkillInfo; homeDir: string }) {
-  const { item } = props;
+function SkillRow(props: {
+  item: SkillInfo;
+  homeDir: string;
+  onOpenFile: ((path: string) => void) | undefined;
+}) {
+  const { item, onOpenFile } = props;
+  const nameId = useId();
   const status = STATUS[item.status];
   const notUsed = item.notes.some((note) => note.startsWith("Not used"));
   return (
@@ -190,7 +213,7 @@ function SkillRow(props: { item: SkillInfo; homeDir: string }) {
       }
     >
       <div className={styles.rowHead}>
-        <span className={styles.name}>
+        <span id={nameId} className={styles.name}>
           {item.userInvocable ? `/${item.name}` : item.name}
           {item.argumentHint !== null && item.userInvocable && (
             <span className={styles.hint}> {item.argumentHint}</span>
@@ -205,6 +228,18 @@ function SkillRow(props: { item: SkillInfo; homeDir: string }) {
         </Tag>
         {notUsed && <Tag>Not used</Tag>}
         {status !== undefined && <Tag tone={status.tone}>{status.label}</Tag>}
+        {onOpenFile !== undefined && (
+          <Button
+            className={styles.open}
+            size="sm"
+            variant="ghost"
+            icon="file"
+            aria-describedby={nameId}
+            onClick={() => onOpenFile(item.source.path)}
+          >
+            Open file
+          </Button>
+        )}
       </div>
       {item.description !== "" && <p className={styles.description}>{item.description}</p>}
       <p className={styles.meta}>

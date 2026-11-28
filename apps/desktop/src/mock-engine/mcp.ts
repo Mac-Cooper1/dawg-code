@@ -1,18 +1,26 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: MCP definitions write ${VAR} variables literally
 /**
  * MCP servers in the mock engine, answered as the real engine answers them (Phase 4: `mcp.list`,
- * `mcp.restart`, `mcp.setEnabled`, `mcp.importPreview`, `mcp.import`, `mcp.session`).
+ * `mcp.restart`, `mcp.setEnabled`, `mcp.importPreview`, `mcp.import`, `mcp.session`; round 3:
+ * `mcp.signIn`, `mcp.signOut`, `mcp.cancelSignIn`, and a session's own servers).
  *
  * The setup it pretends to read:
  * - `~/.dawg/mcp.json`: `github`, a local command with three tools, connected.
  * - `~/code/tally/.mcp.json`: `postgres`, connected, and `docs`, a remote server that wants a
- *   sign-in.
+ *   sign-in. "Sign in" gives an address on docs.example.com; the browser's return is pretended
+ *   on the next listing after it, which shows `docs` connected and signed in.
  * - `~/.claude.json` (Claude Code's own): `linear`, for every project, which the import copies
  *   into `~/.dawg/mcp.json`; a WebSocket server it leaves out.
  *
  * No Node APIs (the mock runs in a browser tab too).
  */
-import type { CommandInfo, McpImportPlan, McpResourceInfo, McpServerInfo } from "@dawg/protocol";
+import type {
+  CommandInfo,
+  McpImportPlan,
+  McpResourceInfo,
+  McpServerInfo,
+  McpSignInInfo,
+} from "@dawg/protocol";
 import { ErrorCodes, RpcError } from "@dawg/protocol";
 
 function tools(server: string, list: [string, string][]): McpServerInfo["tools"] {
@@ -26,6 +34,14 @@ export class MockMcp {
   /** Names the person turned off. */
   readonly #off = new Set<string>();
   #imported = false;
+  /** Remote servers waiting for the browser, and those signed in. */
+  readonly #signingIn = new Set<string>();
+  readonly #signedIn = new Set<string>();
+  /** Each session's own servers (`session.create`'s `mcpServers`), and whether only those. */
+  readonly #sessionServers = new Map<
+    string,
+    { servers: Record<string, unknown>; strict: boolean }
+  >();
 
   constructor(homeDir: string) {
     this.#homeDir = homeDir;
@@ -52,6 +68,7 @@ export class MockMcp {
         resources: 0,
         enabled: true,
         notes: [],
+        signIn: null,
       },
     ];
     if (this.#imported) {
@@ -62,13 +79,13 @@ export class MockMcp {
         transport: "http",
         target: "https://mcp.linear.app/mcp",
         state: "needs-sign-in",
-        reason:
-          "The server wants you to sign in first. Signing in to MCP servers arrives later in dawg.",
+        reason: "The server wants you to sign in first.",
         tools: [],
         prompts: 0,
         resources: 0,
         enabled: true,
         notes: [],
+        signIn: { status: "signed-out", problem: null },
       });
     }
     if (projectDir === `${home}/code/tally`) {
@@ -87,6 +104,7 @@ export class MockMcp {
           resources: 2,
           enabled: true,
           notes: [],
+          signIn: null,
         },
         {
           name: "docs",
@@ -95,17 +113,18 @@ export class MockMcp {
           transport: "http",
           target: "https://docs.example.com/mcp",
           state: "needs-sign-in",
-          reason:
-            "The server wants you to sign in first. Signing in to MCP servers arrives later in dawg.",
+          reason: "The server wants you to sign in first.",
           tools: [],
           prompts: 0,
           resources: 0,
           enabled: true,
-          notes: ["Its OAuth settings are not used yet; signing in to MCP servers arrives later."],
+          notes: [],
+          signIn: { status: "signed-out", problem: null },
         },
       );
     }
     return servers
+      .map((server) => this.#withSignIn(server))
       .map((server) =>
         this.#off.has(server.name)
           ? {
@@ -153,12 +172,113 @@ export class MockMcp {
     };
   }
 
-  list(projectDir: string | null) {
+  /** A remote server as its sign-in stands: signing in, or signed in and connected. */
+  #withSignIn(server: McpServerInfo): McpServerInfo {
+    if (server.signIn === null) return server;
+    if (this.#signingIn.has(server.name)) {
+      return { ...server, signIn: { status: "signing-in", problem: null } };
+    }
+    if (!this.#signedIn.has(server.name)) return server;
+    const signIn: McpSignInInfo = { status: "signed-in", problem: null };
     return {
-      projectDir,
-      servers: this.#servers(projectDir),
-      importable: this.#imported ? 0 : 1,
+      ...server,
+      state: "connected",
+      reason: null,
+      tools: tools(server.name, [
+        ["search", "Search the documentation"],
+        ["get_page", "Read one page"],
+      ]),
+      signIn,
     };
+  }
+
+  /** A session's own servers, as `session.create` gave them: a local or a remote definition. */
+  #own(sessionId: string): McpServerInfo[] {
+    const own = this.#sessionServers.get(sessionId);
+    if (own === undefined) return [];
+    return Object.entries(own.servers).map(([name, raw]) => {
+      const definition = (raw ?? {}) as { type?: unknown; url?: unknown; command?: unknown };
+      const remote = typeof definition.url === "string";
+      return this.#withSignIn({
+        name,
+        scope: "session",
+        source: { path: "<session>", origin: "dawg", scope: "flags" },
+        transport: remote ? (definition.type === "sse" ? "sse" : "http") : "stdio",
+        target: remote ? String(definition.url) : String(definition.command ?? ""),
+        state: remote ? "needs-sign-in" : "connected",
+        reason: remote ? "The server wants you to sign in first." : null,
+        tools: remote ? [] : tools(name, [["run", "Run the server's one tool"]]),
+        prompts: 0,
+        resources: 0,
+        enabled: true,
+        notes: [],
+        signIn: remote ? { status: "signed-out", problem: null } : null,
+      });
+    });
+  }
+
+  /** Records a new session's own servers (`session.create`). */
+  setSessionServers(
+    sessionId: string,
+    servers: Record<string, unknown> | undefined,
+    strict: boolean | undefined,
+  ): void {
+    if (servers === undefined && strict !== true) return;
+    this.#sessionServers.set(sessionId, { servers: servers ?? {}, strict: strict === true });
+  }
+
+  list(projectDir: string | null, sessionId?: string) {
+    let servers = this.#servers(projectDir);
+    if (sessionId !== undefined) {
+      const own = this.#own(sessionId);
+      const strict = this.#sessionServers.get(sessionId)?.strict === true;
+      const names = new Set(own.map((s) => s.name));
+      servers = [...own, ...(strict ? [] : servers.filter((s) => !names.has(s.name)))].sort(
+        (a, b) => (a.name < b.name ? -1 : 1),
+      );
+    }
+    // The browser "comes back" once a listing has shown the sign-in on its way.
+    for (const name of this.#signingIn) {
+      this.#signingIn.delete(name);
+      this.#signedIn.add(name);
+    }
+    return { projectDir, servers, importable: this.#imported ? 0 : 1 };
+  }
+
+  #remote(projectDir: string | null, name: string, sessionId?: string): McpServerInfo {
+    const server =
+      (sessionId === undefined ? undefined : this.#own(sessionId).find((s) => s.name === name)) ??
+      this.#find(projectDir, name);
+    if (server.signIn === null) {
+      throw new RpcError(
+        ErrorCodes.InvalidState,
+        `${name} runs on this computer; only remote servers sign in.`,
+      );
+    }
+    return server;
+  }
+
+  signIn(projectDir: string | null, name: string, sessionId?: string) {
+    this.#remote(projectDir, name, sessionId);
+    this.#signedIn.delete(name);
+    this.#signingIn.add(name);
+    const host = name === "linear" ? "mcp.linear.app" : "docs.example.com";
+    return {
+      url: `https://${host}/authorize?response_type=code&client_id=dawg-mock&code_challenge=mock&code_challenge_method=S256&state=mock`,
+    };
+  }
+
+  signOut(projectDir: string | null, name: string, sessionId?: string) {
+    this.#remote(projectDir, name, sessionId);
+    this.#signingIn.delete(name);
+    this.#signedIn.delete(name);
+    return { server: this.#remote(projectDir, name, sessionId) };
+  }
+
+  cancelSignIn(projectDir: string | null, name: string, sessionId?: string) {
+    this.#remote(projectDir, name, sessionId);
+    this.#signingIn.delete(name);
+    return { server: this.#remote(projectDir, name, sessionId) };
   }
 
   #find(projectDir: string | null, name: string): McpServerInfo {

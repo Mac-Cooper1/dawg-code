@@ -312,7 +312,11 @@ export interface Unfinished {
   turn: { turnId: string; startedAt: number } | null;
   messages: { turnId: string; messageId: string }[];
   tools: { turnId: string; toolCallId: string; toolName: string }[];
-  requests: { kind: "permission" | "question" | "plan"; turnId: string; requestId: string }[];
+  requests: {
+    kind: "permission" | "question" | "plan" | "elicitation";
+    turnId: string;
+    requestId: string;
+  }[];
   compaction: { compactionId: string; contextUsed: number } | null;
   /** Background commands last reported running. */
   background: BackgroundTask[];
@@ -361,6 +365,9 @@ export function findUnfinished(events: readonly LoggedEvent[]): Unfinished {
         break;
       case "plan.proposed":
         requests.set(String(p.requestId), { kind: "plan", turnId: String(p.turnId) });
+        break;
+      case "elicitation.requested":
+        requests.set(String(p.requestId), { kind: "elicitation", turnId: String(p.turnId) });
         break;
       case "request.resolved":
         requests.delete(String(p.requestId));

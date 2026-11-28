@@ -29,6 +29,7 @@ import {
   ToolProgressSchema,
   UsageSchema,
 } from "./common.ts";
+import * as elicitation from "./elicitation.ts";
 import * as subagents from "./subagents.ts";
 
 const IdSchema = z.string().min(1);
@@ -75,11 +76,12 @@ export const PlanAskSchema = z.object({
   modeBeforePlan: PermissionModeSchema.nullable().default(null),
 });
 
-/** A permission, question or plan request that has not been answered yet. */
+/** A permission, question, plan or MCP elicitation request that has not been answered yet. */
 export const PendingRequestSchema = z.discriminatedUnion("kind", [
   PermissionAskSchema.extend({ kind: z.literal("permission") }),
   QuestionAskSchema.extend({ kind: z.literal("question") }),
   PlanAskSchema.extend({ kind: z.literal("plan") }),
+  elicitation.ElicitationAskSchema.extend({ kind: z.literal("elicitation") }),
 ]);
 export type PendingRequest = z.infer<typeof PendingRequestSchema>;
 
@@ -90,7 +92,7 @@ export type PendingRequest = z.infer<typeof PendingRequestSchema>;
 export const SessionStatusEventSchema = EventBaseSchema.extend({
   status: SessionStatusSchema,
   /** What the session waits on when `status` is "waiting"; otherwise null. */
-  waitingOn: z.enum(["permission", "question", "plan"]).nullable(),
+  waitingOn: z.enum(["permission", "question", "plan", "elicitation"]).nullable(),
   /** A short line for the sidebar, for example "Waiting for the model". */
   message: z.string().nullable(),
   /**
@@ -248,6 +250,13 @@ export const RequestResolvedEventSchema = z.discriminatedUnion("kind", [
     outcome: ResolutionOutcomeSchema,
     response: PlanResponseSchema.nullable(),
   }),
+  EventBaseSchema.extend({
+    kind: z.literal("elicitation"),
+    turnId: IdSchema,
+    requestId: IdSchema,
+    outcome: ResolutionOutcomeSchema,
+    response: elicitation.ElicitationResponseSchema.nullable(),
+  }),
 ]);
 
 export const TasksUpdatedEventSchema = EventBaseSchema.extend({
@@ -372,6 +381,7 @@ export const events = {
   "question.asked": QuestionAskedEventSchema,
   "plan.proposed": PlanProposedEventSchema,
   "request.resolved": RequestResolvedEventSchema,
+  "elicitation.requested": elicitation.ElicitationRequestedEventSchema,
   "tasks.updated": TasksUpdatedEventSchema,
   "background.updated": BackgroundUpdatedEventSchema,
   "subagent.updated": subagents.SubagentUpdatedEventSchema,

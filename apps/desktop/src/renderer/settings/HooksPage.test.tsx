@@ -44,13 +44,49 @@ const REVIEW: HookInfo = {
   command: "Check that the tests pass before stopping.",
   timeout: null,
   source: { path: `${TALLY}/.claude/settings.json`, origin: "claude", scope: "project" },
-  status: "not-supported",
-  notes: ["Prompt hooks ask a model to decide; dawg runs command hooks only in this version."],
+  status: "loaded",
+  notes: [
+    "model “haiku” is mapped to the helper model, or to the session's model when there is no helper.",
+  ],
   enabled: true,
+  reaches: { host: null, model: "haiku", server: null, tool: null },
+};
+
+const AUDIT: HookInfo = {
+  id: "hook:audit",
+  event: "PermissionRequest",
+  matcher: "Bash",
+  type: "http",
+  command: "http://localhost:8080/hooks/permission",
+  timeout: null,
+  source: { path: `${HOME}/.dawg/settings.json`, origin: "dawg", scope: "user" },
+  status: "loaded",
+  notes: [],
+  enabled: true,
+  reaches: { host: "localhost:8080", model: null, server: null, tool: null },
+};
+
+const SCAN: HookInfo = {
+  id: "hook:scan",
+  event: "FileChanged",
+  matcher: ".envrc",
+  type: "mcp_tool",
+  command: "security scan_file",
+  timeout: null,
+  source: { path: `${HOME}/.dawg/settings.json`, origin: "dawg", scope: "user" },
+  status: "not-supported",
+  notes: ["dawg does not run FileChanged hooks yet."],
+  enabled: true,
+  reaches: { host: null, model: null, server: "security", tool: "scan_file" },
 };
 
 function listing(overrides: Partial<HooksListing> = {}): HooksListing {
-  return { projectDir: TALLY, hooks: [CHECK, LINT, REVIEW], disabledBy: null, ...overrides };
+  return {
+    projectDir: TALLY,
+    hooks: [CHECK, LINT, REVIEW, AUDIT, SCAN],
+    disabledBy: null,
+    ...overrides,
+  };
 }
 
 function setup(theme: "dark" | "light", overrides: Partial<HooksPageProps> = {}) {
@@ -78,7 +114,7 @@ describe.each(THEMES)("HooksPage (%s)", (theme) => {
     const rows = within(list)
       .getAllByRole("listitem")
       .filter((li) => li.parentElement === list);
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(5);
     expect(rows[0]).toHaveTextContent("PreToolUse on Bash");
     expect(rows[0]).toHaveTextContent("./scripts/check-command.sh");
     expect(rows[0]).toHaveTextContent("~/code/tally/.claude/settings.json");
@@ -88,9 +124,18 @@ describe.each(THEMES)("HooksPage (%s)", (theme) => {
     expect(rows[1]).toHaveTextContent("PostToolUse on Edit|Write");
     expect(rows[1]).toHaveTextContent("dawg’s file, yours everywhere");
     expect(rows[1]).toHaveTextContent("Runs");
+    // The other handler types: their type, and what they reach.
+    expect(rows[0]).not.toHaveTextContent("Command");
     expect(rows[2]).toHaveTextContent("Stop");
-    expect(rows[2]).toHaveTextContent("Not supported yet");
-    expect(rows[2]).toHaveTextContent("dawg runs command hooks only in this version");
+    expect(rows[2]).toHaveTextContent("Prompt");
+    expect(rows[2]).toHaveTextContent("Asks “haiku”, mapped to the helper model or the session’s");
+    expect(rows[3]).toHaveTextContent("PermissionRequest on Bash");
+    expect(rows[3]).toHaveTextContent("HTTP");
+    expect(rows[3]).toHaveTextContent("Posts to localhost:8080");
+    expect(rows[4]).toHaveTextContent("MCP tool");
+    expect(rows[4]).toHaveTextContent("Calls scan_file on the MCP server security");
+    expect(rows[4]).toHaveTextContent("Not supported yet");
+    expect(rows[4]).toHaveTextContent("dawg does not run FileChanged hooks yet");
     // Where the switches live, in one line.
     expect(screen.getByText(/keeps the switches in its own data folder/)).toBeInTheDocument();
   });

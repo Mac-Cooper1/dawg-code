@@ -6,6 +6,9 @@
  */
 import {
   type AgentDefinition,
+  type AgentMcpServer,
+  type AgentMemoryScope,
+  agentServersNeedConsent,
   isProjectAgentCode,
   loadAgents,
   toolGrants,
@@ -13,6 +16,8 @@ import {
 } from "@dawg/compat";
 import type { CompatSource, PermissionMode } from "@dawg/protocol";
 import type { AnyTool } from "../contracts/tools.ts";
+import { isMcpEntry } from "./mcp.ts";
+import { MEMORY_TOOLS } from "./memory.ts";
 import {
   customAgentPrompt,
   EXPLORE_PROMPT,
@@ -60,8 +65,17 @@ export interface AgentSpec {
   isolation: "worktree" | null;
   /** The file it came from; null for a built-in. */
   source: CompatSource | null;
-  /** Its grants or loose mode need the person's approval of the project's code. */
+  /** Its grants, loose mode or servers of its own need the person's approval of the project's code. */
   projectCode: boolean;
+  /** Added (round 3): its own lasting memory folder's scope; absent or null for none. */
+  memory?: AgentMemoryScope | null;
+  /** Added (round 3): `mcpServers`, references and servers of its own (./mcp.ts). */
+  mcpServers?: readonly AgentMcpServer[];
+  /**
+   * Added (round 3): its servers of its own wait for the person's approval (a project's file, or
+   * Claude Code's in the home folder; not `~/.dawg`'s).
+   */
+  serversNeedConsent?: boolean;
 }
 
 function builtIn(name: string, description: string, prompt: string, readOnly: boolean): AgentSpec {
@@ -80,6 +94,8 @@ function builtIn(name: string, description: string, prompt: string, readOnly: bo
     isolation: null,
     source: null,
     projectCode: false,
+    memory: null,
+    mcpServers: [],
   };
 }
 
@@ -120,6 +136,9 @@ function fromFile(def: AgentDefinition): AgentSpec {
     isolation: def.isolation,
     source: def.source,
     projectCode: isProjectAgentCode(def),
+    memory: def.memory,
+    mcpServers: def.mcpServers,
+    serversNeedConsent: agentServersNeedConsent(def),
   };
 }
 
@@ -164,10 +183,19 @@ export class AgentRegistry {
 
 /**
  * The tools an agent gets, in the session's order: every tool a subagent may have, narrowed to
- * its `tools` when it names any, less its `disallowedTools`.
+ * its `tools` when it names any, less its `disallowedTools`. With its memory on, Read, Write and
+ * Edit are added to a `tools` list that leaves them out (as documented); `disallowedTools` still
+ * wins. MCP tools join later, when the session decides them (./mcp.ts).
  */
-export function agentTools(spec: AgentSpec, available: readonly AnyTool[]): AnyTool[] {
-  const allowed = spec.tools === null ? null : new Set(spec.tools);
+export function agentTools(
+  spec: AgentSpec,
+  available: readonly AnyTool[],
+  options: { memory?: boolean } = {},
+): AnyTool[] {
+  const allowed =
+    spec.tools === null
+      ? null
+      : new Set([...spec.tools, ...(options.memory === true ? MEMORY_TOOLS : [])]);
   const denied = new Set(spec.disallowedTools);
   return available.filter(
     (tool) =>
@@ -175,6 +203,11 @@ export function agentTools(spec: AgentSpec, available: readonly AnyTool[]): AnyT
       !denied.has(tool.name) &&
       (allowed === null || allowed.has(tool.name)),
   );
+}
+
+/** Whether an agent's `tools` list or `mcpServers` asks for MCP tools, which come later than the rest. */
+export function wantsMcp(spec: AgentSpec): boolean {
+  return (spec.tools ?? []).some(isMcpEntry) || (spec.mcpServers ?? []).length > 0;
 }
 
 const LOOSENESS: Readonly<Record<PermissionMode, number>> = {

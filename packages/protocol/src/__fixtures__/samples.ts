@@ -14,9 +14,10 @@ import type {
   TaskItem,
   Usage,
 } from "../common.ts";
+import { PROTOCOL_VERSION } from "../common.ts";
 import type { EventName, EventPayloadInput } from "../events.ts";
 import type { McpServerInfo } from "../mcp.ts";
-import type { SubagentInfo } from "../subagents.ts";
+import type { SubagentDefinition, SubagentInfo } from "../subagents.ts";
 import type { MethodName, MethodParams, ResultInput } from "../methods.ts";
 import type { SessionSnapshot } from "../methods.ts";
 
@@ -180,6 +181,17 @@ export const hookInfo: HookInfo = {
   enabled: true,
 };
 
+/** Added (Phase 4, hooks): an http hook, with what it reaches. */
+export const httpHookInfo: HookInfo = {
+  ...hookInfo,
+  id: "hook:9a2c",
+  type: "http",
+  command: "http://localhost:8080/hooks/pre-tool-use",
+  status: "loaded",
+  notes: [],
+  reaches: { host: "localhost:8080", model: null, server: null, tool: null },
+};
+
 /** The sample skill as Settings → Skills and commands lists it. */
 export const skillInfo: SkillInfo = {
   name: "review",
@@ -217,6 +229,22 @@ export const mcpServer: McpServerInfo = {
   resources: 0,
   enabled: true,
   notes: [],
+  signIn: null,
+};
+
+/** A remote server that wants a sign-in (Phase 4, round 3). */
+export const mcpRemoteServer: McpServerInfo = {
+  ...mcpServer,
+  name: "linear",
+  scope: "user",
+  source: { path: "/Users/me/.dawg/mcp.json", origin: "dawg", scope: "user" },
+  transport: "http",
+  target: "https://mcp.linear.app/mcp",
+  state: "needs-sign-in",
+  reason: "The server wants you to sign in first.",
+  tools: [],
+  prompts: 0,
+  signIn: { status: "signed-out", problem: null },
 };
 
 export const subagentInfo: SubagentInfo = {
@@ -239,11 +267,38 @@ export const subagentInfo: SubagentInfo = {
   error: null,
 };
 
+export const subagentDefinition: SubagentDefinition = {
+  name: "code-reviewer",
+  description: "Reviews code for quality and tests",
+  builtIn: false,
+  source: { path: "/Users/me/tally/.dawg/agents/code-reviewer.md", origin: "dawg", scope: "project" },
+  tools: ["Read", "Grep", "mcp__github__*"],
+  disallowedTools: [],
+  model: "sonnet",
+  mappedModel: null,
+  permissionMode: null,
+  readOnly: false,
+  maxTurns: null,
+  skills: [],
+  memory: "project",
+  memoryDirectory: "/Users/me/tally/.dawg/agent-memory/code-reviewer",
+  mcpServers: [{ name: "github", inline: false }],
+  background: false,
+  isolation: null,
+  status: "loaded",
+  overriddenBy: null,
+  notes: ["model “sonnet” is mapped to the session's model: model names are mapped, not obeyed."],
+};
+
 export const methodSamples: MethodSamples = {
   initialize: {
-    params: { protocolVersion: 1, client: { name: "test", version: "0.0.0" }, capabilities: {} },
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      client: { name: "test", version: "0.0.0" },
+      capabilities: {},
+    },
     result: {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       engine: { name: "engine", version: "0.0.0" },
       capabilities: { methods: ["initialize"], events: ["session.status"], maxMessageLength: null },
     },
@@ -251,7 +306,12 @@ export const methodSamples: MethodSamples = {
     badResult: { protocolVersion: 1, engine: { name: "engine" } },
   },
   "session.create": {
-    params: { cwd, mode: "plan" },
+    params: {
+      cwd,
+      mode: "plan",
+      mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } },
+      strictMcpConfig: false,
+    },
     result: snapshot,
     badParams: { cwd: "" },
     badResult: { ...snapshot, pending: [{ kind: "telepathy" }] },
@@ -429,7 +489,7 @@ export const methodSamples: MethodSamples = {
   },
   "hooks.list": {
     params: { projectDir: "/Users/me/tally" },
-    result: { projectDir: "/Users/me/tally", hooks: [hookInfo], disabledBy: null },
+    result: { projectDir: "/Users/me/tally", hooks: [hookInfo, httpHookInfo], disabledBy: null },
     badParams: { projectDir: 3 },
     badResult: {
       projectDir: "/Users/me/tally",
@@ -468,6 +528,34 @@ export const methodSamples: MethodSamples = {
     },
     badParams: { projectDir: "" },
     badResult: { projectDir: null, skills: [{ ...skillInfo, kind: "agent" }], commands: [] },
+  },
+  "project.subagents": {
+    params: { projectDir: "/Users/me/tally" },
+    result: {
+      projectDir: "/Users/me/tally",
+      agents: [subagentDefinition],
+      folders: { user: "/Users/me/.dawg/agents", project: "/Users/me/tally/.dawg/agents" },
+    },
+    badParams: { projectDir: "" },
+    badResult: {
+      projectDir: null,
+      agents: [{ ...subagentDefinition, status: "sleeping" }],
+      folders: { user: "/Users/me/.dawg/agents", project: null },
+    },
+  },
+  "subagent.create": {
+    params: {
+      projectDir: "/Users/me/tally",
+      scope: "project",
+      name: "code-reviewer",
+      description: "Reviews code for quality and tests",
+      prompt: "You review code.",
+      tools: ["Read", "Grep"],
+      memory: "project",
+    },
+    result: { path: "/Users/me/tally/.dawg/agents/code-reviewer.md", agent: subagentDefinition },
+    badParams: { projectDir: null, scope: "team", name: "x", description: "X" },
+    badResult: { path: 3, agent: subagentDefinition },
   },
   "mcp.list": {
     params: { projectDir: "/Users/me/tally" },
@@ -544,6 +632,31 @@ export const methodSamples: MethodSamples = {
     badParams: { sessionId: "" },
     badResult: { resources: [{ server: "docs" }], prompts: [] },
   },
+  "mcp.signIn": {
+    params: { projectDir: "/Users/me/tally", name: "linear", sessionId: "s1" },
+    result: {
+      url: "https://auth.example.com/authorize?response_type=code&client_id=dawg&code_challenge=abc&code_challenge_method=S256&state=xyz",
+    },
+    badParams: { projectDir: "/Users/me/tally" },
+    badResult: { url: "" },
+  },
+  "mcp.signOut": {
+    params: { projectDir: null, name: "linear" },
+    result: { server: mcpRemoteServer },
+    badParams: { projectDir: null, name: "" },
+    badResult: { server: { ...mcpRemoteServer, signIn: { status: "maybe", problem: null } } },
+  },
+  "mcp.cancelSignIn": {
+    params: { projectDir: "/Users/me/tally", name: "linear" },
+    result: {
+      server: {
+        ...mcpRemoteServer,
+        signIn: { status: "signed-out", problem: null },
+      },
+    },
+    badParams: { name: "linear" },
+    badResult: { server: { ...mcpRemoteServer, signIn: { status: "signed-out" } } },
+  },
   "permission.respond": {
     params: {
       sessionId: "s1",
@@ -576,6 +689,17 @@ export const methodSamples: MethodSamples = {
     result: {},
     badParams: { sessionId: "s1", requestId: "plan1", response: { decision: "approve", mode: "x" } },
     badResult: [],
+  },
+  "elicitation.respond": {
+    params: {
+      sessionId: "s1",
+      requestId: "e1",
+      action: "accept",
+      content: { name: "tally", count: 3, public: false, colours: ["red"] },
+    },
+    result: {},
+    badParams: { sessionId: "s1", requestId: "e1", action: "maybe" },
+    badResult: "ok",
   },
 };
 
@@ -751,6 +875,54 @@ export const eventSamples: EventSamples = {
       requestId: "plan1",
       outcome: "answered",
       response: { behavior: "deny" },
+    },
+  },
+  "elicitation.requested": {
+    payload: {
+      ...base,
+      turnId: "t1",
+      requestId: "e1",
+      toolCallId: "c4",
+      server: "tracker",
+      message: "Which project should the issue go in?",
+      mode: "form",
+      fields: [
+        {
+          name: "project",
+          type: "select",
+          title: "Project",
+          description: null,
+          required: true,
+          options: [
+            { value: "tally", title: "Tally" },
+            { value: "ledger", title: null },
+          ],
+          default: null,
+        },
+        {
+          name: "due",
+          type: "string",
+          title: "Due date",
+          description: null,
+          required: false,
+          format: "date",
+          minLength: null,
+          maxLength: null,
+          default: null,
+        },
+      ],
+      url: null,
+    },
+    bad: {
+      ...base,
+      turnId: "t1",
+      requestId: "e1",
+      toolCallId: null,
+      server: "tracker",
+      message: "Sign in",
+      mode: "browser",
+      fields: [],
+      url: "https://example.com/connect",
     },
   },
   "tasks.updated": {

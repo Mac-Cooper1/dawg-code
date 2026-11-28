@@ -4,7 +4,7 @@
  * so the rules are tested without rendering.
  */
 import type { ContentPart, DiffHunk, FileDisplay, SearchDisplay } from "@dawg/protocol";
-import { MCP_DISPATCHER } from "../lib/tools.ts";
+import { LIST_MCP_RESOURCES, MCP_DISPATCHER, READ_MCP_RESOURCE } from "../lib/tools.ts";
 import type { ToolCallDisplay, ToolCallItem } from "../state/types.ts";
 import type { IconName } from "../ui/index.ts";
 import { agentHasOutcome, isAgentCall } from "./agentInfo.ts";
@@ -37,6 +37,9 @@ export function toolIcon(toolName: string): IconName {
       return "globe";
     case "ToolSearch":
       return "search";
+    case LIST_MCP_RESOURCES:
+    case READ_MCP_RESOURCE:
+      return "server";
     default:
       return toolName === MCP_DISPATCHER || toolName.startsWith("mcp__") ? "server" : "model";
   }
