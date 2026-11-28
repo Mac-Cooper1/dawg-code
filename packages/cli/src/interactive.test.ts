@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type ScriptReply, stalled, text, toolCall } from "@dawg/mock-model";
 import { afterEach, describe, expect, it } from "vitest";
@@ -57,6 +57,28 @@ describe("interactive mode through pipes", () => {
     expect(h.mock.chatRequests.filter((r) => r.lane === "main")).toHaveLength(3);
     // Nothing that looks like terminal control codes when output is not a terminal.
     expect(out).not.toContain("\u001b[");
+  });
+
+  it("runs the project's custom commands, and /help says where they come from", async () => {
+    h = await startHarness({ script: withTitles([text("Hello, Ada!")]) });
+    const commands = path.join(h.project, ".claude", "commands");
+    await mkdir(commands, { recursive: true });
+    await writeFile(
+      path.join(commands, "greet.md"),
+      "---\ndescription: Greet someone\nargument-hint: [name]\n---\nSay hello to $ARGUMENTS warmly.\n",
+    );
+    const child = h.spawn(["--endpoint", h.mock.baseUrl]);
+    const stdin = child.process.stdin;
+    if (stdin === null) throw new Error("no stdin");
+    stdin.write("/greet Ada\n");
+    await child.waitForStdout("Hello, Ada!");
+    stdin.write("/help\n");
+    stdin.end();
+    const result = await child.exited;
+    expect(result.code).toBe(EXIT.ok);
+    expect(result.stdout).toMatch(/\/greet \[name\]\s+Greet someone \(project\)/);
+    const main = h.mock.chatRequests.filter((r) => r.lane === "main");
+    expect(JSON.stringify(main[0]?.body)).toContain("Say hello to Ada warmly.");
   });
 
   it("denies with a reason, and treats the end of input as no answer", async () => {

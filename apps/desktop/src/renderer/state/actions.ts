@@ -5,13 +5,18 @@
  * that depend on the engine (titles, modes, answers) arrive as events rather than being guessed.
  */
 import {
+  type CommandInfo,
   type ContentPart,
+  type EngineEvent,
   ErrorCodes,
+  type MethodResult,
   type PermissionMode,
   type QuestionResponse,
   RpcError,
   type SessionId,
   type SessionSnapshot,
+  type SessionSummary,
+  type SubagentInfo,
 } from "@dawg/protocol";
 import type { StoreApi } from "zustand";
 import type {
@@ -34,12 +39,15 @@ import {
   findDownload,
   findInstalled,
   firstRunStep,
+  helperToSetUp,
   modelName,
   needsSetup,
   sameOptions,
 } from "./models.ts";
+import { requestPaneFile } from "./pane-requests.ts";
+import { watchProjectSetup } from "./project-setup.ts";
 import * as queue from "./queue.ts";
-import { reduceAll } from "./reducer.ts";
+import { emptyEngineSlice, reduceAll } from "./reducer.ts";
 import { neighbourOf, sidebarOrder } from "./sidebar-order.ts";
 import type {
   AppActions,
@@ -52,7 +60,10 @@ import type {
   OnboardingState,
   QueuedMessage,
   ReducerInput,
+  RewindDialog,
   SessionView,
+  SubagentTranscript,
+  TrustReview,
   UiState,
 } from "./types.ts";
 import {
@@ -79,12 +90,20 @@ export interface Runtime {
 
 const MAX_NOTICES = 4;
 
+/** Replay page size for a subagent's transcript. */
+const CHILD_PAGE = 2000;
+
 /** The notice shown while a request waits for a model to load. */
 export const MODEL_LOADING_NOTICE_ID = "model-loading";
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.trim().replace(/\.$/, "");
+}
+
+/** "1 file", "3 files". */
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /** An error as a sentence, for showing on its own: "Not enough free space." */
@@ -108,21 +127,31 @@ function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T
   return rest;
 }
 
-/** What `workspace.track` is told about a session: its directories. */
+/**
+ * What `workspace.track` is told about a session: its directories, and whether to show its
+ * project's memory folder too (after `/memory`).
+ */
 function trackInputOf(
   session: Pick<SessionView, "id" | "summary" | "additionalDirectories">,
+  memory = false,
 ): TrackSessionInput {
   return {
     sessionId: session.id,
     cwd: session.summary.cwd,
     projectDir: session.summary.projectDir,
     additionalDirectories: session.additionalDirectories,
+    ...(memory ? { memory: true } : {}),
   };
 }
 
 /** Tracking again is needed only when the directories change. */
 function trackKeyOf(input: TrackSessionInput): string {
-  return [input.cwd, input.projectDir, ...(input.additionalDirectories ?? [])].join("\n");
+  return [
+    input.cwd,
+    input.projectDir,
+    ...(input.additionalDirectories ?? []),
+    input.memory === true ? "+memory" : "",
+  ].join("\n");
 }
 
 /**
@@ -174,6 +203,10 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
   let composersChecked = false;
   /** The latest `workspace.track` per session, with the directories it sent. */
   const tracking = new Map<SessionId, { key: string; promise: Promise<WorkspaceInfo | null> }>();
+  /** Projects checked in this app run for code waiting for consent (the project trust dialog). */
+  const trustChecked = new Set<string>();
+  /** "Not now" per project: the approval hash it was said to. A changed hash asks again. */
+  const trustPutOff = new Map<string, string>();
 
   // --- State helpers -------------------------------------------------------------------------
 
@@ -187,9 +220,9 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     store.setState({ layout: { ...get().layout, ...patch } });
   }
 
-  function notice(text: string, tone: Notice["tone"] = "error"): void {
+  function notice(text: string, tone: Notice["tone"] = "error", action?: Notice["action"]): void {
     const notices = get().notices.filter((existing) => existing.text !== text);
-    const next: Notice = { id: nextId("notice"), text, tone };
+    const next: Notice = { id: nextId("notice"), text, tone, ...(action ? { action } : {}) };
     store.setState({ notices: [...notices, next].slice(-MAX_NOTICES) });
   }
 
@@ -233,6 +266,215 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       else
         setUi((current) => ({ ...current, queues: queue.holdAll(current.queues, turn.sessionId) }));
     }
+    followHookSkips(inputs);
+    followSubagents(inputs, removed);
+  }
+
+  // --- Project trust ---------------------------------------------------------------------------
+
+  /**
+   * Hooks were held back for want of consent (`hook.skipped`, live only): the project's code may
+   * have changed since it was checked, so look again.
+   */
+  function followHookSkips(inputs: readonly ReducerInput[]): void {
+    for (const input of inputs) {
+      if (input.type !== "event" || input.event.event !== "hook.skipped") continue;
+      const { payload } = input.event;
+      const projectDir =
+        payload.projectDir ?? get().sessions[payload.sessionId]?.summary.projectDir ?? null;
+      if (projectDir !== null) void inspectTrust(projectDir, true);
+    }
+  }
+
+  // --- Subagents ------------------------------------------------------------------------------
+
+  /** Agents' sessions being read now; a read asked for meanwhile runs once that one ends. */
+  const childReads = new Map<SessionId, Promise<void>>();
+  const childAgain = new Set<SessionId>();
+
+  function agentOf(sessionId: SessionId, agentId: string): SubagentInfo | undefined {
+    return get().sessions[sessionId]?.subagents?.find((agent) => agent.agentId === agentId);
+  }
+
+  /**
+   * The agent's transcript, shown, moved on (`subagent.updated`, live or replayed): read what is
+   * new in it. The parent left: the transcript closes.
+   */
+  function followSubagents(inputs: readonly ReducerInput[], removed: readonly SessionId[]): void {
+    const open = get().ui.openSubagent;
+    if (open === null) return;
+    if (removed.includes(open.sessionId)) {
+      setUi((ui) => ({ ...ui, openSubagent: null }));
+      return;
+    }
+    const moved = inputs.some((input) => {
+      if (input.type === "event") return isUpdateOf(input.event, open);
+      if (input.type === "replay") return input.events.some((event) => isUpdateOf(event, open));
+      return false;
+    });
+    if (moved) void readChild(open.sessionId, open.agentId);
+  }
+
+  function isUpdateOf(
+    event: EngineEvent,
+    open: { sessionId: SessionId; agentId: string },
+  ): boolean {
+    return (
+      event.event === "subagent.updated" &&
+      event.payload.sessionId === open.sessionId &&
+      event.payload.agent.agentId === open.agentId
+    );
+  }
+
+  /** The agent's session as the reducer takes it: a stored session that stands for the agent. */
+  function childSummary(parent: SessionView, agent: SubagentInfo): SessionSummary {
+    return {
+      id: agent.sessionId,
+      title: agent.description === "" ? null : agent.description,
+      cwd: agent.worktree?.path ?? parent.summary.cwd,
+      projectDir: parent.summary.projectDir,
+      createdAt: agent.startedAt,
+      lastActivityAt: agent.startedAt,
+      status: "idle",
+      queuePosition: null,
+      mode: parent.summary.mode,
+      model: parent.summary.model,
+      effort: parent.summary.effort,
+      archived: false,
+      forkedFrom: null,
+      lastSeq: 0,
+    };
+  }
+
+  function putChild(childId: SessionId, entry: SubagentTranscript): void {
+    const all = get().subagentTranscripts;
+    if (all[childId] === entry) return;
+    store.setState({ subagentTranscripts: { ...all, [childId]: entry } });
+  }
+
+  /**
+   * Reads the agent's session (`session.replay`) from where the last read stopped, the whole of
+   * it the first time, through the same reducer as any session. One read per agent at a time; a
+   * read asked for while one runs follows it.
+   */
+  function readChild(sessionId: SessionId, agentId: string): Promise<void> {
+    const agent = agentOf(sessionId, agentId);
+    if (!agent) return Promise.resolve();
+    const childId = agent.sessionId;
+    const running = childReads.get(childId);
+    if (running) {
+      childAgain.add(childId);
+      return running;
+    }
+    const read = (async () => {
+      do {
+        childAgain.delete(childId);
+        await readChildOnce(sessionId, agentId);
+      } while (childAgain.has(childId) && !stopped);
+    })().finally(() => childReads.delete(childId));
+    childReads.set(childId, read);
+    return read;
+  }
+
+  async function readChildOnce(sessionId: SessionId, agentId: string): Promise<void> {
+    const parent = get().sessions[sessionId];
+    const agent = agentOf(sessionId, agentId);
+    if (!parent || !agent) return;
+    const childId = agent.sessionId;
+    const first: SubagentTranscript = get().subagentTranscripts[childId] ?? {
+      parentSessionId: sessionId,
+      agentId,
+      slice: reduceAll(emptyEngineSlice(), [
+        { type: "summaries", sessions: [childSummary(parent, agent)] },
+      ]),
+      error: null,
+    };
+    putChild(childId, first);
+    let afterSeq = first.slice.sessions[childId]?.highWaterSeq ?? 0;
+    try {
+      for (;;) {
+        const page = await connection.request("session.replay", {
+          sessionId: childId,
+          afterSeq,
+          limit: CHILD_PAGE,
+        });
+        const last = page.events.at(-1);
+        const done = !page.hasMore || last === undefined;
+        const current = get().subagentTranscripts[childId] ?? first;
+        const slice = reduceAll(current.slice, [
+          { type: "replay", sessionId: childId, events: page.events, done },
+        ]);
+        if (slice !== current.slice || current.error !== null) {
+          putChild(childId, { ...current, slice, error: null });
+        }
+        if (done) return;
+        afterSeq = last.payload.seq;
+      }
+    } catch (error) {
+      const current = get().subagentTranscripts[childId] ?? first;
+      putChild(childId, {
+        ...current,
+        error: `Could not read the agent's transcript: ${errorText(error)}.`,
+      });
+    }
+  }
+
+  function setTrustReview(next: TrustReview | null): void {
+    if (get().trustReview !== next) store.setState({ trustReview: next });
+  }
+
+  function projectNameOf(projectDir: string): string {
+    return get().projects[projectDir]?.name ?? basename(projectDir);
+  }
+
+  /**
+   * Asks the engine what in a project needs the person's consent (`project.inspect`). On its own
+   * (`auto`: a session's project shown for the first time, or hooks held back) the dialog opens
+   * only when something waits that the person has not put off, and a failure stays quiet: an
+   * engine without the method has nothing to ask. Asked for, the dialog opens at once and says
+   * what it found.
+   */
+  async function inspectTrust(projectDir: string, auto: boolean): Promise<void> {
+    if (auto && get().trustReview !== null) return;
+    if (!auto) {
+      setTrustReview({
+        projectDir,
+        projectName: projectNameOf(projectDir),
+        phase: "loading",
+        approval: null,
+        message: null,
+      });
+    }
+    let approval: TrustReview["approval"];
+    try {
+      approval = (await connection.request("project.inspect", { projectDir })).approval;
+    } catch (error) {
+      const current = get().trustReview;
+      if (!auto && current?.projectDir === projectDir) {
+        setTrustReview({
+          ...current,
+          phase: "ready",
+          message: `Could not read the project’s setup: ${errorText(error)}.`,
+        });
+      }
+      return;
+    }
+    if (auto) {
+      if (approval === null || approval.approved) return;
+      if (trustPutOff.get(projectDir) === approval.hash || get().trustReview !== null) return;
+      setTrustReview({
+        projectDir,
+        projectName: projectNameOf(projectDir),
+        phase: "ready",
+        approval,
+        message: null,
+      });
+      return;
+    }
+    const current = get().trustReview;
+    // Closed, or another project's review took its place, while the answer was on its way.
+    if (current?.projectDir !== projectDir || current.phase !== "loading") return;
+    setTrustReview({ ...current, phase: "ready", approval, message: null });
   }
 
   /**
@@ -318,7 +560,8 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
    */
   function track(sessionId: SessionId, input?: TrackSessionInput): Promise<WorkspaceInfo | null> {
     const session = get().sessions[sessionId];
-    const request = input ?? (session ? trackInputOf(session) : null);
+    const memory = get().ui.memoryShown[sessionId] === true;
+    const request = input ?? (session ? trackInputOf(session, memory) : null);
     if (request === null) return Promise.resolve(null);
     const key = trackKeyOf(request);
     const current = tracking.get(sessionId);
@@ -534,7 +777,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
   ): Promise<string | null> {
     const { text } = message;
     const session = get().sessions[sessionId];
-    const command = queue.parseCommand(text, session?.commands ?? []);
+    const command = queue.parseCommand(text, commandsOf(sessionId, session?.commands ?? []));
     if (command) {
       const result = await connection.request("session.command", {
         sessionId,
@@ -661,6 +904,15 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
           response: { decision: "reject", message: text },
         });
         return true;
+      case "elicitation":
+        // A server's form has nowhere to take a note: the request is declined, and the text goes
+        // on as a message, queued behind the turn that is still running.
+        await connection.request("elicitation.respond", {
+          sessionId,
+          requestId: ref.requestId,
+          action: "decline",
+        });
+        return false;
     }
   }
 
@@ -673,6 +925,17 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     } catch (error) {
       notice(`Could not save the setting: ${errorText(error)}.`);
     }
+  }
+
+  /**
+   * Prompts of a session's MCP servers, as the composer last saw them (`mcp.session`): servers
+   * connect after the snapshot's commands were listed, so their `/mcp__server__prompt` commands
+   * are known from here.
+   */
+  const mcpPrompts = new Map<SessionId, readonly CommandInfo[]>();
+  function commandsOf(sessionId: SessionId, listed: readonly CommandInfo[]): CommandInfo[] {
+    const extra = mcpPrompts.get(sessionId) ?? [];
+    return extra.length === 0 ? [...listed] : [...listed, ...extra];
   }
 
   async function request<T>(failure: string, run: () => Promise<T>): Promise<T | null> {
@@ -854,10 +1117,32 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       }),
     );
     unsubscribe.push(() => saver.flush());
+    // The first time a project with a Claude Code setup is shown, say what dawg found there.
+    unsubscribe.push(
+      watchProjectSetup({
+        store,
+        inspect: (projectDir) => actions.inspectProject(projectDir),
+        show: (text, action) => notice(text, "neutral", action),
+        remember: (projectSetupNoticed) => updateSettings({ projectSetupNoticed }),
+      }),
+    );
     // The window is going (quit, or closed): the last keystrokes are saved now, not after the delay.
     const flushOnHide = () => saver.flush();
     globalThis.addEventListener?.("pagehide", flushOnHide);
     unsubscribe.push(() => globalThis.removeEventListener?.("pagehide", flushOnHide));
+
+    // The first time the window shows a session of a project, it asks whether the project has
+    // code waiting for consent (hooks, later MCP servers); the trust dialog opens if so.
+    unsubscribe.push(
+      store.subscribe((state) => {
+        if (state.connection.phase !== "ready") return;
+        const id = state.layout.selectedSessionId;
+        const projectDir = id === null ? null : (state.sessions[id]?.summary.projectDir ?? null);
+        if (projectDir === null || trustChecked.has(projectDir)) return;
+        trustChecked.add(projectDir);
+        void inspectTrust(projectDir, true);
+      }),
+    );
 
     // The session the window shows is tracked, and tracked again when its directories change.
     let shownKey = "";
@@ -867,7 +1152,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         const session = id === null ? undefined : state.sessions[id];
         const key =
           session && !session.summary.archived
-            ? `${session.id}\n${trackKeyOf(trackInputOf(session))}`
+            ? `${session.id}\n${trackKeyOf(trackInputOf(session, state.ui.memoryShown[session.id] === true))}`
             : "";
         if (key === shownKey) return;
         shownKey = key;
@@ -884,6 +1169,10 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
    */
   function show(id: SessionId | null, toSessions: boolean): void {
     const layout = get().layout;
+    // An agent's transcript belongs to its session: showing another one closes it.
+    if (get().ui.openSubagent !== null && get().ui.openSubagent?.sessionId !== id) {
+      setUi((ui) => ({ ...ui, openSubagent: null }));
+    }
     store.setState({
       layout: { ...layout, selectedSessionId: id, view: toSessions ? "sessions" : layout.view },
     });
@@ -1037,6 +1326,157 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         ui.markedUnread[id] ? ui : { ...ui, markedUnread: { ...ui.markedUnread, [id]: true } },
       );
     },
+    reviewProjectCode(projectDir) {
+      trustChecked.add(projectDir);
+      void inspectTrust(projectDir, false);
+    },
+    async answerTrustReview(approve) {
+      const review = get().trustReview;
+      if (!review || review.phase === "saving") return;
+      const approval = review.approval;
+      if (!approve || approval === null || approval.approved || review.phase !== "ready") {
+        // "Not now": asked again on the next launch, or once the definitions change.
+        if (!approve && approval !== null && !approval.approved) {
+          trustPutOff.set(review.projectDir, approval.hash);
+        }
+        setTrustReview(null);
+        return;
+      }
+      const { projectDir } = review;
+      setTrustReview({ ...review, phase: "saving", message: null });
+      try {
+        await connection.request("project.trust", {
+          projectDir,
+          hash: approval.hash,
+          approved: true,
+        });
+        trustPutOff.delete(projectDir);
+        if (get().trustReview?.projectDir === projectDir) setTrustReview(null);
+        notice(`Approved. The code ${review.projectName} supplies may run from now on.`, "neutral");
+      } catch (error) {
+        // The definitions changed after the list was shown (the engine refuses a stale hash):
+        // show what is there now, and say so. Consent never covers code nobody saw.
+        const changed = error instanceof RpcError && error.code === ErrorCodes.InvalidState;
+        let next: TrustReview["approval"] = approval;
+        try {
+          next = (await connection.request("project.inspect", { projectDir })).approval;
+        } catch {
+          // Keep the list shown; the sentence says approving failed.
+        }
+        const current = get().trustReview;
+        if (current?.projectDir !== projectDir) return;
+        setTrustReview({
+          ...current,
+          phase: "ready",
+          approval: next,
+          message: changed
+            ? "The project’s code changed since this list was shown. This is what it holds now."
+            : `Could not approve it: ${errorText(error)}.`,
+        });
+      }
+    },
+    async listHooks(projectDir) {
+      try {
+        return await connection.request("hooks.list", { projectDir });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async listSkills(projectDir) {
+      try {
+        return await connection.request("project.skills", { projectDir });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async listSubagents(projectDir) {
+      try {
+        return await connection.request("project.subagents", { projectDir });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async createSubagent(input) {
+      try {
+        return await connection.request("subagent.create", input);
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async openConfigFile(path) {
+      await attempt("Could not open the file", () => bridge.shell.openConfigFile(path));
+    },
+    async listMcpServers(projectDir) {
+      try {
+        return await connection.request("mcp.list", { projectDir });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async restartMcpServer(projectDir, name) {
+      const result = await request(`Could not restart ${name}`, () =>
+        connection.request("mcp.restart", { projectDir, name }),
+      );
+      return result?.server ?? null;
+    },
+    async setMcpServerEnabled(projectDir, name, enabled) {
+      const result = await request(
+        enabled ? `Could not turn ${name} on` : `Could not turn ${name} off`,
+        () => connection.request("mcp.setEnabled", { projectDir, name, enabled }),
+      );
+      return result !== null;
+    },
+    async previewMcpImport() {
+      try {
+        return await connection.request("mcp.importPreview", {});
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async importMcpServers(hash) {
+      try {
+        return await connection.request("mcp.import", { hash });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async signInMcpServer(projectDir, name) {
+      try {
+        return await connection.request("mcp.signIn", { projectDir, name });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
+    },
+    async signOutMcpServer(projectDir, name) {
+      const result = await request(`Could not sign out of ${name}`, () =>
+        connection.request("mcp.signOut", { projectDir, name }),
+      );
+      return result?.server ?? null;
+    },
+    async cancelMcpSignIn(projectDir, name) {
+      const result = await request(`Could not stop signing in to ${name}`, () =>
+        connection.request("mcp.cancelSignIn", { projectDir, name }),
+      );
+      return result?.server ?? null;
+    },
+    async mcpOffer(sessionId) {
+      const session = get().sessions[sessionId];
+      if (session === undefined || !session.open) return { resources: [], prompts: [] };
+      try {
+        const offer = await connection.request("mcp.session", { sessionId });
+        mcpPrompts.set(sessionId, offer.prompts);
+        return offer;
+      } catch {
+        return { resources: [], prompts: [] };
+      }
+    },
+    async setHookEnabled(projectDir, id, enabled) {
+      const result = await request(
+        enabled ? "Could not turn the hook on" : "Could not turn the hook off",
+        () => connection.request("hooks.setEnabled", { projectDir, id, enabled }),
+      );
+      return result !== null;
+    },
 
     setDraft(sessionId, text) {
       setUi((ui) => {
@@ -1066,8 +1506,26 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
           return;
         }
         // A command takes neither images nor mentions: they stay for the next message.
-        const commands = get().sessions[sessionId]?.commands ?? [];
-        const isCommand = queue.parseCommand(trimmed, commands) !== null;
+        const commands = commandsOf(sessionId, get().sessions[sessionId]?.commands ?? []);
+        const parsed = queue.parseCommand(trimmed, commands);
+        // `/rewind` and `/memory` open the window's own views (the engine's commands only list).
+        if (parsed !== null && parsed.args.trim() === "" && parsed.name === "rewind") {
+          clearDraftIf(sessionId, text);
+          await actions.openRewind(sessionId);
+          return;
+        }
+        if (parsed !== null && parsed.args.trim() === "" && parsed.name === "memory") {
+          clearDraftIf(sessionId, text);
+          await actions.openMemory(sessionId);
+          return;
+        }
+        // `/agents` opens Settings → Subagents; the engine's command only lists, for other clients.
+        if (parsed !== null && parsed.args.trim() === "" && parsed.name === "agents") {
+          clearDraftIf(sessionId, text);
+          actions.setSettingsPage("subagents");
+          return;
+        }
+        const isCommand = parsed !== null;
         const images = isCommand ? [] : (get().ui.attachments[sessionId] ?? []);
         const message = {
           text: trimmed,
@@ -1230,6 +1688,9 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     async setIdleUnload(minutes) {
       await attempt("Could not save the setting", () => bridge.models.setIdleUnload(minutes));
     },
+    async setHelperEnabled(enabled) {
+      await attempt("Could not save the setting", () => bridge.models.setHelperEnabled(enabled));
+    },
     async addModelFile() {
       return request("Could not add the model file", () => bridge.models.addModelFile());
     },
@@ -1253,6 +1714,15 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
     async setUpModel(modelId, options) {
       const state = get().modelsState;
       if (state === null) return;
+      // The helper comes in the same click, queued after the model so the model is in first;
+      // the first model starts without waiting for it, and main starts the helper once it is in.
+      const helper = options?.withHelper ? helperToSetUp(state) : null;
+      const queueHelper = async () => {
+        if (!helper) return;
+        await attempt(`Could not download ${helper.displayName}`, () =>
+          bridge.models.download(helper.id),
+        );
+      };
       if (options?.useExisting) {
         setOnboarding({ step: "start", modelId, error: null });
         try {
@@ -1262,10 +1732,12 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
           setOnboarding({ step: "start", modelId, error: sentence(error) });
           return;
         }
+        await queueHelper();
         await startFirstModel(modelId);
         return;
       }
       if (findInstalled(state, modelId)) {
+        await queueHelper();
         await startFirstModel(modelId);
         return;
       }
@@ -1279,6 +1751,7 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         }
         return;
       }
+      await queueHelper();
       // It may be in already (a finished download, or a state that arrived first).
       const latest = get().modelsState;
       if (latest) followDownload(latest);
@@ -1292,6 +1765,16 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
         connection.request("permission.respond", { sessionId, requestId, response }),
       );
     },
+    async respondElicitation(sessionId, requestId, answer) {
+      await request("Could not send your answer", () =>
+        connection.request("elicitation.respond", {
+          sessionId,
+          requestId,
+          action: answer.action,
+          ...(answer.content === undefined ? {} : { content: answer.content }),
+        }),
+      );
+    },
     async respondQuestion(sessionId, requestId, response) {
       await request("Could not send your answer", () =>
         connection.request("question.respond", { sessionId, requestId, response }),
@@ -1301,6 +1784,14 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       await request("Could not send your answer", () =>
         connection.request("plan.respond", { sessionId, requestId, response }),
       );
+    },
+
+    async inspectProject(projectDir) {
+      try {
+        return await connection.request("project.inspect", { projectDir });
+      } catch (error) {
+        return { error: sentence(error) };
+      }
     },
 
     async readBackgroundOutput(sessionId, taskId, offset) {
@@ -1317,6 +1808,179 @@ export function createRuntime(store: StoreApi<AppStore>, deps: RuntimeDeps): Run
       return result !== null;
     },
 
+    openSubagent(sessionId, agentId) {
+      if (get().layout.selectedSessionId !== sessionId || get().layout.view !== "sessions") {
+        show(sessionId, true);
+      }
+      setUi((ui) => {
+        const open = ui.openSubagent;
+        if (open?.sessionId === sessionId && open.agentId === agentId) return ui;
+        return { ...ui, openSubagent: { sessionId, agentId } };
+      });
+      void readChild(sessionId, agentId);
+    },
+    closeSubagent() {
+      setUi((ui) => (ui.openSubagent === null ? ui : { ...ui, openSubagent: null }));
+    },
+    async stopSubagent(sessionId, agentId) {
+      const result = await request("Could not stop the agent", () =>
+        connection.request("subagent.stop", { sessionId, agentId }),
+      );
+      return result !== null;
+    },
+
+    async openRewind(sessionId) {
+      const session = get().sessions[sessionId];
+      if (!session) return;
+      if (isRunning(sessionId) || session.status === "waiting") {
+        notice("Rewinding has to wait until the current turn ends.", "neutral");
+        return;
+      }
+      const dialog: RewindDialog = {
+        sessionId,
+        phase: "loading",
+        checkpoints: [],
+        retention: 0,
+        error: null,
+        conflict: null,
+      };
+      store.setState({ rewind: dialog });
+      const current = () => get().rewind?.sessionId === sessionId;
+      try {
+        if (!session.open || !session.loaded) await connection.openSession(sessionId);
+        const listed = await connection.request("session.checkpoints", { sessionId });
+        if (!current()) return;
+        store.setState({
+          rewind: {
+            ...dialog,
+            phase: "ready",
+            checkpoints: [...listed.checkpoints].reverse(),
+            retention: listed.retention,
+          },
+        });
+      } catch (error) {
+        if (!current()) return;
+        store.setState({ rewind: { ...dialog, phase: "failed", error: sentence(error) } });
+      }
+    },
+    closeRewind() {
+      if (get().rewind?.phase === "working") return;
+      store.setState({ rewind: null });
+    },
+    dismissRewindConflict() {
+      const dialog = get().rewind;
+      if (dialog?.phase !== "conflicts") return;
+      store.setState({ rewind: { ...dialog, phase: "ready", conflict: null } });
+    },
+    async rewind(checkpointId, action, options = {}) {
+      const dialog = get().rewind;
+      if (dialog === null || dialog.phase === "working") return;
+      const { sessionId } = dialog;
+      const instructions = options.instructions?.trim() ?? "";
+      store.setState({ rewind: { ...dialog, phase: "working", error: null } });
+      let result: MethodResult<"session.rewind">;
+      try {
+        result = await connection.request("session.rewind", {
+          sessionId,
+          checkpointId,
+          action,
+          ...(options.overwrite ? { overwrite: true } : {}),
+          ...(instructions === "" ? {} : { instructions }),
+        });
+      } catch (error) {
+        const open = get().rewind;
+        if (open?.sessionId === sessionId) {
+          store.setState({ rewind: { ...open, phase: "ready", error: sentence(error) } });
+        }
+        return;
+      }
+      if (result.outcome === "conflicts") {
+        const open = get().rewind;
+        if (open?.sessionId !== sessionId) return;
+        store.setState({
+          rewind: {
+            ...open,
+            phase: "conflicts",
+            conflict: {
+              checkpointId,
+              action,
+              instructions: instructions === "" ? null : instructions,
+              files: result.conflicts,
+            },
+          },
+        });
+        return;
+      }
+      store.setState({ rewind: null });
+      const files = result.files;
+      if (files !== null && files.skipped.length > 0) {
+        notice(
+          `Some files were left as they are: ${files.skipped
+            .map((skip) => `${basename(skip.path)} (${skip.reason})`)
+            .join(", ")}.`,
+          "neutral",
+        );
+      }
+      if (result.session !== null) {
+        // The conversation goes on in the fork; the original stays in the sidebar as it was.
+        const fork = result.session;
+        await adoptAndSelect(fork);
+        if (result.prompt !== null) actions.setDraft(fork.session.id, result.prompt);
+        return;
+      }
+      if (result.prompt !== null) {
+        // Summarised from there: the prompt comes back to be sent again or changed.
+        actions.setDraft(sessionId, result.prompt);
+        return;
+      }
+      if (files !== null) {
+        const changed = files.restored.length + files.deleted.length;
+        notice(
+          changed === 0
+            ? "The files were already as they were at that point."
+            : `Put back ${plural(files.restored.length, "file")}${
+                files.deleted.length > 0
+                  ? ` and removed ${plural(files.deleted.length, "file")} made since`
+                  : ""
+              }.`,
+          "neutral",
+        );
+      }
+    },
+    async openMemory(sessionId) {
+      const session = get().sessions[sessionId];
+      if (!session) return;
+      try {
+        if (!session.open || !session.loaded) await connection.openSession(sessionId);
+        // The engine's command lists the files and makes the folder and MEMORY.md.
+        const result = await connection.request("session.command", {
+          sessionId,
+          name: "memory",
+          args: "",
+        });
+        if (result.output !== null) {
+          applyResult([
+            { type: "command-output", sessionId, command: "/memory", output: result.output },
+          ]);
+        }
+      } catch (error) {
+        notice(`Could not open the memory: ${errorText(error)}.`);
+        return;
+      }
+      setUi((ui) =>
+        ui.memoryShown[sessionId]
+          ? ui
+          : { ...ui, memoryShown: { ...ui.memoryShown, [sessionId]: true } },
+      );
+      const info = await track(sessionId);
+      const directory = info?.memoryDirectory ?? null;
+      if (directory === null) {
+        notice("The memory folder could not be shown in the Files pane.");
+        return;
+      }
+      requestPaneFile(sessionId, `${directory}/MEMORY.md`);
+      actions.openPane("files");
+    },
     setItemOpen(sessionId, itemId, open) {
       setUi((ui) => {
         const current = ui.openItems[sessionId] ?? {};

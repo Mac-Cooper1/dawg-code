@@ -17,6 +17,7 @@ import {
   HOME,
   makeBackgroundTask,
   makeSnapshot,
+  makeSubagent,
   makeSummary,
   makeUsage,
   PROJECT,
@@ -361,6 +362,60 @@ const COVERAGE: Record<EventName, Scenario[]> = {
         }),
     },
   ],
+  "elicitation.requested": [
+    {
+      shows: { view: "transcript", what: "the server's form, labelled with the server" },
+      before: (s) => {
+        running(s);
+        replyWithCall(s, "mcp__tracker__create_issue");
+        s.emit("tool.started", {
+          turnId: "t1",
+          messageId: "m1",
+          toolCallId: "c1",
+          toolName: "mcp__tracker__create_issue",
+          input: {},
+        });
+      },
+      event: (s) =>
+        s.emit("elicitation.requested", {
+          turnId: "t1",
+          requestId: "e1",
+          toolCallId: "c1",
+          server: "tracker",
+          message: "Which project?",
+          mode: "form",
+          fields: [
+            {
+              name: "project",
+              type: "string",
+              title: null,
+              description: null,
+              required: true,
+              format: null,
+              minLength: null,
+              maxLength: null,
+              default: null,
+            },
+          ],
+          url: null,
+        }),
+    },
+    {
+      shows: { view: "sidebar", what: "“Needs you: open a page for tracker”" },
+      before: running,
+      event: (s) =>
+        s.emit("elicitation.requested", {
+          turnId: "t1",
+          requestId: "e2",
+          toolCallId: null,
+          server: "tracker",
+          message: "Sign in",
+          mode: "url",
+          fields: [],
+          url: "https://tracker.example.com/connect",
+        }),
+    },
+  ],
   "request.resolved": [
     {
       shows: { view: "transcript", what: "the card closes to its one-line record" },
@@ -391,10 +446,99 @@ const COVERAGE: Record<EventName, Scenario[]> = {
         }),
     },
   ],
+  "hook.ran": [
+    {
+      shows: { view: "transcript", what: "“PreToolUse hook blocked Bash: …” beside the call" },
+      before: bashStarted,
+      event: (s) =>
+        s.emit("hook.ran", {
+          turnId: "t1",
+          toolCallId: "c1",
+          hook: {
+            event: "PreToolUse",
+            matcher: "Bash",
+            type: "command",
+            command: "./scripts/check-command.sh",
+            source: {
+              path: `${PROJECT}/.claude/settings.json`,
+              origin: "claude",
+              scope: "project",
+            },
+          },
+          outcome: "blocked",
+          exitCode: 2,
+          durationMs: 41,
+          decision: "deny",
+          message: "rm -rf is not allowed in this project",
+        }),
+    },
+    {
+      shows: { view: "transcript", what: "a SessionStart hook's line, outside any turn" },
+      event: (s) =>
+        s.emit("hook.ran", {
+          turnId: null,
+          toolCallId: null,
+          hook: {
+            event: "SessionStart",
+            matcher: "startup",
+            type: "command",
+            command: "./scripts/context.sh",
+            source: { path: `${HOME}/.dawg/settings.json`, origin: "dawg", scope: "user" },
+          },
+          outcome: "success",
+          exitCode: 0,
+          durationMs: 12,
+          decision: null,
+          message: null,
+        }),
+    },
+  ],
+  "hook.skipped": [
+    {
+      shows: { view: "transcript", what: "the quiet line about hooks waiting for approval" },
+      before: running,
+      event: (s) =>
+        s.emit("hook.skipped", {
+          turnId: "t1",
+          projectDir: PROJECT,
+          sources: [
+            { path: `${PROJECT}/.claude/settings.json`, origin: "claude", scope: "project" },
+          ],
+        }),
+    },
+  ],
   "background.updated": [
     {
       shows: { view: "tasksPane", what: "the background command and its state" },
       event: (s) => s.emit("background.updated", { task: makeBackgroundTask("bash-1") }),
+    },
+  ],
+  "subagent.updated": [
+    {
+      shows: { view: "transcript", what: "the Agent card's live state" },
+      before: (s) => {
+        running(s);
+        replyWithCall(s, "Agent");
+        s.emit("tool.started", {
+          turnId: "t1",
+          messageId: "m1",
+          toolCallId: "c1",
+          toolName: "Agent",
+          input: {
+            description: "Find the config loader",
+            prompt: "Find where the config is loaded",
+            subagent_type: "Explore",
+          },
+        });
+      },
+      event: (s) => s.emit("subagent.updated", { agent: makeSubagent("agent-1") }),
+    },
+    {
+      shows: { view: "tasksPane", what: "the background agent and its state" },
+      event: (s) =>
+        s.emit("subagent.updated", {
+          agent: makeSubagent("agent-1", { background: true, status: "queued", queuePosition: 1 }),
+        }),
     },
   ],
   "usage.updated": [

@@ -5,7 +5,7 @@
  */
 import { homedir } from "node:os";
 import path from "node:path";
-import type { SettingsFlags } from "@dawg/compat";
+import { buildCompatReport, type SettingsFlags } from "@dawg/compat";
 import {
   type ClientCapabilities,
   createServer,
@@ -22,11 +22,18 @@ import {
   type SessionSnapshot,
   type Transport,
 } from "@dawg/protocol";
+import { createSubagent } from "../agents/create.ts";
+import { projectSubagents } from "../agents/list.ts";
 import { type CommandRegistry, createCommandRegistry } from "../commands/index.ts";
 import type { EndpointDescription } from "../commands/types.ts";
+import { listHooks, setHookEnabled } from "../hooks/list.ts";
+import { mcpHandlers, withMcpPrompts } from "../mcp/host-handlers.ts";
 import type { Engine } from "../runtime/engine.ts";
 import { RuntimeError } from "../runtime/errors.ts";
+import { rewindSession } from "../runtime/rewind.ts";
 import type { SessionRuntime } from "../runtime/session.ts";
+import { projectSkills, sessionCommandRegistry } from "../skills/index.ts";
+import { withApproval } from "../trust/report.ts";
 import { attachmentsFor } from "./attachments.ts";
 import { toRpcError } from "./errors.ts";
 
@@ -77,6 +84,7 @@ const ALL_ANSWERABLE: ClientCapabilities = {
   permissionPrompts: true,
   questions: true,
   planApproval: true,
+  elicitation: true,
 };
 
 export function createEngineHost(
@@ -113,8 +121,20 @@ export function createEngineHost(
     return roots;
   }
 
+  /** Each session's commands: dawg's own, then its skills and custom commands (../skills). */
+  const sessionCommands = new WeakMap<SessionRuntime, CommandRegistry>();
+  function commandsOf(runtime: SessionRuntime): CommandRegistry {
+    let registry = sessionCommands.get(runtime);
+    if (registry === undefined) {
+      registry = sessionCommandRegistry(commands, runtime.skills);
+      sessionCommands.set(runtime, registry);
+    }
+    // The prompts of its MCP servers, which may connect after it opened (../mcp).
+    return withMcpPrompts(registry, runtime);
+  }
+
   function snapshotOf(runtime: SessionRuntime): SessionSnapshot {
-    return { ...runtime.snapshot(), commands: commands.info() };
+    return { ...runtime.snapshot(), commands: commandsOf(runtime).info() };
   }
 
   function attach(runtime: SessionRuntime): SessionSnapshot {
@@ -184,6 +204,9 @@ export function createEngineHost(
         ...(params.additionalDirectories === undefined
           ? {}
           : { additionalDirectories: params.additionalDirectories }),
+        // The session's own MCP servers come from the person: no project approval is needed.
+        ...(params.mcpServers === undefined ? {} : { mcpServers: params.mcpServers }),
+        ...(params.strictMcpConfig === true ? { strictMcpConfig: true } : {}),
       });
       return attach(runtime);
     },
@@ -247,7 +270,7 @@ export function createEngineHost(
 
     "session.command": async (params) => {
       const runtime = await requireOpen(params.sessionId);
-      const result = await commands.run(params.name, {
+      const result = await commandsOf(runtime).run(params.name, {
         args: params.args,
         session: runtime,
         engine,
@@ -260,7 +283,15 @@ export function createEngineHost(
         case "output":
           return { output: result.text, turnId: null, openedSession: null };
         case "prompt": {
-          const { turnId } = await runtime.prompt(result.prompt);
+          // The turn shows the command as typed; the model is sent what it expands to.
+          const typed = {
+            name: params.name.replace(/^\//, "").toLowerCase(),
+            args: params.args.trim(),
+          };
+          const { turnId } = await runtime.prompt(
+            result.prompt,
+            result.options ?? { command: typed },
+          );
           return { output: result.text, turnId, openedSession: null };
         }
         case "session": {
@@ -278,6 +309,35 @@ export function createEngineHost(
       return { events: page.events, lastSeq: page.lastSeq, hasMore: page.hasMore };
     },
 
+    // Checkpoints and rewind (../runtime/rewind.ts).
+    "session.checkpoints": async (params) => {
+      const runtime = await requireOpen(params.sessionId);
+      return runtime.checkpoints();
+    },
+
+    "session.rewind": async (params) => {
+      const runtime = await requireOpen(params.sessionId);
+      const outcome = await rewindSession(
+        engine,
+        runtime,
+        {
+          checkpointId: params.checkpointId,
+          action: params.action,
+          overwrite: params.overwrite,
+          instructions: params.instructions ?? null,
+        },
+        { capabilities },
+      );
+      return {
+        outcome: outcome.outcome,
+        conflicts: outcome.conflicts,
+        files: outcome.files,
+        // The conversation goes on in the fork, open here like any session this connection forks.
+        session: outcome.session === null ? null : attach(outcome.session),
+        prompt: outcome.prompt,
+      };
+    },
+
     "background.output": async (params) => {
       const runtime = await requireOpen(params.sessionId);
       return runtime.readBackgroundOutput(params.taskId, params.offset, params.limit);
@@ -287,6 +347,84 @@ export function createEngineHost(
       const runtime = await requireOpen(params.sessionId);
       return { stopped: await runtime.stopBackground(params.taskId) };
     },
+
+    "subagent.stop": async (params) => {
+      const runtime = await requireOpen(params.sessionId);
+      const agents = runtime.agents;
+      if (agents === null || !agents.list().some((a) => a.agentId === params.agentId)) {
+        throw new RuntimeError(
+          "InvalidParams",
+          `There is no agent ${params.agentId} in this session.`,
+        );
+      }
+      return { stopped: await agents.stop(params.agentId) };
+    },
+
+    // The compatibility report (compat's providers) with the engine's consent for the code it
+    // supplies (trust/index.ts).
+    "project.inspect": async (params) => {
+      if (params.projectDir !== null) absolute(params.projectDir, "projectDir");
+      const report = await buildCompatReport({ projectDir: params.projectDir, homeDir });
+      const approval = await engine.trust.approval(params.projectDir);
+      // Items that would run but wait for consent say so (../trust/report.ts).
+      return { ...report, items: withApproval(report.items, approval), approval };
+    },
+
+    "project.trust": async (params) => {
+      absolute(params.projectDir, "projectDir");
+      try {
+        const approved = await engine.trust.decide(params.projectDir, params.hash, params.approved);
+        // The project's MCP servers start (or stop) in its open sessions now.
+        await engine.mcp.refresh(params.projectDir);
+        return { approved };
+      } catch (error) {
+        throw new RuntimeError(
+          "InvalidState",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    },
+
+    // Settings → Hooks: every hook, its consent and the person's switch (../hooks/list.ts).
+    "hooks.list": async (params) => {
+      if (params.projectDir !== null) absolute(params.projectDir, "projectDir");
+      return listHooks(engine.trust, { projectDir: params.projectDir, homeDir });
+    },
+
+    "hooks.setEnabled": async (params) => {
+      if (params.projectDir !== null) absolute(params.projectDir, "projectDir");
+      const enabled = await setHookEnabled(engine.trust, {
+        projectDir: params.projectDir,
+        homeDir,
+        id: params.id,
+        enabled: params.enabled,
+      });
+      return { enabled };
+    },
+
+    // Settings → Skills and commands: what a project's sessions get (../skills/info.ts).
+    "project.skills": async (params) => {
+      if (params.projectDir !== null) absolute(params.projectDir, "projectDir");
+      return projectSkills({ homeDir, projectDir: params.projectDir, builtins: commands });
+    },
+
+    // Settings → Subagents and `/agents`: what a project's sessions can start (../agents/list.ts),
+    // and a new agent file under `.dawg` (../agents/create.ts).
+    "project.subagents": async (params) => {
+      if (params.projectDir !== null) absolute(params.projectDir, "projectDir");
+      return projectSubagents({
+        homeDir,
+        storeRoot: engine.storeRoot,
+        projectDir: params.projectDir,
+        trust: engine.trust,
+      });
+    },
+
+    "subagent.create": async (params) =>
+      createSubagent({ homeDir, storeRoot: engine.storeRoot, trust: engine.trust }, params),
+
+    // Settings → MCP servers, the import of Claude Code's, and the composer's (../mcp).
+    ...mcpHandlers(engine, requireOpen, () => capabilities),
 
     "permission.respond": async (params) => {
       const runtime = await requireOpen(params.sessionId);
@@ -303,6 +441,15 @@ export function createEngineHost(
     "plan.respond": async (params) => {
       const runtime = await requireOpen(params.sessionId);
       runtime.respondPlan(params.requestId, params.response);
+      return {};
+    },
+
+    "elicitation.respond": async (params) => {
+      const runtime = await requireOpen(params.sessionId);
+      runtime.respondElicitation(params.requestId, {
+        action: params.action,
+        ...(params.content === undefined ? {} : { content: params.content }),
+      });
       return {};
     },
   };

@@ -14,6 +14,8 @@ import {
   type PermissionSettingsState,
   type PermissionsWriteInput,
   PermissionsWriteInputSchema,
+  type SandboxFileSettings,
+  type SandboxSettingsSummary,
 } from "../../shared/bridge.ts";
 import { validate } from "./validate.ts";
 
@@ -29,6 +31,8 @@ export interface FakeSettingsFile {
   problems?: string[];
   /** False for a file that does not parse: shown, never written. Default true. */
   parses?: boolean;
+  /** Added (Phase 4, sandbox): the file's `sandbox` key, as far as the page shows it. */
+  sandbox?: Partial<SandboxFileSettings>;
 }
 
 export interface FakePermissionsOptions {
@@ -132,6 +136,7 @@ export function createFakePermissions(options: FakePermissionsOptions): FakePerm
       ask: [...(file?.ask ?? [])],
       deny: [...(file?.deny ?? [])],
       problems,
+      sandbox: file?.sandbox === undefined ? null : fileSandbox(file.sandbox),
     };
   }
 
@@ -149,6 +154,7 @@ export function createFakePermissions(options: FakePermissionsOptions): FakePerm
       files: listed,
       defaultMode: source?.defaultMode ?? "default",
       bypassDisabled,
+      sandbox: mergedSandbox(listed),
     };
   }
 
@@ -190,6 +196,32 @@ export function createFakePermissions(options: FakePermissionsOptions): FakePerm
       throw new Error(message);
     }
     if (input.defaultMode !== undefined) next.defaultMode = input.defaultMode;
+    if (input.sandbox !== undefined) {
+      if (input.sandbox.autoAllowBashIfSandboxed === true && input.scope === "project") {
+        throw new Error(
+          "Only your own settings can run sandboxed commands without asking; a project's shared settings cannot.",
+        );
+      }
+      const sandbox: Partial<SandboxFileSettings> = { ...next.sandbox };
+      for (const key of [
+        "enabled",
+        "autoAllowBashIfSandboxed",
+        "allowUnsandboxedCommands",
+      ] as const) {
+        const value = input.sandbox[key];
+        if (value === null) delete sandbox[key];
+        else if (value !== undefined) sandbox[key] = value;
+      }
+      if (input.sandbox.allowedDomains !== undefined) {
+        const bad = input.sandbox.allowedDomains.find((d) => !FAKE_DOMAIN.test(d));
+        if (bad !== undefined)
+          throw new Error(`"${bad}" is not a host name, a "*." wildcard or an IP address.`);
+        sandbox.allowedDomains = [
+          ...new Set(input.sandbox.allowedDomains.map((d) => d.toLowerCase())),
+        ];
+      }
+      next.sandbox = sandbox;
+    }
     files.set(path, next);
     return read(input.projectDir);
   }
@@ -205,6 +237,50 @@ export function createFakePermissions(options: FakePermissionsOptions): FakePerm
     failNextWrite(message) {
       nextFailure = message;
     },
+  };
+}
+
+/** A rough copy of compat's check of an allowed-domain entry, enough for the page's messages. */
+const FAKE_DOMAIN = /^(?:\*\.)?[a-z0-9_-]+(?:\.[a-z0-9_-]+)*(?::\d{1,5})?$/i;
+
+function fileSandbox(sandbox: Partial<SandboxFileSettings>): SandboxFileSettings {
+  return {
+    enabled: sandbox.enabled ?? null,
+    autoAllowBashIfSandboxed: sandbox.autoAllowBashIfSandboxed ?? null,
+    allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands ?? null,
+    allowedDomains: [...(sandbox.allowedDomains ?? [])],
+    excludedCommands: [...(sandbox.excludedCommands ?? [])],
+  };
+}
+
+/** The files merged as compat merges them: the first that sets a switch decides; lists join. */
+function mergedSandbox(listed: readonly PermissionSettingsFile[]): SandboxSettingsSummary {
+  const first = <K extends "enabled" | "autoAllowBashIfSandboxed" | "allowUnsandboxedCommands">(
+    key: K,
+  ) =>
+    listed.find(
+      (file) =>
+        file.sandbox?.[key] !== null &&
+        file.sandbox?.[key] !== undefined &&
+        // A project's shared file cannot turn auto-allow on.
+        !(key === "autoAllowBashIfSandboxed" && file.scope === "project" && file.sandbox?.[key]),
+    );
+  const enabledBy = first("enabled");
+  const join = (key: "allowedDomains" | "excludedCommands") => [
+    ...new Set(listed.flatMap((file) => file.sandbox?.[key] ?? [])),
+  ];
+  return {
+    enabled: enabledBy?.sandbox?.enabled ?? false,
+    enabledBy: enabledBy?.path ?? null,
+    autoAllowBashIfSandboxed:
+      first("autoAllowBashIfSandboxed")?.sandbox?.autoAllowBashIfSandboxed ?? false,
+    allowUnsandboxedCommands:
+      first("allowUnsandboxedCommands")?.sandbox?.allowUnsandboxedCommands ?? true,
+    allowedDomains: join("allowedDomains"),
+    deniedDomains: [],
+    excludedCommands: join("excludedCommands"),
+    available: true,
+    unavailableReason: null,
   };
 }
 

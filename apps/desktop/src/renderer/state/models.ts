@@ -4,6 +4,7 @@
 import type {
   CatalogModel,
   DownloadState,
+  HelperInfo,
   ModelOption,
   ModelsState,
   ServerInfo,
@@ -50,9 +51,45 @@ export function serverOf(state: ModelsState, modelId: string): ServerInfo | unde
 /** A model's name for sentences: its label when installed, else the catalog's, else its id. */
 export function modelName(state: ModelsState | null, modelId: string): string {
   if (!state) return modelId;
+  if (state.helper?.id === modelId) return state.helper.displayName;
   return (
     findInstalled(state, modelId)?.label ?? findCatalogEntry(state, modelId)?.displayName ?? modelId
   );
+}
+
+/** True for the helper model's id: it answers side requests and is never chosen to chat with. */
+export function isHelperId(state: ModelsState | null, modelId: string): boolean {
+  return state?.helper?.id === modelId;
+}
+
+/** The helper's download, while there is one to show. */
+export function helperDownload(state: ModelsState): DownloadState | undefined {
+  const helper = state.helper;
+  if (!helper) return undefined;
+  const download = findDownload(state, helper.id);
+  return download?.phase === "cancelled" ? undefined : download;
+}
+
+/** Downloaded and kept: it runs (or can run) beside the main model. */
+export function isHelperInstalled(helper: HelperInfo): boolean {
+  return (
+    helper.state === "ready" ||
+    helper.state === "starting" ||
+    helper.state === "running" ||
+    helper.state === "error"
+  );
+}
+
+/**
+ * First run gets the helper in the same click as the main model: when the catalog offers it on
+ * this Mac, it is on, and it is not here yet (or its download stopped part-way).
+ */
+export function helperToSetUp(state: ModelsState): HelperInfo | null {
+  const helper = state.helper;
+  if (!helper?.recommended || !helper.fits || !helper.enabled) return null;
+  return helper.state === "available" || helper.state === "paused" || helper.state === "failed"
+    ? helper
+    : null;
 }
 
 /**
@@ -63,11 +100,15 @@ export function needsSetup(state: ModelsState): boolean {
   return state.installed.length === 0 || state.defaultModelId === null;
 }
 
-/** Where first run starts: an unfinished download carries on, else the welcome screen. */
+/**
+ * Where first run starts: an unfinished download carries on, else the welcome screen. The
+ * helper's download never leads: it follows the main model's in the background.
+ */
 export function firstRunStep(state: ModelsState): OnboardingState {
+  const downloads = state.downloads.filter((candidate) => !isHelperId(state, candidate.modelId));
   const download =
-    state.downloads.find(isUnfinishedDownload) ??
-    state.downloads.find((candidate) => candidate.phase === "failed");
+    downloads.find(isUnfinishedDownload) ??
+    downloads.find((candidate) => candidate.phase === "failed");
   if (download) {
     return {
       step: "download",

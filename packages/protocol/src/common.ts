@@ -5,9 +5,14 @@
  * against these types. Add to it freely; rename or remove only deliberately, and say so.
  */
 import { z } from "zod";
+import { CommandSandboxSchema } from "./sandbox.ts";
 
-/** Additive changes keep this number. Breaking changes bump it. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * Additive changes keep this number. Breaking changes bump it, including a value added to an enum
+ * the engine sends (README, "Versioning"). 2: Phase 4 (new tool display kinds, the "elicitation"
+ * pending request). 1: Phases 1 to 3.
+ */
+export const PROTOCOL_VERSION = 2;
 
 // ---------------------------------------------------------------------------------------------
 // Modes and status
@@ -143,6 +148,11 @@ export const CommandDisplaySchema = z.object({
    * among them (`exitCode` carries it). Empty in sessions stored before engines reported it.
    */
   notes: z.array(z.string()).default([]),
+  /**
+   * Added (Phase 4, sandbox): how the command ran with respect to the sandbox (sandbox.ts).
+   * Absent when the sandbox is off, and in sessions stored before engines reported it.
+   */
+  sandbox: CommandSandboxSchema.optional(),
 });
 export type CommandDisplay = z.infer<typeof CommandDisplaySchema>;
 
@@ -155,17 +165,90 @@ export const SearchDisplaySchema = z.object({
 });
 export type SearchDisplay = z.infer<typeof SearchDisplaySchema>;
 
+/** A page WebFetch fetched, or the redirect it reported instead of following. */
+export const WebFetchDisplaySchema = z.object({
+  kind: z.literal("web-fetch"),
+  /** The URL fetched, after http was upgraded to https. */
+  url: z.string(),
+  /** The HTTP status of the last response. */
+  status: z.number().int(),
+  /** The media type, without parameters ("text/html"). Empty when the server sent none. */
+  contentType: z.string(),
+  /** Bytes downloaded (after decompression). */
+  bytes: z.number().int().nonnegative(),
+  /** Characters of the page as text (Markdown for HTML). */
+  chars: z.number().int().nonnegative(),
+  /** The start of the page as text, for a person to glance at. */
+  preview: z.string(),
+  /** Set when the page redirected to another host: the URL the model was told to fetch next. */
+  redirectUrl: z.string().nullable(),
+  /** "model": the session's utility model answered the prompt; "page": the text was given. */
+  answeredBy: z.enum(["model", "page"]),
+  /** True when the page came from the 15-minute cache. */
+  cached: z.boolean(),
+});
+export type WebFetchDisplay = z.infer<typeof WebFetchDisplaySchema>;
+
+/** A WebSearch call's results. */
+export const WebSearchDisplaySchema = z.object({
+  kind: z.literal("web-search"),
+  query: z.string(),
+  /** For people: "Brave Search". */
+  provider: z.string(),
+  results: z.array(z.object({ title: z.string(), url: z.string(), snippet: z.string() })),
+});
+export type WebSearchDisplay = z.infer<typeof WebSearchDisplaySchema>;
+
+/** A call to an MCP server's tool, made by its own name or through `CallMcpTool` (see mcp.ts). */
+export const McpDisplaySchema = z.object({
+  kind: z.literal("mcp"),
+  /** The server's name in its configuration: "github". */
+  server: z.string(),
+  /** The tool's own name on that server: "get_issue". */
+  tool: z.string(),
+  /** The result as text for a person: its text, and a line for each image or resource. Capped. */
+  text: z.string(),
+  /** Images the result held. */
+  images: z.number().int().nonnegative(),
+  /** True when the server said the call failed. */
+  isError: z.boolean(),
+  /** Characters of the whole result's text. */
+  chars: z.number().int().nonnegative(),
+  /** Where the whole result was saved when it was too long to give the model, else null. */
+  savedTo: z.string().nullable(),
+});
+export type McpDisplay = z.infer<typeof McpDisplaySchema>;
+
 export const ToolDisplaySchema = z.discriminatedUnion("kind", [
   DiffDisplaySchema,
   FileDisplaySchema,
   CommandDisplaySchema,
   SearchDisplaySchema,
+  WebFetchDisplaySchema,
+  WebSearchDisplaySchema,
+  McpDisplaySchema,
 ]);
 export type ToolDisplay = z.infer<typeof ToolDisplaySchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Permission requests
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Added (Phase 4, subagents): which subagent something comes from. A subagent's permission
+ * prompts are shown in its parent session, labelled with it. See subagents.ts.
+ */
+export const SubagentLabelSchema = z.object({
+  /** The id the model uses to send the agent another message, unique in the parent: "agent-1". */
+  agentId: z.string().min(1),
+  /** The agent's own session, whose events `session.replay` returns (read-only). */
+  sessionId: z.string().min(1),
+  /** "Explore", "Plan", "general-purpose", a custom agent's name, or "fork". */
+  agentType: z.string().min(1),
+  /** The short description the model gave the task. */
+  description: z.string(),
+});
+export type SubagentLabel = z.infer<typeof SubagentLabelSchema>;
 
 export const PermissionRequestSchema = z.object({
   requestId: z.string(),
@@ -180,6 +263,13 @@ export const PermissionRequestSchema = z.object({
   suggestions: z.array(z.string()),
   /** A preview of the effect, such as the diff an edit would make. */
   display: ToolDisplaySchema.optional(),
+  /** Added: set when a subagent asks; `toolCallId` is then a call in the agent's own session. */
+  agent: SubagentLabelSchema.optional(),
+  /**
+   * Added (Phase 4, sandbox): set for a shell command while the sandbox is on: where it would
+   * run, and why outside when it would (sandbox.ts).
+   */
+  sandbox: CommandSandboxSchema.optional(),
 });
 export type PermissionRequest = z.infer<typeof PermissionRequestSchema>;
 
@@ -509,10 +599,183 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 
 /** A slash command, for the composer's `/` menu. */
 export const CommandInfoSchema = z.object({
-  /** Without the leading slash, for example "compact". */
+  /** Without the leading slash, for example "compact", or "frontend:test" with a namespace. */
   name: z.string().min(1),
   description: z.string(),
   /** Shown after the name, for example "[focus]". Null when it takes no arguments. */
   argumentHint: z.string().nullable(),
+  /**
+   * Where it comes from: built into dawg, or a custom command or skill in the person's own files
+   * (`~/.claude`, `~/.dawg`) or the project's. Missing means built in.
+   */
+  source: z.enum(["builtin", "user", "project"]).optional(),
+  /** A slash command, or a skill the person can also run by name. Missing means a command. */
+  kind: z.enum(["command", "skill"]).optional(),
 });
 export type CommandInfo = z.infer<typeof CommandInfoSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Compatibility with Claude Code setups (Phase 4): what a project and the person's home hold,
+// what dawg does with each item, and the consent project-supplied code needs.
+// ---------------------------------------------------------------------------------------------
+
+export const CompatItemKindSchema = z.enum([
+  /** CLAUDE.md, AGENTS.md and the files they import. */
+  "instructions",
+  /** A settings file as a whole (its permissions, env and so on). */
+  "settings",
+  /** A custom slash command: a Markdown file under a `commands` folder, at any depth. */
+  "command",
+  /** `skills/<name>/SKILL.md`. */
+  "skill",
+  /** A subagent: `agents/*.md`. */
+  "agent",
+  /** One hook handler from a settings file's `hooks`. */
+  "hook",
+  /** An MCP server from `.mcp.json`, `~/.claude.json` or a settings file. */
+  "mcp-server",
+  /** Output styles, plugins, a status line, keybindings and anything else found. */
+  "other",
+]);
+export type CompatItemKind = z.infer<typeof CompatItemKindSchema>;
+
+/** Where an item was found. */
+export const CompatSourceSchema = z.object({
+  /** The file that defines it (absolute). */
+  path: z.string().min(1),
+  /** Whose convention: Claude Code's `.claude` folders and files, or dawg's own `.dawg`. */
+  origin: z.enum(["claude", "dawg"]),
+  /**
+   * user: the person's home; project: the project's shared files; local: the project's personal
+   * files; nested: a folder inside the project; flags: the command line.
+   */
+  scope: z.enum(["user", "project", "local", "nested", "flags"]),
+});
+export type CompatSource = z.infer<typeof CompatSourceSchema>;
+
+export const CompatItemStatusSchema = z.enum([
+  /** Works as documented. */
+  "loaded",
+  /** Project-supplied code waiting for the person's consent before it runs. */
+  "needs-approval",
+  /** Loaded, but some fields or events are ignored; `notes` names each. */
+  "partly-supported",
+  /** Depends on something dawg does not have (Anthropic's cloud) or does not have yet. */
+  "not-supported",
+  /** The file could not be read or parsed; `notes` says why. */
+  "invalid",
+]);
+export type CompatItemStatus = z.infer<typeof CompatItemStatusSchema>;
+
+export const CompatItemSchema = z.object({
+  kind: CompatItemKindSchema,
+  /** For people: "/review", "PostToolUse on Edit|Write: npm run lint", "github". */
+  name: z.string().min(1),
+  source: CompatSourceSchema,
+  status: CompatItemStatusSchema,
+  /** Sentences: each unsupported field or event, why it needs approval, or what is wrong. */
+  notes: z.array(z.string()).default([]),
+});
+export type CompatItem = z.infer<typeof CompatItemSchema>;
+
+/**
+ * Code a setup supplies that runs only with the person's consent: hooks and MCP servers from a
+ * project's files (and from Claude Code's own user files, which were written for another app).
+ */
+export const CodeApprovalSchema = z.object({
+  /**
+   * A hash of every such definition. Consent is kept under it, so any change to the
+   * definitions asks again.
+   */
+  hash: z.string().min(1),
+  approved: z.boolean(),
+  /** The definitions, as the person should see them before deciding. */
+  items: z.array(CompatItemSchema),
+});
+export type CodeApproval = z.infer<typeof CodeApprovalSchema>;
+
+/** Everything a setup holds and what dawg does with it (`dawg compat`, Settings → Project setup). */
+export const CompatReportSchema = z.object({
+  /** The project the report covers (absolute), or null for only the person's own files. */
+  projectDir: z.string().nullable(),
+  items: z.array(CompatItemSchema),
+  /** Null when nothing in the setup needs consent. */
+  approval: CodeApprovalSchema.nullable(),
+});
+export type CompatReport = z.infer<typeof CompatReportSchema>;
+
+/** Added (Phase 4, hooks): what an http, prompt, agent or mcp_tool hook reaches. */
+export const HookReachesSchema = z.object({
+  /** http: the URL's host, with its port when it has one. */
+  host: z.string().nullable(),
+  /** prompt and agent: `model` as written (mapped to a local model), or null for the default. */
+  model: z.string().nullable(),
+  /** mcp_tool: the MCP server and its tool. */
+  server: z.string().nullable(),
+  tool: z.string().nullable(),
+});
+export type HookReaches = z.infer<typeof HookReachesSchema>;
+
+/**
+ * One hook handler as Settings → Hooks lists it (Phase 4): where it comes from, what it runs,
+ * whether dawg runs it, and the person's switch for it.
+ */
+export const HookInfoSchema = z.object({
+  /**
+   * Names this definition (its file, event, matcher and handler) while it stays unchanged; what
+   * `hooks.setEnabled` takes. A changed definition gets a new id.
+   */
+  id: z.string().min(1),
+  /** The documented event name: "PreToolUse", "Stop"... */
+  event: z.string().min(1),
+  /** As written in the settings file; null when the group has none. */
+  matcher: z.string().nullable(),
+  /** The handler type as written: "command", "http", "prompt", "agent", "mcp_tool". */
+  type: z.string().min(1),
+  /** What it runs, as written: the command (with its arguments), the URL or the prompt. */
+  command: z.string(),
+  /** Its own timeout in seconds, or null for the documented default. */
+  timeout: z.number().nonnegative().nullable(),
+  source: CompatSourceSchema,
+  /**
+   * What dawg does with it: loaded (it runs), needs-approval (it waits for the person's consent,
+   * `project.trust`), partly-supported (it runs, `notes` say what is ignored), not-supported.
+   */
+  status: CompatItemStatusSchema,
+  notes: z.array(z.string()).default([]),
+  /** The person's own switch (Settings → Hooks). An off hook never runs. */
+  enabled: z.boolean(),
+  /**
+   * Added (Phase 4, hooks): what a hook that is not a command reaches, for people. Null (or
+   * absent, from an older engine) for a command hook.
+   */
+  reaches: HookReachesSchema.nullable().optional(),
+});
+export type HookInfo = z.infer<typeof HookInfoSchema>;
+
+/**
+ * One skill or custom command as Settings → Skills and commands lists it (Phase 4): what it is,
+ * where it comes from, who may run it, and what dawg does with it.
+ */
+export const SkillInfoSchema = z.object({
+  /** Without the slash: "review", "frontend:test", "apps/web:deploy" for a nested skill. */
+  name: z.string().min(1),
+  kind: z.enum(["skill", "command"]),
+  /** The front matter's description, else the body's first line; "" when there is neither. */
+  description: z.string(),
+  /** Shown after the name in the `/` menu, for example "[issue-number]"; null when none. */
+  argumentHint: z.string().nullable(),
+  source: CompatSourceSchema,
+  /**
+   * A person can run it by typing `/name`: it does not opt out, its name can be typed, and it is
+   * not one of dawg's own commands' names.
+   */
+  userInvocable: z.boolean(),
+  /** The agent may load it on its own (it does not set `disable-model-invocation`). */
+  modelInvocable: z.boolean(),
+  /** Loaded, partly-supported (`notes` name each ignored field), or invalid (`notes` say why). */
+  status: CompatItemStatusSchema,
+  /** Sentences: fields ignored or mapped, conflicts, why it is not used. */
+  notes: z.array(z.string()).default([]),
+});
+export type SkillInfo = z.infer<typeof SkillInfoSchema>;

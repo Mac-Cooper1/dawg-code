@@ -3,17 +3,25 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { UTILITY_CONTEXT_RESERVE } from "../runtime/args.ts";
 import type { CatalogEntry, HardwareProfile } from "../types.ts";
 import {
   BUNDLED_CATALOG_PATH,
   CACHE_BYTES_PER_TOKEN,
   CatalogEntrySchema,
+  catalogHelper,
   entryMemoryNeed,
+  entryWeightsBytes,
   fitsMemoryRule,
+  HELPER_OVERHEAD_BYTES,
+  helperEntries,
+  helperWorkingSetBytes,
   loadCatalog,
+  mainEntries,
   maxContextForMemory,
   parseCatalog,
   recommend,
+  recommendHelper,
   requiredMemoryBytes,
 } from "./index.ts";
 
@@ -75,6 +83,31 @@ describe("schema", () => {
   test.each(bad)("rejects %s", (_label, overrides) => {
     const result = CatalogEntrySchema.safeParse({ ...entry(), ...(overrides as object) });
     expect(result.success).toBe(false);
+  });
+
+  test("accepts a helper: a text-only entry with a small context", () => {
+    const helper = entry({ role: "helper", context: { default: 32768, max: 131072 } });
+    expect(CatalogEntrySchema.safeParse(helper).success).toBe(true);
+    expect(CatalogEntrySchema.safeParse(entry({ role: "main" })).success).toBe(true);
+  });
+
+  const badHelpers: Array<[string, Partial<CatalogEntry> | Record<string, unknown>]> = [
+    ["an unknown role", { role: "sidekick" }],
+    [
+      "a helper with vision",
+      {
+        role: "helper",
+        capabilities: { tools: false, vision: true, reasoning: true },
+        projector: { file: "mmproj.gguf", sha256: HEX64, sizeBytes: 1 },
+      },
+    ],
+    [
+      "a helper with a large default context",
+      { role: "helper" as const, context: { default: 131072, max: 262144 } },
+    ],
+  ];
+  test.each(badHelpers)("rejects %s", (_label, overrides) => {
+    expect(CatalogEntrySchema.safeParse({ ...entry(), ...overrides }).success).toBe(false);
   });
 
   test("rejects duplicate ids and wrong schema versions", () => {
@@ -224,6 +257,27 @@ describe("recommend", () => {
     expect(recommend(machine(memory, chipClass), catalog).map((e) => e.id)).toEqual(expected);
   });
 
+  test("never recommends a helper as the main model, and offers it apart", () => {
+    const helper = entry({ id: "tiny-helper", role: "helper", rank: 99, minMemoryBytes: 48 * GiB });
+    const withHelper = [...catalog, helper];
+    for (const [memory, chipClass] of [
+      [24, "base"],
+      [48, "pro"],
+      [128, "ultra"],
+    ] as const) {
+      expect(recommend(machine(memory, chipClass), withHelper).map((e) => e.id)).not.toContain(
+        "tiny-helper",
+      );
+    }
+    expect(mainEntries(withHelper).map((e) => e.id)).not.toContain("tiny-helper");
+    expect(helperEntries(withHelper).map((e) => e.id)).toEqual(["tiny-helper"]);
+    expect(recommendHelper(machine(32, "max"), withHelper)).toBeNull();
+    expect(recommendHelper(machine(48, "max"), withHelper)?.id).toBe("tiny-helper");
+    expect(recommendHelper(machine(64, "intel"), withHelper)).toBeNull();
+    expect(catalogHelper(withHelper)?.id).toBe("tiny-helper");
+    expect(catalogHelper(catalog)).toBeNull();
+  });
+
   test("an x64 machine gets nothing even if mislabelled", () => {
     expect(recommend({ ...machine(128, "max"), arch: "x64" }, catalog)).toEqual([]);
   });
@@ -239,6 +293,19 @@ describe("recommend", () => {
 });
 
 describe("memory rule", () => {
+  test("a helper counts its weights, its slots' cache and a small overhead", () => {
+    const helper = entry({
+      role: "helper",
+      source: { ...entry().source, repo: "unsloth/Qwen3.8-27B-GGUF", sizeBytes: GiB },
+      context: { default: 32768, max: 131072 },
+    });
+    const perToken = CACHE_BYTES_PER_TOKEN["unsloth/Qwen3.8-27B-GGUF"] as number;
+    expect(helperWorkingSetBytes(helper)).toBe(GiB + perToken * 32768 + HELPER_OVERHEAD_BYTES);
+    expect(helperWorkingSetBytes(helper, { contextTokens: 16384, slots: 2 })).toBe(
+      GiB + perToken * 32768 + HELPER_OVERHEAD_BYTES,
+    );
+  });
+
   test("weights + cache + 2 GiB within 70% of memory", () => {
     const need = { weightsBytes: 10 * GiB, cacheBytesPerToken: 65536, contextTokens: 65536 };
     // 10 + 4 + 2 = 16 GiB working set → needs 16 / 0.7 ≈ 22.86 GiB.
@@ -249,6 +316,10 @@ describe("memory rule", () => {
       Math.floor((32 * GiB * 0.7 - 12 * GiB) / 65536),
     );
     expect(maxContextForMemory(30 * GiB, 65536, 32 * GiB)).toBe(0);
+    // Something beside the model comes off the same 70% budget, not off the memory.
+    expect(maxContextForMemory(10 * GiB, 65536, 32 * GiB, 2 * GiB)).toBe(
+      Math.floor((32 * GiB * 0.7 - 14 * GiB) / 65536),
+    );
   });
 });
 
@@ -283,6 +354,68 @@ describe("the real catalog file", () => {
       expect(fitsMemoryRule(need, e.minMemoryBytes)).toBe(true);
     },
   );
+
+  test("has one helper: permissive, never recommended as the main model, offered from 48 GiB", () => {
+    const helpers = helperEntries(catalog);
+    expect(helpers.map((e) => e.id)).toEqual(["minicpm5-1b-q8"]);
+    const helper = helpers[0] as CatalogEntry;
+    // The project's rule for a helper: Apache-2.0 or MIT, nothing else.
+    expect(["Apache-2.0", "MIT"]).toContain(helper.licence.spdx);
+    expect(helper.capabilities.vision).toBe(false);
+    expect(helper.projector).toBeUndefined();
+    expect(CACHE_BYTES_PER_TOKEN[helper.source.repo]).toBeGreaterThan(0);
+    const mac = (memoryGiB: number, chipClass: HardwareProfile["chipClass"]): HardwareProfile => ({
+      arch: "arm64",
+      chip: "test",
+      chipClass,
+      memoryBytes: memoryGiB * GiB,
+      performanceCores: 8,
+      freeDiskBytes: 0,
+      macosVersion: "15.0",
+    });
+    for (const memory of [16, 24, 32, 36, 48, 64, 96, 128, 192, 256]) {
+      for (const chipClass of ["base", "pro", "max", "ultra"] as const) {
+        expect(recommend(mac(memory, chipClass), catalog).map((e) => e.id)).not.toContain(
+          helper.id,
+        );
+        expect(recommendHelper(mac(memory, chipClass), catalog)?.id ?? null).toBe(
+          memory >= 48 ? helper.id : null,
+        );
+      }
+    }
+  });
+
+  test("the helper leaves the recommended main model at least 90% of its context wherever it is offered", () => {
+    const helper = catalogHelper(catalog) as CatalogEntry;
+    const reserve = helperWorkingSetBytes(helper);
+    for (const memory of [48, 64, 96, 128, 192, 256]) {
+      for (const chipClass of ["base", "pro", "max", "ultra"] as const) {
+        const profile: HardwareProfile = {
+          arch: "arm64",
+          chip: "test",
+          chipClass,
+          memoryBytes: memory * GiB,
+          performanceCores: 8,
+          freeDiskBytes: 0,
+          macosVersion: "15.0",
+        };
+        const main = recommend(profile, catalog)[0] as CatalogEntry;
+        const perToken = CACHE_BYTES_PER_TOKEN[main.source.repo] as number;
+        // As the app chooses the main window: the memory rule's room, less the side reserve.
+        const window = (reserved: number) =>
+          Math.min(
+            main.context.default,
+            maxContextForMemory(entryWeightsBytes(main), perToken, profile.memoryBytes, reserved) -
+              UTILITY_CONTEXT_RESERVE,
+          );
+        const without = window(0);
+        const beside = window(reserve);
+        expect(beside, `${memory} GiB ${chipClass}: ${main.id}`).toBeGreaterThanOrEqual(
+          Math.floor(without * 0.9),
+        );
+      }
+    }
+  });
 
   test("recommends the PLAN.md section 6 tiers", () => {
     const pick = (memoryGiB: number, chipClass: HardwareProfile["chipClass"]) =>

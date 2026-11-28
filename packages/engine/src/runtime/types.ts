@@ -1,4 +1,5 @@
 /** The runtime's public types. See README.md in this folder. */
+
 import type { SettingsFlags } from "@dawg/compat";
 import type { Endpoint } from "@dawg/models";
 import type {
@@ -20,9 +21,12 @@ import type {
   TokenEstimator,
 } from "../contracts/prompt.ts";
 import type { AnyTool, ToolLimits } from "../contracts/tools.ts";
+import type { SearchProvider } from "../contracts/web.ts";
 import type { IdKind, LoopLimits } from "../loop/types.ts";
+import type { McpManagerOptions } from "../mcp/manager.ts";
 import type { SlotPool } from "../model/slots.ts";
 import type { Durability } from "../session/index.ts";
+import type { CodeTrust } from "../trust/index.ts";
 import type { EnvironmentInput } from "./environment.ts";
 
 /** A connection to one model, as the model provider hands it out. */
@@ -59,12 +63,21 @@ export interface RuntimeLimits extends LoopLimits {
   compactionRecentFileChars: number;
   /** Characters of an `@`-mentioned file included with a prompt. */
   mentionMaxChars: number;
+  /**
+   * How long a permission request waits unanswered before Notification hooks fire
+   * ("permission_prompt"; about six seconds, as documented for app sessions).
+   */
+  permissionNotificationMs: number;
+  /** How long after a turn, with no new prompt, Notification hooks fire ("idle_prompt"; 60 s). */
+  idleNotificationMs: number;
 }
 
 export const DEFAULT_RUNTIME_LIMITS: Omit<RuntimeLimits, keyof LoopLimits> = {
   compactionRecentFiles: 5,
   compactionRecentFileChars: 20_000,
   mentionMaxChars: 100_000,
+  permissionNotificationMs: 6_000,
+  idleNotificationMs: 60_000,
 };
 
 export interface EngineOptions {
@@ -80,8 +93,17 @@ export interface EngineOptions {
   profile: ModelProfile | ((endpoint: Endpoint) => ModelProfile);
   /** Defaults to `createPermissionEngine()`. */
   permissions?: PermissionEngine;
-  /** In a fixed order. Defaults to the core tools followed by the interactive tools. */
+  /**
+   * In a fixed order. Defaults to the core tools, then the interactive tools, then the web
+   * tools (`WEB_TOOLS`).
+   */
   tools?: readonly AnyTool[];
+  /**
+   * The search service WebSearch uses, read when a session opens (WebSearch is offered only
+   * while there is one) and on every search, so the app can change it while it runs. Default:
+   * none.
+   */
+  webSearch?: () => SearchProvider | null;
   toolLimits?: Partial<ToolLimits>;
   limits?: Partial<RuntimeLimits>;
   /**
@@ -106,6 +128,29 @@ export interface EngineOptions {
   newId?: (kind: IdKind) => string;
   /** Gathers the session-context facts. Defaults to reading the machine and git. */
   environment?: (input: EnvironmentInput) => Promise<SessionEnvironment>;
+  /**
+   * Consent for the code a setup supplies (hooks, MCP servers). Default `NO_CODE_TRUST`: only
+   * the person's own dawg files may run code.
+   */
+  trust?: CodeTrust;
+  /**
+   * Whether main sessions get the `Agent` and `SendMessage` tools and the subagents they start
+   * (../agents). Default true.
+   */
+  subagents?: boolean;
+  /**
+   * How many of a session's latest checkpoints keep the files they saved (../checkpoints).
+   * Default 100, as Claude Code keeps.
+   */
+  checkpointRetention?: number;
+  /**
+   * Auto memory (../memory): the project's memory folder, MEMORY.md in the prefix, and the file
+   * tools free to keep it. Default false; the app and the command line turn it on. A settings
+   * file's `autoMemoryEnabled: false` turns it off for a session.
+   */
+  autoMemory?: boolean;
+  /** MCP servers: timeouts, the pauses between restarts, how long an unused one runs on. */
+  mcp?: Partial<Omit<McpManagerOptions, "homeDir" | "storeRoot" | "trust">>;
 }
 
 export interface OpenSessionOptions {
@@ -130,6 +175,13 @@ export interface NewSessionOptions extends OpenSessionOptions {
   model?: string;
   effort?: Effort;
   additionalDirectories?: string[];
+  /**
+   * The session's own MCP servers, as an `mcpServers` object: they come first, over the
+   * project's and the person's, and last while the session is open.
+   */
+  mcpServers?: Readonly<Record<string, unknown>>;
+  /** Added (round 3): only `mcpServers`, none of the project's or the person's. */
+  strictMcpConfig?: boolean;
 }
 
 export interface ForkSessionOptions extends OpenSessionOptions {

@@ -310,11 +310,18 @@ test("Settings opens on its page list, and each page is reached with the keyboar
       - button "General"
       - button "Models"
       - button "Permissions"
+      - button "Project setup"
+      - button "Hooks"
+      - button "Skills and commands"
+      - button "Subagents"
+      - button "MCP servers"
+      - button "Web"
       - button "Shortcuts"
   `);
   const choose = async (name: string, key: string) => {
     const button = nav.getByRole("button", { name, exact: true });
-    await pressUntilFocused(button, key, 4);
+    // Shift+Tab from the last page back to the first passes every page.
+    await pressUntilFocused(button, key, 10);
     await press("Enter");
     await expect(button).toHaveAttribute("aria-current", "page");
     await expect(button).toBeFocused();
@@ -324,6 +331,12 @@ test("Settings opens on its page list, and each page is reached with the keyboar
   await choose("General", "Shift+Tab");
   await choose("Models", "Tab");
   await choose("Permissions", "Tab");
+  await choose("Project setup", "Tab");
+  await choose("Hooks", "Tab");
+  await choose("Skills and commands", "Tab");
+  await choose("Subagents", "Tab");
+  await choose("MCP servers", "Tab");
+  await choose("Web", "Tab");
   await choose("Shortcuts", "Tab");
   await choose("General", "Shift+Tab");
 

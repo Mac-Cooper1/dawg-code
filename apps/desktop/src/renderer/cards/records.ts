@@ -5,7 +5,7 @@
  */
 import type { PermissionResponse, QuestionAnswer } from "@dawg/protocol";
 import { MODE_INFO } from "../lib/modes.ts";
-import type { PermissionItem, PlanItem, QuestionItem } from "../state/types.ts";
+import type { ElicitationItem, PermissionItem, PlanItem, QuestionItem } from "../state/types.ts";
 
 export const CANCELLED_RECORD = "No answer needed: the turn ended";
 
@@ -42,6 +42,18 @@ export function questionRecord(item: QuestionItem): string {
   if (response.outcome === "dismissed") return "You dismissed the question";
   const answers = response.answers.map(answerText).filter((text) => text !== "");
   return answers.length > 0 ? `You answered: ${answers.join("; ")}` : "You answered";
+}
+
+/** What became of an MCP server's request for input. */
+export function elicitationRecord(item: ElicitationItem): string {
+  if (item.state === "cancelled") return "No answer needed: the request ended";
+  const action = item.response?.action;
+  if (action === undefined) return "Answered";
+  if (action === "decline") return `You declined ${item.server}’s request`;
+  if (action === "cancel") return "Cancelled";
+  return item.mode === "url"
+    ? `You opened the page ${item.server} asked for`
+    : `You sent ${item.server} the form`;
 }
 
 export function planRecord(item: PlanItem): string {

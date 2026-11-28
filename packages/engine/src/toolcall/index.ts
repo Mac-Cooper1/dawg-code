@@ -21,7 +21,7 @@ export {
   type SchemaLintFinding,
   type SchemaLintOptions,
 } from "./lint.ts";
-export { resolveToolName, type ToolNameMatch } from "./names.ts";
+export { MCP_DISPATCHER, resolveToolName, type ToolNameMatch } from "./names.ts";
 export {
   type CallFixes,
   type InvalidCall,

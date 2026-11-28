@@ -141,7 +141,8 @@ describe("with the mock engine", () => {
         expect(selected).not.toBeNull();
         expect(selected).not.toBe("broken-links");
         await vi.waitFor(() => expect(state().sessions[selected ?? ""]?.loaded).toBe(true));
-        expect(state().notices).toEqual([]);
+        // Nothing went wrong (the first-open notice about tally's setup may be there).
+        expect(state().notices.filter((notice) => notice.tone === "error")).toEqual([]);
       }
     },
   );

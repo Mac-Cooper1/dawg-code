@@ -1,7 +1,9 @@
 import type { CommandInfo } from "@dawg/protocol";
 import { useEffect } from "react";
 import menu from "../app/menu.module.css";
+import { Tag } from "../ui/index.ts";
 import styles from "./Composer.module.css";
+import { commandOrigin } from "./commands.ts";
 
 export interface CommandMenuProps {
   /** The listbox id, referenced by the textarea's aria-controls. */
@@ -30,35 +32,45 @@ export function CommandMenu(props: CommandMenuProps) {
     <div className={`${menu.content} ${styles.commandMenu}`}>
       <div className={menu.label}>Commands</div>
       <div id={props.id} role="listbox" aria-label="Commands" className={styles.options}>
-        {props.commands.map((command, index) => (
-          <div
-            key={command.name}
-            id={props.optionId(index)}
-            role="option"
-            aria-selected={index === props.active}
-            tabIndex={-1}
-            className={menu.item}
-            data-highlighted={index === props.active ? "" : undefined}
-            onMouseMove={() => {
-              if (index !== props.active) props.onHover?.(index);
-            }}
-            // Mouse down, not click: choosing must not take focus from the textarea.
-            onMouseDown={(event) => {
-              event.preventDefault();
-              props.onChoose(command);
-            }}
-          >
-            <span className={menu.text}>
-              <span className={menu.title}>
-                /{command.name}
-                {command.argumentHint && (
-                  <span className={styles.argumentHint}> {command.argumentHint}</span>
-                )}
+        {props.commands.map((command, index) => {
+          const origin = commandOrigin(command);
+          return (
+            <div
+              key={command.name}
+              id={props.optionId(index)}
+              role="option"
+              aria-selected={index === props.active}
+              // VoiceOver reads a custom one's name, where it comes from, then what it does.
+              aria-label={
+                origin === null
+                  ? undefined
+                  : `/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}, ${origin.label}, ${command.description}`
+              }
+              tabIndex={-1}
+              className={menu.item}
+              data-highlighted={index === props.active ? "" : undefined}
+              onMouseMove={() => {
+                if (index !== props.active) props.onHover?.(index);
+              }}
+              // Mouse down, not click: choosing must not take focus from the textarea.
+              onMouseDown={(event) => {
+                event.preventDefault();
+                props.onChoose(command);
+              }}
+            >
+              <span className={menu.text}>
+                <span className={menu.title}>
+                  /{command.name}
+                  {command.argumentHint && (
+                    <span className={styles.argumentHint}> {command.argumentHint}</span>
+                  )}
+                  {origin !== null && <Tag className={styles.commandSource}>{origin.tag}</Tag>}
+                </span>
+                <span className={menu.description}>{command.description}</span>
               </span>
-              <span className={menu.description}>{command.description}</span>
-            </span>
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

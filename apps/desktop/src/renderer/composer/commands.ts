@@ -25,6 +25,17 @@ export function filterCommands(
   });
 }
 
+/**
+ * Where a custom command or skill comes from, for the small tag beside its name: the person's
+ * own files or the project's. Null for dawg's own commands, which need no tag.
+ */
+export function commandOrigin(command: CommandInfo): { tag: string; label: string } | null {
+  const what = command.kind === "skill" ? "skill" : "command";
+  if (command.source === "user") return { tag: "personal", label: `your own ${what}` };
+  if (command.source === "project") return { tag: "project", label: `the project's ${what}` };
+  return null;
+}
+
 /** True when the command takes arguments, so choosing it fills "/name " instead of sending. */
 export function takesArguments(command: CommandInfo): boolean {
   return command.argumentHint !== null;

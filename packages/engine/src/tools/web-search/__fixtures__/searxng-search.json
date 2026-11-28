@@ -1,0 +1,37 @@
+{
+  "query": "vitest fake timers",
+  "number_of_results": 0,
+  "results": [
+    {
+      "url": "https://vitest.dev/guide/mocking/timers",
+      "title": "Timers | Vitest",
+      "content": "Use vi.useFakeTimers() to control time in tests.",
+      "engine": "duckduckgo",
+      "engines": ["duckduckgo", "brave"],
+      "positions": [1, 1],
+      "score": 4.0,
+      "category": "general"
+    },
+    {
+      "url": "https://vitest.dev/guide/mocking/timers",
+      "title": "Timers | Vitest (duplicate)",
+      "content": "The same page from another engine.",
+      "engine": "bing",
+      "score": 1.0,
+      "category": "general"
+    },
+    {
+      "url": "https://stackoverflow.com/questions/1/fake-timers",
+      "title": "How do fake timers work?",
+      "content": "",
+      "engine": "bing",
+      "score": 0.5,
+      "category": "general"
+    }
+  ],
+  "answers": [],
+  "corrections": [],
+  "infoboxes": [],
+  "suggestions": ["vitest timers"],
+  "unresponsive_engines": []
+}

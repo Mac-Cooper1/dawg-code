@@ -1,0 +1,114 @@
+/* An MCP server's request for input: the server's words, its form or the page it asks to open. */
+
+/* The server's message: plain text, kept as written. */
+.message {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-chat);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.labelRow {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.required {
+  margin-left: 6px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.help {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.number {
+  max-width: 180px;
+}
+
+.select {
+  height: 32px;
+  width: 100%;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 0 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.form [aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+/* URL mode: the site, large, then the whole address, both selectable and never links. */
+.page {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  align-items: baseline;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--code);
+}
+
+.page dt {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.page dd {
+  margin: 0;
+  min-width: 0;
+  user-select: text;
+}
+
+.host {
+  font-size: var(--text-chat);
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.url {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.warning {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: var(--text-sm);
+  color: var(--amber);
+}

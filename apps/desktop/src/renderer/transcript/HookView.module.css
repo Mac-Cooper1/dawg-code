@@ -1,0 +1,121 @@
+/* Hooks in the transcript: a compact line that opens to its details, and the quiet line for hooks
+   that wait for approval. Quiet by default; a block uses amber, a failure red. */
+
+.hook {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  text-align: left;
+}
+
+.toggle:hover {
+  background: var(--hover);
+  color: var(--ink-2);
+}
+
+.chevron {
+  flex: none;
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.icon {
+  flex: none;
+}
+
+.line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blocked {
+  color: var(--amber);
+}
+
+.blocked .toggle:hover {
+  color: var(--amber);
+}
+
+.error {
+  color: var(--red);
+}
+
+.error .toggle:hover {
+  color: var(--red);
+}
+
+.details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 4px 0 2px 24px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.details dt {
+  color: var(--ink-3);
+}
+
+.details dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  color: var(--ink);
+}
+
+.command {
+  white-space: pre-wrap;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.message {
+  white-space: pre-wrap;
+}
+
+.skipped {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.skippedText {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}

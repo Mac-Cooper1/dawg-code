@@ -9,6 +9,7 @@
 import type { ModelInfo } from "@dawg/protocol";
 import type {
   CatalogModel,
+  HelperInfo,
   MachineInfo,
   ModelOption,
   ModelStatus,
@@ -207,6 +208,27 @@ export const MOCK_CATALOG: readonly CatalogModel[] = [
   },
 ];
 
+/**
+ * The catalog's helper model as it stands on `MOCK_MACHINE`, running beside the default model.
+ * It answers side requests (titles, page summaries); it is never one of `MOCK_MODELS`.
+ */
+export const MOCK_HELPER: HelperInfo = {
+  id: "minicpm5-1b-q8",
+  displayName: "MiniCPM5 1B (8-bit)",
+  licence: { spdx: "Apache-2.0", url: "https://github.com/OpenBMB/MiniCPM/blob/main/LICENSE" },
+  sizeBytes: 1_153_529_216,
+  memoryBytes: 2_490_000_000,
+  contextWindow: 32_768,
+  recommended: true,
+  fits: true,
+  fitNote: null,
+  state: "running",
+  enabled: true,
+  message: null,
+  runtimeMemoryBytes: 1_900_000_000,
+  foundIn: null,
+};
+
 export const MOCK_SERVERS: readonly ServerInfo[] = [
   {
     id: "ollama",
@@ -244,8 +266,15 @@ export function mockModelsState(scenario: MockModelsScenario = "installed"): Mod
       status: { ...MOCK_MODEL_STATUS },
       defaultModelId: MOCK_DEFAULT_MODEL_ID,
       idleUnloadMinutes: null,
+      helper: { ...MOCK_HELPER },
     };
   }
+  // Nothing installed: the helper is not on this Mac either.
+  const notDownloaded: HelperInfo = {
+    ...MOCK_HELPER,
+    state: "available",
+    runtimeMemoryBytes: null,
+  };
   const stopped: ModelStatus = {
     state: "stopped",
     modelId: null,
@@ -266,6 +295,7 @@ export function mockModelsState(scenario: MockModelsScenario = "installed"): Mod
       status: stopped,
       defaultModelId: null,
       idleUnloadMinutes: null,
+      helper: notDownloaded,
     };
   }
   const memory = MOCK_SMALL_MACHINE.memoryBytes / GIB;
@@ -285,5 +315,11 @@ export function mockModelsState(scenario: MockModelsScenario = "installed"): Mod
     status: stopped,
     defaultModelId: null,
     idleUnloadMinutes: null,
+    helper: {
+      ...notDownloaded,
+      recommended: false,
+      fits: false,
+      fitNote: `Needs 48 GB of memory; this Mac has ${memory} GB.`,
+    },
   };
 }

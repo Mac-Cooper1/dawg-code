@@ -500,6 +500,7 @@ describe("Bash definition", () => {
     };
     expect(Object.keys(schema.properties).sort()).toEqual([
       "command",
+      "dangerouslyDisableSandbox",
       "description",
       "run_in_background",
       "timeout",

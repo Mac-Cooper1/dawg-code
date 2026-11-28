@@ -23,6 +23,7 @@ good cached copy, then to the bundled one. The schema lives in
 | Field                 | Meaning                                                                                                   |
 | --------------------- | --------------------------------------------------------------------------------------------------------- |
 | `id`                  | Stable id, lowercase: `<model>-<quant>`, for example `qwen3.8-27b-q8`. Never reuse an id for other bytes. |
+| `role`                | Optional. `main` (the default) is a model a person chats with; `helper` is a tiny model for side requests (see below). |
 | `displayName`         | What the user sees.                                                                                       |
 | `licence.spdx`        | SPDX identifier, or `LicenseRef-<name>` when the licence is not on the SPDX list.                         |
 | `licence.url`         | HTTPS link to the licence text, shown before download.                                                    |
@@ -48,6 +49,28 @@ From PLAN.md section 6: **model file + projector + cache at `context.default` + 
 full-attention layer, `2 × kv_heads × head_dim × 2 bytes`, read from the model's `config.json`.
 Sliding-window and linear-attention layers keep a fixed-size state that the 2 GiB covers.
 
+## Helper models
+
+An entry with `"role": "helper"` is a tiny model that answers side requests: session titles and
+WebFetch's page summaries. It runs in a second llama-server beside the main model, whatever the
+main model is (the bundled runtime, Ollama, LM Studio or a remote server), so those requests
+never wait for the main model or take its slots. A helper is never recommended or offered as the
+main model, never becomes the default, and is listed apart (the first-run screen adds it to the
+recommended download; Settings → Models has its own section).
+
+Rules the schema and the tests check for a helper:
+
+- Text only: no projector, `capabilities.vision` false.
+- `context.default` at most 65,536. It is the helper's window (one slot), and it sizes what
+  WebFetch hands it: about three characters per token, less room for the answer.
+- Its licence is Apache-2.0 or MIT, and its GGUF comes from the model's own publisher.
+- Thinking can be switched off: its profile sends the template option that does it.
+- `minMemoryBytes` is the smallest Mac where it runs beside that Mac's recommended main model
+  and still leaves the main model at least 90% of its context. The app counts the helper's
+  memory (weights + cache at `context.default` + 512 MiB, `helperWorkingSetBytes`) before it
+  chooses the main model's window.
+- `rank` orders helpers among themselves; the app uses the best-ranked one.
+
 ## Adding an entry
 
 1. Pick an ungated repo and get the commit hash: `GET https://huggingface.co/api/models/<repo>` → `sha`.
@@ -67,7 +90,7 @@ Sliding-window and linear-attention layers keep a fixed-size state that the 2 Gi
 
 No model enters the default catalog without passing the eval suite (PLAN.md section 6).
 
-## Current entries (checked against the Hugging Face API on 2026-11-20)
+## Current entries (checked against the Hugging Face API on 2026-11-20; the helper on 2026-11-27)
 
 | Id                   | Repo and file                                                  | Size     | Tier        | Notes |
 | -------------------- | -------------------------------------------------------------- | -------- | ----------- | ----- |
@@ -77,3 +100,16 @@ No model enters the default catalog without passing the eval suite (PLAN.md sect
 | `laguna-xs-2.1-q4`   | `poolside/Laguna-XS-2.1-GGUF` / `Laguna-XS-2.1-Q4_K_M.gguf`     | 20.3 GB  | 36 GiB, base and Pro | Sparse, text only, 64K; OpenMDW-1.1 licence |
 | `qwen3.8-27b-q6`     | `unsloth/Qwen3.8-27B-GGUF` / `Qwen3.8-27B-UD-Q6_K.gguf`        | 22.0 GB  | 48 GiB      | Plus projector, 128K |
 | `qwen3.8-27b-q8`     | `unsloth/Qwen3.8-27B-GGUF` / `Qwen3.8-27B-Q8_0.gguf`           | 29.0 GB  | 64 GiB and up | Plus projector, 200K |
+| `minicpm5-1b-q8`     | `openbmb/MiniCPM5-1B-GGUF` / `MiniCPM5-1B-Q8_0.gguf`           | 1.15 GB  | Helper, 48 GiB and up | Side requests only; 32K window, thinking off (`enable_thinking: false`) |
+
+### Why MiniCPM5 1B is the helper
+
+Chosen on 2026-11-27 from the tiny instruct models (0.5–2B) with an Apache-2.0 or MIT licence
+and a GGUF from their own publisher: Qwen3 0.6B and 1.7B (`Qwen/Qwen3-*-GGUF`), Qwen3.5 0.8B
+(`ggml-org`; Qwen3.5 2B has no publisher or llama.cpp GGUF), Granite 4.0 H 1B
+(`ibm-granite`), SmolLM2 (8K context, too small for a page) and MiniCPM5 1B and 2B (`openbmb`).
+MiniCPM5 1B is the newest (May 2026), has a documented no-think mode switched by the same
+`enable_thinking` option Qwen uses, a 128K native context, and a small cache: 24 KiB a token
+against Qwen3 1.7B's 112 KiB, so a 32K window costs 768 MiB instead of 3.5 GiB. The 2B is
+stronger but documents only its thinking mode. Its quality on our own side-request tasks is not
+measured yet.

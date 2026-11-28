@@ -49,6 +49,7 @@ import {
   type FilesNotePlan,
   fallbackSummary,
   filesNote,
+  partialSummaryRequestBody,
   summaryNote,
   summaryRequestMessage,
 } from "./summary.ts";
@@ -123,9 +124,17 @@ async function compact(
   const tools = input.prefix.tools;
   const system = input.prefix.system;
 
+  // From a point (rewind's "summarise from here"): the request names where that part starts.
+  const from = input.from;
+  const askFor = (retry: boolean): Message =>
+    from === undefined
+      ? summaryRequestMessage(input.focus, retry)
+      : noteMessage(
+          partialSummaryRequestBody(promptStart(input.history[from]), input.focus, retry),
+        );
   const request = (history: readonly Message[], retry: boolean): ModelRequest => {
     const req: ModelRequest = {
-      messages: [system, ...history, summaryRequestMessage(input.focus, retry)],
+      messages: [system, ...history, askFor(retry)],
       tools,
       maxOutputTokens: reserve,
       signal: input.signal,
@@ -147,7 +156,7 @@ async function compact(
   const estimate: Estimate = (history) =>
     Math.ceil(
       estimator.estimate({
-        messages: [system, ...history, summaryRequestMessage(input.focus, false)],
+        messages: [system, ...history, askFor(false)],
         tools,
       }) * scale,
     );
@@ -176,7 +185,7 @@ async function compact(
     usage = reply.usage;
     summary = summaryText(reply);
   }
-  if (summary === "") summary = fallbackSummary(input.history);
+  if (summary === "") summary = fallbackSummary(input.history.slice(from ?? 0));
   else if (reply.finishReason === "length") summary = `${summary}\n\n${CUT_OFF_MARK}`;
 
   return {
@@ -278,6 +287,15 @@ function isLeftOut(m: Message): boolean {
     part?.type === "text" &&
     part.text.startsWith("[This output was left out")
   );
+}
+
+/** The text of the message a partial summary starts at, to point the model at it. */
+function promptStart(message: Message | undefined): string {
+  if (message === undefined || message.role !== "user") return "";
+  return message.content
+    .map((p) => (p.type === "text" ? p.text : "[image]"))
+    .join(" ")
+    .trim();
 }
 
 function droppedTurnsNote(count: number): UserMessage {

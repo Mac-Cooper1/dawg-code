@@ -45,6 +45,8 @@ export interface ModelService {
   stop(): Promise<void>;
   setDefault(modelId: string): Promise<void>;
   setIdleUnload(minutes: number | null): Promise<void>;
+  /** Side requests go to the helper model (true) or the main model (false). */
+  setHelperEnabled(enabled: boolean): Promise<void>;
   /** `choose` opens the native picker; null when the person cancels. */
   addModelFile(choose: () => Promise<string | null>): Promise<AddedModelFile | null>;
   connectServer(input: ConnectServerInput): Promise<ServerInfo>;

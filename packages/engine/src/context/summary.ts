@@ -55,6 +55,45 @@ export function summaryRequestMessage(focus: string | null, retry: boolean): Use
   return noteMessage(summaryRequestBody(focus, retry));
 }
 
+/**
+ * The request for a summary of the conversation from one of the person's messages on (rewind's
+ * "summarise from here"). `start` is the beginning of that message, to point at it.
+ */
+export function partialSummaryRequestBody(
+  start: string,
+  focus: string | null,
+  retry: boolean,
+): string {
+  const quoted = start.length > 300 ? `${start.slice(0, 299)}…` : start;
+  const parts = [
+    `The person chose to summarise part of this conversation: everything from their message that begins "${quoted.replace(/\s+/g, " ").trim()}" up to here. That part will be replaced by the summary you write now; everything before it stays as it is. Write the summary for yourself.`,
+    "Do not call any tools. Cover only that part. Reply with only the summary, as plain text with these sections in this order:",
+    SECTIONS,
+    "Be specific: exact names, paths, commands and error messages. Keep it under about 1,000 words.",
+  ];
+  if (focus !== null && focus.trim() !== "") {
+    parts.push(
+      `The person asked this summary to concentrate on: ${focus.trim()}\nGive that the most detail, and keep the other sections short.`,
+    );
+  }
+  if (retry) {
+    parts.push(
+      "Your previous reply did not contain the summary. Write it now as plain text, without calling tools, and keep your thinking short.",
+    );
+  }
+  return parts.join("\n\n");
+}
+
+/** The note that replaces the summarised part of the conversation. */
+export function partialSummaryNote(summary: string, tasks: readonly TaskItem[]): UserMessage {
+  const parts = [
+    "The person summarised the rest of this conversation from here to save context. The summary below, which you wrote, replaces the messages from that point on; the messages above it are unchanged. Files were not changed by this: check their current state before relying on what the summary says about them.",
+    summary,
+  ];
+  if (tasks.length > 0) parts.push(`Your task list at that time:\n${taskLines(tasks)}`);
+  return noteMessage(parts.join("\n\n"));
+}
+
 function taskLines(tasks: readonly TaskItem[]): string {
   return tasks.map((task) => `- ${task.status}: ${task.content}`).join("\n");
 }

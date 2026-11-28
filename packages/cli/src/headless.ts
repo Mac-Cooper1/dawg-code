@@ -9,13 +9,19 @@ import type { EngineEvent, EventPayload, SessionStatus, Usage } from "@dawg/prot
 import type { CliOptions } from "./args.ts";
 import { EXIT } from "./exit-codes.ts";
 import { type Io, readAll } from "./io.ts";
-import { toolLine } from "./render.ts";
+import { agentLine, sandboxLine, toolLine } from "./render.ts";
 import { openSession, RunError, runErrorFrom } from "./session.ts";
 import { type Running, start } from "./start.ts";
+import { approveProjectCode, hookLine, skippedLine } from "./trust.ts";
 
 type TurnFinished = EventPayload<"turn.finished">;
 
-const NOBODY = { permissionPrompts: false, questions: false, planApproval: false };
+const NOBODY = {
+  permissionPrompts: false,
+  questions: false,
+  planApproval: false,
+  elicitation: false,
+};
 
 async function promptText(options: CliOptions, io: Io): Promise<string> {
   if (options.prompt !== null && options.prompt.trim() !== "") return options.prompt;
@@ -84,12 +90,24 @@ export async function runHeadless(options: CliOptions, io: Io): Promise<number> 
       early.push(event);
     };
     client.onEvent((event) => handle(event));
-    const snapshot = await openSession(client, options, cwd, log);
+    // Unapproved project code never runs here; the flag approves it before the session opens,
+    // so its SessionStart hooks run too.
+    if (options.approveProjectCode && options.resume === null) {
+      await approveProjectCode(client, cwd, log);
+    }
+    const snapshot = await openSession(client, options, cwd, log, io.cwd);
+    if (options.approveProjectCode && options.resume !== null) {
+      await approveProjectCode(client, snapshot.session.projectDir, log);
+    }
     let sessionId = snapshot.session.id;
     const startRequests = snapshot.usage?.totals.requests ?? 0;
     let usage: Usage | null = snapshot.usage;
     let status: SessionStatus = snapshot.session.status;
     const finished = new Map<string, TurnFinished>();
+    /** The latest turn to end, and the subagents still queued or running. */
+    let latest: TurnFinished | null = null;
+    let turnsStarted = 0;
+    const working = new Set<string>();
     let wake = () => {};
     const started = new Map<string, { toolName: string; input: Record<string, unknown> }>();
 
@@ -104,18 +122,41 @@ export async function runHeadless(options: CliOptions, io: Io): Promise<number> 
           status = event.payload.status;
           wake();
           break;
-        case "turn.finished":
-          finished.set(event.payload.turnId, event.payload);
+        case "turn.started":
+          turnsStarted += 1;
           wake();
           break;
+        case "turn.finished":
+          finished.set(event.payload.turnId, event.payload);
+          latest = event.payload;
+          wake();
+          break;
+        case "subagent.updated": {
+          const agent = event.payload.agent;
+          if (agent.status === "queued" || agent.status === "running") working.add(agent.agentId);
+          else working.delete(agent.agentId);
+          if (agent.status !== "running" || agent.toolUses === 0) verbose(agentLine(agent));
+          wake();
+          break;
+        }
         case "error":
           log(`Error: ${event.payload.error.message}`);
           break;
         case "tool.started":
           started.set(event.payload.toolCallId, event.payload);
           break;
-        case "tool.finished":
+        case "tool.finished": {
           verbose(toolLine(started.get(event.payload.toolCallId), event.payload, cwd));
+          // What the sandbox stopped is worth a line even without --verbose.
+          const blocked = sandboxLine(event.payload.display);
+          if (blocked !== null) log(blocked.trim());
+          break;
+        }
+        case "hook.ran":
+          verbose(hookLine(event.payload));
+          break;
+        case "hook.skipped":
+          log(skippedLine(event.payload, true));
           break;
       }
     };
@@ -152,6 +193,16 @@ export async function runHeadless(options: CliOptions, io: Io): Promise<number> 
       const id = turnId;
       await until(() => finished.has(id));
       end = finished.get(id) ?? null;
+      // Background agents: the session wakes itself with a turn when one ends, so the run ends
+      // once none is left working and no turn of its own follows.
+      while (working.size > 0 && !terminated) {
+        const before = turnsStarted;
+        await until(() => working.size === 0 || terminated);
+        await until(() => status !== "working" || terminated);
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        if (turnsStarted !== before) await until(() => status !== "working" || terminated);
+        end = latest ?? end;
+      }
     } else {
       // A command that answered at once may still have work running (`/compact`).
       await until(() => status !== "working");
@@ -168,6 +219,16 @@ export async function runHeadless(options: CliOptions, io: Io): Promise<number> 
       log(`Stopped: the turn reached its limit of ${options.maxTurns ?? "200"} model requests.`);
     }
     if (stopReason === "interrupted") log("Interrupted.");
+    // A run never starts a sign-in: say which servers it went without, and where to sign in.
+    const unsigned = await client
+      .request("mcp.list", { projectDir: snapshot.session.projectDir, sessionId })
+      .then((listed) => listed.servers.filter((s) => s.state === "needs-sign-in"))
+      .catch(() => []);
+    for (const server of unsigned) {
+      log(
+        `The MCP server ${server.name} needs sign-in, so this run went without it. Sign in with /mcp login ${server.name} in dawg, or in Settings → MCP servers.`,
+      );
+    }
 
     if (options.outputFormat === "text") {
       if (result !== "") io.stdout.write(result.endsWith("\n") ? result : `${result}\n`);

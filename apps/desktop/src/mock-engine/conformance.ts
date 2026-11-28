@@ -49,9 +49,10 @@ interface OpenTool {
 }
 
 interface Pending {
-  kind: "permission" | "question" | "plan";
+  kind: "permission" | "question" | "plan" | "elicitation";
   turnId: string;
-  toolCallId: string;
+  /** Null for an MCP server's request made while several of the session's calls ran. */
+  toolCallId: string | null;
 }
 
 /** Returns the violations found, in stream order. An empty list means the stream conforms. */
@@ -189,6 +190,14 @@ class Checker {
       case "plan.proposed":
         this.#onRequest(
           event.event === "question.asked" ? "question" : "plan",
+          event.payload.turnId,
+          event.payload.requestId,
+          event.payload.toolCallId,
+        );
+        return;
+      case "elicitation.requested":
+        this.#onRequest(
+          "elicitation",
           event.payload.turnId,
           event.payload.requestId,
           event.payload.toolCallId,
@@ -472,11 +481,20 @@ class Checker {
   // Rule 5: requests
   // -------------------------------------------------------------------------------------------
 
-  #onRequest(kind: Pending["kind"], turnId: string, requestId: string, toolCallId: string): void {
+  #onRequest(
+    kind: Pending["kind"],
+    turnId: string,
+    requestId: string,
+    toolCallId: string | null,
+  ): void {
     if (!this.#requireTurn(turnId)) return;
     if (this.#seenRequests.has(requestId)) this.#fail(`request id ${requestId} is reused`);
     this.#seenRequests.add(requestId);
-    if (!this.#tools.has(toolCallId) && !this.#adoptTool(turnId, toolCallId, null)) {
+    if (
+      toolCallId !== null &&
+      !this.#tools.has(toolCallId) &&
+      !this.#adoptTool(turnId, toolCallId, null)
+    ) {
       this.#fail(`request ${requestId} is for tool call ${toolCallId}, which is not running`);
     }
     this.#pending.set(requestId, { kind, turnId, toolCallId });
@@ -630,6 +648,7 @@ function turnIdOf(event: EngineEvent): string | null {
     case "session.deleted":
     case "tasks.updated":
     case "background.updated":
+    case "subagent.updated":
     case "usage.updated":
     case "compaction.finished":
       return null;

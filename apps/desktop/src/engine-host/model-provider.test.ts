@@ -191,6 +191,129 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("the helper model in grants", () => {
+  const HELPER = {
+    modelId: "minicpm5-1b-q8",
+    endpoint: endpoint({
+      baseUrl: "http://127.0.0.1:41999/v1",
+      model: "minicpm5-1b-q8",
+      contextWindow: 32_768,
+      apiKey: "helper-key",
+    }),
+    slots: [0],
+    profile: "minicpm5",
+  };
+  const MAIN = endpoint({ contextWindow: 131_072 });
+
+  it("sends side requests to the helper's server and slot, sized by its window", async () => {
+    const f = fixture();
+    const connection = await connectWith(f, null, {
+      modelId: "qwen3.8-27b-q8",
+      endpoint: MAIN,
+      slots: BUNDLED_SLOTS,
+      profile: "qwen3.8",
+      helper: HELPER,
+    });
+    const side = connection.utility?.client as ModelClient;
+    // WebFetch sizes the page and the session picks the profile from this endpoint.
+    expect(side.endpoint).toMatchObject({ model: "minicpm5-1b-q8", contextWindow: 32_768 });
+    expect(f.provider.catalogProfile("minicpm5-1b-q8")).toBe("minicpm5");
+    expect(f.provider.serverName("minicpm5-1b-q8")).toBe("minicpm5-1b-q8");
+    expect(await drain(side, ask("title"))).toBe("Done.");
+    expect(f.sent.at(-1)?.endpoint.baseUrl).toBe("http://127.0.0.1:41999/v1");
+    expect(f.sent.at(-1)?.request.slot).toBe(0);
+    // The conversation stays on the main runtime.
+    expect(await drain(connection.client, ask("hi"))).toBe("Done.");
+    expect(f.sent.at(-1)?.endpoint.baseUrl).toBe("http://127.0.0.1:41001/v1");
+    expect(f.logs.join("\n")).toContain("with the helper model minicpm5-1b-q8");
+    expect(f.logs.join("\n")).not.toContain("helper-key");
+  });
+
+  it("uses the helper for a server's model too", async () => {
+    const f = fixture();
+    const connection = await connectWith(f, "ollama/qwen3:32b", {
+      modelId: "ollama/qwen3:32b",
+      endpoint: endpoint({ kind: "ollama", model: "qwen3:32b" }),
+      helper: HELPER,
+    });
+    expect(await drain(connection.utility?.client as ModelClient, ask("title"))).toBe("Done.");
+    expect(f.sent.at(-1)?.endpoint.model).toBe("minicpm5-1b-q8");
+  });
+
+  it("falls back to the main model when the helper does not answer, then asks main again", async () => {
+    const f = fixture();
+    const connection = await connectWith(f, null, {
+      modelId: "qwen3.8-27b-q8",
+      endpoint: MAIN,
+      slots: BUNDLED_SLOTS,
+      helper: HELPER,
+    });
+    const side = connection.utility?.client as ModelClient;
+    f.failNextStream(new ModelError("connection", "connect ECONNREFUSED 127.0.0.1:41999"));
+    expect(await drain(side, ask("title"))).toBe("Done.");
+    expect(f.sent.map((s) => [s.endpoint.baseUrl, s.request.slot])).toEqual([
+      ["http://127.0.0.1:41999/v1", 0],
+      ["http://127.0.0.1:41001/v1", 1],
+    ]);
+    expect(f.logs.join("\n")).toContain(
+      "The helper model did not answer (connect ECONNREFUSED 127.0.0.1:41999); this side request went to qwen3.8-27b-q8 instead.",
+    );
+    // The next side request asks main where the helper is now: restarted on another port.
+    const next = drain(side, ask("another title"));
+    const moved = {
+      ...HELPER,
+      endpoint: { ...HELPER.endpoint, baseUrl: "http://127.0.0.1:42000/v1" },
+    };
+    f.grant(await f.nextRequest(), {
+      modelId: "qwen3.8-27b-q8",
+      endpoint: MAIN,
+      slots: BUNDLED_SLOTS,
+      helper: moved,
+      generation: 2,
+    });
+    expect(await next).toBe("Done.");
+    expect(f.sent.at(-1)?.endpoint.baseUrl).toBe("http://127.0.0.1:42000/v1");
+  });
+
+  it("follows a helper that starts after the session connected, and one turned off", async () => {
+    const f = fixture();
+    const connection = await connectWith(f, null, {
+      modelId: "qwen3.8-27b-q8",
+      endpoint: MAIN,
+      slots: BUNDLED_SLOTS,
+    });
+    const side = connection.utility?.client as ModelClient;
+    expect(side.endpoint.model).toBe("qwen3.8-27b-q8");
+    // Main says the helper is ready: the next request asks again and goes to it.
+    f.provider.receive({ type: "models-changed" });
+    const first = drain(side, ask("title"));
+    f.grant(await f.nextRequest(), {
+      modelId: "qwen3.8-27b-q8",
+      endpoint: MAIN,
+      slots: BUNDLED_SLOTS,
+      helper: HELPER,
+      generation: 2,
+    });
+    expect(await first).toBe("Done.");
+    expect(f.sent.at(-1)?.endpoint.model).toBe("minicpm5-1b-q8");
+    expect(side.endpoint.model).toBe("minicpm5-1b-q8");
+    // The person turns it off: side requests go back to the main model's side slot.
+    f.provider.receive({ type: "models-changed" });
+    const second = drain(side, ask("title"));
+    f.grant(await f.nextRequest(), {
+      modelId: "qwen3.8-27b-q8",
+      endpoint: MAIN,
+      slots: BUNDLED_SLOTS,
+      generation: 3,
+    });
+    expect(await second).toBe("Done.");
+    expect(f.sent.at(-1)).toMatchObject({
+      endpoint: { model: "server-name" },
+      request: { slot: 1 },
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 
 describe("the model provider", () => {
@@ -242,7 +365,13 @@ describe("the model provider", () => {
       endpoint: endpoint({ kind: "ollama", model: "qwen3:32b" }),
     });
     expect(connection.pool).toBeUndefined();
-    expect(connection.utility).toBeUndefined();
+    // Side requests go to the server as they are, without a slot.
+    expect(connection.utility?.pool).toBeUndefined();
+    expect(
+      await drain(connection.utility?.client as ModelClient, { ...ask("title"), slot: 4 }),
+    ).toBe("Done.");
+    expect(f.sent.at(-1)?.endpoint.model).toBe("qwen3:32b");
+    expect(f.sent.at(-1)?.request.slot).toBeUndefined();
   });
 
   it("hands every session on the bundled runtime the same two pools", async () => {
@@ -255,13 +384,15 @@ describe("the model provider", () => {
       generation: 2,
     });
     expect(first.pool).toEqual({ slots: [0] });
-    expect(first.utility?.pool).toEqual({ slots: [1] });
     for (const connection of [second, other]) {
       expect(connection.pool).toBe(first.pool);
-      expect(connection.utility?.pool).toBe(first.utility?.pool);
-      expect(connection.utility?.client).toBe(connection.client);
     }
     expect(second.client).toBe(first.client);
+    expect(second.utility?.client).toBe(first.utility?.client);
+    // Without a helper, side requests go to the runtime's side slot, as they always did.
+    expect(await drain(other.utility?.client as ModelClient, ask("title"))).toBe("Done.");
+    expect(f.sent.at(-1)?.request.slot).toBe(1);
+    expect(other.utility?.client.endpoint.model).toBe("gpt-oss-20b-q4");
   });
 
   it("fails connect with main's words when main refuses", async () => {

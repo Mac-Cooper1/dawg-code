@@ -1,0 +1,154 @@
+/* A subagent's call: the tool card's header, a status line, and the agent's final message. */
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  overflow: hidden;
+  box-shadow: var(--shadow-1);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px 0 11px;
+  color: var(--ink);
+  font-size: var(--text);
+}
+
+.header:hover {
+  background: var(--panel-2);
+}
+
+.header:focus-visible {
+  outline-offset: -2px;
+}
+
+.icon {
+  color: var(--ink-3);
+}
+
+.ok {
+  color: var(--green);
+}
+
+.bad {
+  color: var(--red);
+}
+
+.spinnerBox {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.task {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.chevron {
+  flex: none;
+  color: var(--ink-3);
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+/* Under the header: how it is doing, how it runs, and the way into its transcript. */
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 28px;
+  padding: 4px 12px 6px 35px;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.status {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.status[data-tone="ok"] {
+  color: var(--green);
+}
+
+.status[data-tone="bad"] {
+  color: var(--red);
+}
+
+.placement {
+  white-space: nowrap;
+}
+
+.grow {
+  flex: 1;
+}
+
+.link {
+  color: var(--acc-text);
+  font-weight: 500;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.body {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.message {
+  padding: 10px 14px;
+  font-size: var(--text-chat);
+  line-height: 1.62;
+  color: var(--ink);
+}
+
+.error {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  color: var(--red);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.placeholder {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}

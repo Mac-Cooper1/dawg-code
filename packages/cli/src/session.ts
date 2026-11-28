@@ -15,6 +15,7 @@ import {
 } from "@dawg/protocol";
 import type { CliOptions } from "./args.ts";
 import { EXIT } from "./exit-codes.ts";
+import { McpConfigError, readMcpConfigs } from "./mcp-config.ts";
 
 /**
  * Below this, the context window leaves little room to work once dawg's instructions and tool
@@ -81,11 +82,23 @@ export async function openSession(
   options: CliOptions,
   cwd: string,
   log: (line: string) => void,
+  /** Where a relative `--mcp-config` file is found: the shell's folder. */
+  configDir: string = process.cwd(),
 ): Promise<SessionSnapshot> {
+  let mcpServers: Record<string, unknown> | null;
+  try {
+    mcpServers = await readMcpConfigs(options.mcpConfigs, configDir);
+  } catch (error) {
+    if (error instanceof McpConfigError) throw new RunError(EXIT.usage, error.message);
+    throw error;
+  }
   const create = () => {
     const params: MethodParams<"session.create"> = { cwd };
     if (options.permissionMode !== null) params.mode = options.permissionMode;
     if (options.model !== null) params.model = options.model;
+    // The person's own servers for this run: they need no approval (Phase 4, MCP).
+    if (mcpServers !== null) params.mcpServers = mcpServers;
+    if (options.strictMcpConfig) params.strictMcpConfig = true;
     return client.request("session.create", params);
   };
   let snapshot: SessionSnapshot;
@@ -107,6 +120,11 @@ export async function openSession(
     snapshot = await create();
   }
   const id = snapshot.session.id;
+  if (resumed && (mcpServers !== null || options.strictMcpConfig)) {
+    log(
+      "--mcp-config and --strict-mcp-config apply to new sessions; the resumed session gets the project's and your servers.",
+    );
+  }
   if (resumed) {
     if (options.model !== null && options.model !== snapshot.session.model) {
       await client.request("session.setModel", { sessionId: id, model: options.model });

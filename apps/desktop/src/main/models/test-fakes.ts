@@ -23,6 +23,8 @@ import {
   type RemoteResult,
   RuntimeError,
   type RuntimeState,
+  readHelperEnabled,
+  writeHelperEnabled,
 } from "@dawg/models";
 import { createKeyStore, type Encryption } from "./keys.ts";
 import { type ModelBackend, ModelManager, type ModelManagerOptions } from "./manager.ts";
@@ -67,6 +69,29 @@ export function testEntry(
     capabilities: { tools: true, vision, reasoning: true },
     profile: "qwen3.8",
     rank: options.rank ?? 10,
+  };
+}
+
+/** A helper entry like the catalog's: text only, a 32K window, offered from 48 GB. */
+export function testHelperEntry(id = "tiny-helper-q8"): CatalogEntry {
+  return {
+    id,
+    role: "helper",
+    displayName: "Tiny helper (8-bit)",
+    licence: { spdx: "Apache-2.0", url: "https://example.com/licence" },
+    source: {
+      // Its cache estimate is MiniCPM5 1B's.
+      repo: "openbmb/MiniCPM5-1B-GGUF",
+      revision: "b".repeat(40),
+      file: `${id}.gguf`,
+      sha256: sha(id),
+      sizeBytes: 900,
+    },
+    minMemoryBytes: 48 * GB,
+    context: { default: 32_768, max: 131_072 },
+    capabilities: { tools: false, vision: false, reasoning: true },
+    profile: "minicpm5",
+    rank: 10,
   };
 }
 
@@ -300,6 +325,8 @@ export interface HarnessOptions {
   /** Reuse a data root (a relaunch). */
   dir?: string;
   createRuntimeError?: Error;
+  /** Only the helper's runtime cannot be created. */
+  helperRuntimeError?: Error;
 }
 
 export async function harness(options: HarnessOptions = {}) {
@@ -313,6 +340,7 @@ export async function harness(options: HarnessOptions = {}) {
   const calls = { scan: 0, detectLocal: 0, discard: 0 };
   let port = 9000;
   const remote = new Map(Object.entries(options.remote ?? {}));
+  let resident = (_pid: number): number | null => 31 * GB;
 
   const backend: ModelBackend = {
     probeHardware: async () => ({ ...(options.hardware ?? M4_MAX) }),
@@ -367,11 +395,12 @@ export async function harness(options: HarnessOptions = {}) {
     },
     createRuntime: async (launch) => {
       if (options.createRuntimeError) throw options.createRuntimeError;
+      if (launch.role === "helper" && options.helperRuntimeError) throw options.helperRuntimeError;
       const runtime = new FakeRuntime(launch, () => port++, options.autoReady ?? true);
       runtimes.push(runtime);
       return runtime;
     },
-    residentBytes: async () => 31 * GB,
+    residentBytes: async (pid) => resident(pid),
   };
 
   const log = (message: string) => logs.push(message);
@@ -383,6 +412,10 @@ export async function harness(options: HarnessOptions = {}) {
     log,
     progressIntervalMs: 40,
     pollIntervalMs: 3_600_000,
+    helperPreference: {
+      read: () => readHelperEnabled(dataRoot),
+      write: (enabled) => writeHelperEnabled(dataRoot, enabled),
+    },
     ...(options.testServerUrl === undefined ? {} : { testServerUrl: options.testServerUrl }),
     ...(options.testServerSlots === undefined ? {} : { testServerSlots: options.testServerSlots }),
   };
@@ -404,6 +437,10 @@ export async function harness(options: HarnessOptions = {}) {
     calls,
     logs,
     modelsChanged: () => modelsChanged,
+    /** What `residentBytes` answers for each pid. */
+    setResident: (answer: (pid: number) => number | null) => {
+      resident = answer;
+    },
     cleanup: async () => {
       await manager.dispose();
       if (!options.dir) await rm(dir, { recursive: true, force: true });

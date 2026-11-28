@@ -164,6 +164,9 @@ function services(): MainServices<string> & {
     openExternal: async (url) => {
       opened.push(url);
     },
+    openConfigFile: async (file) => {
+      opened.push(file);
+    },
   };
 }
 
@@ -182,6 +185,16 @@ describe("IPC handlers", () => {
       await expect(open("sender", [bad])).rejects.toThrow(/Invalid link/);
     }
     expect(target.opened).toEqual(["https://example.com/a?b=1"]);
+  });
+
+  it("hands main only absolute Markdown paths to open as config files", async () => {
+    const target = services();
+    const open = handler(IPC.openConfigFile, target);
+    await open("sender", ["/Users/me/tally/.claude/agents/test-runner.md"]);
+    for (const bad of ["relative/x.md", "/Applications/Calculator.app", "/tmp/run.command", 3]) {
+      await expect(open("sender", [bad])).rejects.toThrow(/Invalid file/);
+    }
+    expect(target.opened).toEqual(["/Users/me/tally/.claude/agents/test-runner.md"]);
   });
 
   it("validates folder dialog options", async () => {

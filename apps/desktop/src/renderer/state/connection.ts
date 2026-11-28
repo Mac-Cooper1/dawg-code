@@ -50,6 +50,8 @@ export const MODEL_BOUND_METHODS: ReadonlySet<MethodName> = new Set<MethodName>(
   "session.setModel",
 ]);
 export const MODEL_BOUND_TIMEOUT_MS = 16 * 60_000;
+/** `session.prompt` may wait on the project's UserPromptSubmit hooks (30 s each by default). */
+export const PROMPT_TIMEOUT_MS = 2 * 60_000;
 
 export interface SyncInfo {
   /** True when this is a new port after the engine host restarted. */
@@ -151,6 +153,10 @@ export function createEngineConnection(hooks: ConnectionHooks): EngineConnection
     method: M,
     params: MethodParams<M>,
   ): Promise<MethodResult<M>> {
+    // UserPromptSubmit hooks see a prompt before it is accepted, for up to their documented 30 s.
+    if (method === "session.prompt") {
+      return current.request(method, params, { timeoutMs: PROMPT_TIMEOUT_MS });
+    }
     if (!MODEL_BOUND_METHODS.has(method)) return current.request(method, params);
     modelWaits++;
     hooks.onModelWaits?.(modelWaits);

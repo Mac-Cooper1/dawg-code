@@ -4,7 +4,8 @@
  * one on `RuntimeSupervisor` from @dawg/models, laid out like `setupModelFile` in
  * packages/cli/src/models.ts (`twoSlotLayout`: slot 0 for conversations, slot 1 for side
  * requests such as titles, on one shared cache), with the CLI's cache settings, under the
- * package's watchdog so llama-server never outlives the app.
+ * package's watchdog so llama-server never outlives the app. A launch with `role: "helper"` is the
+ * helper model's: a second llama-server for side requests, laid out by `helperRuntimeConfig`.
  */
 import { execFile } from "node:child_process";
 import path from "node:path";
@@ -13,6 +14,8 @@ import {
   type CatalogEntry,
   type Endpoint,
   entryWeightsBytes,
+  helperPaths,
+  helperRuntimeConfig,
   maxContextForMemory,
   RuntimeError,
   type RuntimeState,
@@ -34,8 +37,17 @@ export const MIN_CONTEXT = 8_192;
 /** The CLI's cache settings (packages/cli/src/models.ts). */
 export const CACHE_SETTINGS = { cacheRamMiB: 4096, ctxCheckpoints: 8, checkpointMinStep: 256 };
 
+/** The helper model's one slot: what grants hand the engine for side requests. */
+export const HELPER_SLOTS: readonly number[] = [0];
+
 /** What the manager asks the runtime to load. */
 export interface RuntimeLaunch {
+  /**
+   * "main" (the default): the model sessions talk to, laid out by `twoSlotLayout`. "helper": the
+   * tiny model for side requests, in a second llama-server laid out by `helperRuntimeConfig`
+   * (one slot, its logs prefixed "helper-"). It needs `catalogEntry`.
+   */
+  role?: "main" | "helper";
   /** The model id, passed as `--alias` so `endpoint.model` matches it. */
   modelId: string;
   modelPath: string;
@@ -73,13 +85,23 @@ export type CreateRuntime = (launch: RuntimeLaunch) => Promise<BundledRuntime>;
  * The conversation's window: the catalog entry's default, capped so the shared cache (the window
  * plus the side requests' reserve) fits the memory rule (weights + cache + 2 GB within 70% of
  * memory), and never under `MIN_CONTEXT`. Model files get `MODEL_FILE_CONTEXT`. Rounded down to
- * a multiple of 1024.
+ * a multiple of 1024. `reservedBytes` is memory something running beside the model (the helper
+ * model) takes out of the same budget.
  */
-export function contextPerSlot(entry: CatalogEntry | undefined, memoryBytes: number): number {
+export function contextPerSlot(
+  entry: CatalogEntry | undefined,
+  memoryBytes: number,
+  reservedBytes = 0,
+): number {
   if (!entry) return MODEL_FILE_CONTEXT;
   const perToken = CACHE_BYTES_PER_TOKEN[entry.source.repo];
   if (perToken === undefined) return Math.max(MIN_CONTEXT, Math.min(entry.context.default, 32_768));
-  const cacheTokens = maxContextForMemory(entryWeightsBytes(entry), perToken, memoryBytes);
+  const cacheTokens = maxContextForMemory(
+    entryWeightsBytes(entry),
+    perToken,
+    memoryBytes,
+    reservedBytes,
+  );
   const window = Math.min(entry.context.default, cacheTokens - UTILITY_CONTEXT_RESERVE);
   return Math.max(MIN_CONTEXT, Math.floor(window / 1024) * 1024);
 }
@@ -138,6 +160,36 @@ export function bundledRuntimeFactory(options: BundledRuntimeOptions): CreateRun
       env: options.env,
       runtimeDir: options.runtimeDir,
     });
+    const watchdog = {
+      watchdog: true,
+      watchdogPath: options.watchdog.path,
+      nodePath: options.watchdog.nodePath,
+      ...(options.watchdog.env === undefined ? {} : { watchdogEnv: options.watchdog.env }),
+    };
+    if (launch.role === "helper") {
+      if (launch.catalogEntry === undefined) {
+        throw new RuntimeError("spawn-failed", "the helper model needs its catalog entry");
+      }
+      // A second llama-server under its own supervisor and watchdog: its own port, key file,
+      // logs and slot, so it never shares anything with the main model's process.
+      const { slotIds: _slots, ...config } = helperRuntimeConfig({
+        entry: launch.catalogEntry,
+        modelPath: launch.modelPath,
+        contextTokens: launch.contextPerSlot,
+        ...(launch.idleUnloadSeconds === undefined
+          ? {}
+          : { idleUnloadSeconds: launch.idleUnloadSeconds }),
+      });
+      return adaptSupervisor(
+        new RuntimeSupervisor({
+          binary,
+          ...config,
+          paths: helperPaths(options.dataRoot),
+          ...watchdog,
+          env: options.env,
+        }),
+      );
+    }
     const layout = twoSlotLayout(launch.contextPerSlot);
     const supervisor = new RuntimeSupervisor({
       binary,
@@ -160,10 +212,7 @@ export function bundledRuntimeFactory(options: BundledRuntimeOptions): CreateRun
         slotSaveDir: path.join(options.dataRoot, "runtime", "slots"),
         logDir: path.join(options.dataRoot, "logs"),
       },
-      watchdog: true,
-      watchdogPath: options.watchdog.path,
-      nodePath: options.watchdog.nodePath,
-      ...(options.watchdog.env === undefined ? {} : { watchdogEnv: options.watchdog.env }),
+      ...watchdog,
       env: options.env,
     });
     return adaptSupervisor(supervisor);

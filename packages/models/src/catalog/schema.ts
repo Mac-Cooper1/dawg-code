@@ -19,6 +19,13 @@ const repoFilePath = z
 const positiveInt = z.number().int().positive();
 
 export const ChipClassSchema = z.enum(["base", "pro", "max", "ultra", "intel"]);
+export const CatalogRoleSchema = z.enum(["main", "helper"]);
+
+/**
+ * The largest default context a helper may have. A helper runs beside the main model, so its
+ * cache comes out of the same memory; its jobs (a title, one page) need no more than this.
+ */
+export const HELPER_MAX_CONTEXT = 65_536;
 
 export const CatalogFileSchema = z.strictObject({
   file: repoFilePath,
@@ -29,6 +36,7 @@ export const CatalogFileSchema = z.strictObject({
 export const CatalogEntrySchema = z
   .strictObject({
     id: z.string().regex(/^[a-z0-9][a-z0-9.-]*$/, "lowercase letters, digits, '.' and '-'"),
+    role: CatalogRoleSchema.optional(),
     displayName: z.string().min(1),
     licence: z.strictObject({ spdx: z.string().min(1), url: z.url({ protocol: /^https$/ }) }),
     source: z.strictObject({
@@ -79,6 +87,25 @@ export const CatalogEntrySchema = z
         path: ["projector", "file"],
         message: "projector must be a different file from the model",
       });
+    }
+    if (entry.role === "helper") {
+      // Side requests are text only and run beside the main model: no projector, a small cache.
+      if (entry.capabilities.vision) {
+        ctx.issues.push({
+          code: "custom",
+          input: entry.capabilities,
+          path: ["capabilities", "vision"],
+          message: "a helper answers text-only side requests and has no projector",
+        });
+      }
+      if (entry.context.default > HELPER_MAX_CONTEXT) {
+        ctx.issues.push({
+          code: "custom",
+          input: entry.context,
+          path: ["context", "default"],
+          message: `a helper's default context must not exceed ${HELPER_MAX_CONTEXT}`,
+        });
+      }
     }
   });
 

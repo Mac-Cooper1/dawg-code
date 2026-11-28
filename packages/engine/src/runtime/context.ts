@@ -1,4 +1,5 @@
 /** What every session of one engine shares: dependencies, settings and limits, resolved once. */
+
 import type { SettingsFlags } from "@dawg/compat";
 import type { Endpoint } from "@dawg/models";
 import type { ClientCapabilities } from "@dawg/protocol";
@@ -11,9 +12,13 @@ import type {
   TokenEstimator,
 } from "../contracts/prompt.ts";
 import type { AnyTool, ToolLimits } from "../contracts/tools.ts";
+import type { EngineServices } from "../contracts/web.ts";
 import type { IdKind } from "../loop/types.ts";
+import type { McpManager } from "../mcp/manager.ts";
 import type { SlotPool, SlotScheduler } from "../model/slots.ts";
+import type { SandboxHost } from "../sandbox/runtime.ts";
 import type { SessionStore } from "../session/index.ts";
+import type { CodeTrust } from "../trust/index.ts";
 import type { EnvironmentInput } from "./environment.ts";
 import type { LoggedEvent } from "./event-log.ts";
 import type { SessionRuntime } from "./session.ts";
@@ -47,4 +52,18 @@ export interface EngineContext {
   publish(event: LoggedEvent): void;
   /** Called once when a session has closed. */
   onClosed(runtime: SessionRuntime): void;
+  /** The engine's services as they are now (the search service WebSearch uses). */
+  services(): EngineServices;
+  /** Consent for the code a setup supplies: hooks run only where it allows them. */
+  trust: CodeTrust;
+  /** How many of a session's latest checkpoints keep their files. */
+  checkpointRetention: number;
+  /** Whether sessions get auto memory (unless their settings turn it off). */
+  autoMemory: boolean;
+  /** The MCP servers every session shares (../mcp). */
+  mcp: McpManager;
+  /** Whether main sessions get the agent tools and subagents (../agents). */
+  subagents: boolean;
+  /** Added (Phase 4, sandbox): this engine's hold on the sandbox runtime (../sandbox). */
+  sandbox: SandboxHost;
 }

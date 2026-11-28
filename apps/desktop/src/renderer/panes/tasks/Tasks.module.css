@@ -145,6 +145,23 @@
   white-space: nowrap;
 }
 
+/* A background agent: its type in bold, then its task. */
+.agentText {
+  font-size: var(--text-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentType {
+  font-weight: 600;
+}
+
+.mark[data-status="queued"] {
+  color: var(--ink-3);
+}
+
 .meta {
   font-size: var(--text-sm);
   color: var(--ink-3);

@@ -1,7 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { stalled, text, toolCall } from "@dawg/mock-model";
-import { type EngineEvent, ErrorCodes, EVENT_NAMES, METHOD_NAMES, RpcError } from "@dawg/protocol";
+import {
+  type EngineEvent,
+  ErrorCodes,
+  EVENT_NAMES,
+  METHOD_NAMES,
+  PROTOCOL_VERSION,
+  RpcError,
+} from "@dawg/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { ask, type Setup, setup } from "./__fixtures__/setup.ts";
 import { redactPaths } from "./errors.ts";
@@ -34,7 +41,7 @@ describe("initialize", () => {
     const c = await s.connect();
     const second = await rpcError(
       c.client.request("initialize", {
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         client: { name: "again", version: "1" },
         capabilities: {},
       }),

@@ -5,6 +5,7 @@
  */
 import type {
   ContentPart,
+  ElicitationResponse,
   PendingRequest,
   PermissionMode,
   PermissionResponse,
@@ -43,7 +44,8 @@ export const IDLE = {
 export type Decision =
   | { kind: "permission"; response: PermissionResponse }
   | { kind: "question"; response: QuestionResponse }
-  | { kind: "plan"; response: PlanResponse };
+  | { kind: "plan"; response: PlanResponse }
+  | { kind: "elicitation"; response: ElicitationResponse };
 
 /** Timing for generated events, from the engine's playback speed. */
 export interface Pace {
@@ -272,7 +274,24 @@ export function decisionResult(
     }
     case "plan":
       return { outcome: "success", content: planText(decision.response, mode), durationMs: null };
+    case "elicitation":
+      return {
+        outcome: "success",
+        content: elicitationText(request, decision.response),
+        durationMs: null,
+      };
   }
+}
+
+/** What a mock MCP server answers once the person dealt with its request for input. */
+function elicitationText(request: PendingRequest, response: ElicitationResponse): string {
+  const server = request.kind === "elicitation" ? request.server : "The server";
+  if (response.action === "decline") return `${server}: you declined, so nothing was created.`;
+  if (response.action === "cancel") return `${server}: the request was cancelled.`;
+  if (request.kind === "elicitation" && request.mode === "url") {
+    return `${server}: thanks, carry on in the page that opened.`;
+  }
+  return `${server}: created it with ${JSON.stringify(response.content ?? {})}.`;
 }
 
 /**

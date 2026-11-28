@@ -123,6 +123,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
         date: localDate(input.now),
         git: null,
       }),
+      // Subagents' tools change every prefix; tests that use them ask for them.
+      subagents: false,
       ...options.engine,
       ...overrides,
       limits: { retryDelayMs: 0, ...options.engine?.limits, ...overrides.limits },

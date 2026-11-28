@@ -14,6 +14,7 @@
  */
 import {
   EffortSchema,
+  type ElicitationResponse,
   type EngineEvent,
   PermissionModeSchema,
   type PermissionResponse,
@@ -147,7 +148,8 @@ export function formatRecording(events: readonly EngineEvent[]): string {
 export type DecisionResponse =
   | { kind: "permission"; response: PermissionResponse }
   | { kind: "question"; response: QuestionResponse }
-  | { kind: "plan"; response: PlanResponse };
+  | { kind: "plan"; response: PlanResponse }
+  | { kind: "elicitation"; response: ElicitationResponse };
 
 /**
  * The keys a response matches, most specific first; the first key present in the request's
@@ -158,6 +160,7 @@ export type DecisionResponse =
  * | permission | `allow:always` or `allow:once`, then `allow`; or `deny`               |
  * | question   | `answer:<label of the first selected option>`, then `answer`; or `dismiss` |
  * | plan       | `approve:<mode>` (when a mode is given), then `approve`; or `reject`  |
+ * | elicitation | `accept`, `decline` or `cancel`                                     |
  */
 export function matchKeys(decision: DecisionResponse): string[] {
   const keys: string[] = [];
@@ -189,6 +192,9 @@ export function matchKeys(decision: DecisionResponse): string[] {
       }
       break;
     }
+    case "elicitation":
+      keys.push(decision.response.action);
+      break;
   }
   keys.push("*");
   return keys;

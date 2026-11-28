@@ -5,9 +5,17 @@
  */
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { createEngine, createEngineHost, type Engine } from "@dawg/engine";
+import {
+  createCredentialStore,
+  createEngine,
+  createEngineHost,
+  createSearchProvider,
+  createTrustStore,
+  type Engine,
+  type SearchProvider,
+} from "@dawg/engine";
 import type { Transport } from "@dawg/protocol";
-import type { HostToMain } from "../shared/engine-host-messages.ts";
+import type { HostToMain, WebSearchConfig } from "../shared/engine-host-messages.ts";
 import type { HostedEngine } from "./engine.ts";
 import {
   createParentModelProvider,
@@ -42,6 +50,8 @@ export interface RealHostedEngine extends HostedEngine {
   readonly engine: Engine;
   readonly models: ParentModelProvider;
   receive(message: ModelMessage): void;
+  /** The search service WebSearch uses now (main's latest `web-config`), or null. */
+  readonly search: SearchProvider | null;
 }
 
 /** Throws when the engine cannot start (the data root cannot be created, for one). */
@@ -58,7 +68,19 @@ export function createRealEngine(config: RealEngineConfig): RealHostedEngine {
     ...(config.grantTimeoutMs === undefined ? {} : { grantTimeoutMs: config.grantTimeoutMs }),
     ...(config.createClient === undefined ? {} : { createClient: config.createClient }),
   });
+  // Main sends the search service before any window connects, and again on every change.
+  let search: SearchProvider | null = null;
+  const applySearch = (next: WebSearchConfig | null) => {
+    try {
+      search = next === null ? null : createSearchProvider(next);
+      config.log(search === null ? "Web search is off." : `Web search uses ${search.label}.`);
+    } catch (error) {
+      search = null;
+      config.log(`Web search is off: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   const engine = createEngine({
+    webSearch: () => search,
     storeRoot: config.dataRoot,
     homeDir: config.homeDir,
     models,
@@ -70,6 +92,14 @@ export function createRealEngine(config: RealEngineConfig): RealHostedEngine {
         catalogProfile: models.catalogProfile(endpoint.model),
       }),
     ripgrepPath: config.ripgrepPath,
+    // Consent for the code projects (and Claude Code's own settings) supply, kept in the data
+    // root: hooks run only once the person approves them (Phase 4, principle 3).
+    trust: createTrustStore({ storeRoot: config.dataRoot, homeDir: config.homeDir }),
+    // Auto memory: the project's memory folder, MEMORY.md in the prompt (Phase 4, "Memory").
+    autoMemory: true,
+    // MCP sign-ins: the Keychain on macOS, shared with the command line through the data root's
+    // service name (DAWG_CREDENTIAL_STORE=file or memory chooses otherwise; tests set file).
+    mcp: { credentials: createCredentialStore({ dataRoot: config.dataRoot }) },
   });
   let disposed: Promise<void> | null = null;
   return {
@@ -86,7 +116,13 @@ export function createRealEngine(config: RealEngineConfig): RealHostedEngine {
         onProblem: (problem) => config.log(`Protocol ${problem.kind}: ${problem.message}`),
       });
     },
-    receive: (message) => models.receive(message),
+    receive: (message) => {
+      if (message.type === "web-config") applySearch(message.search);
+      else models.receive(message);
+    },
+    get search() {
+      return search;
+    },
     dispose() {
       // Sessions first: their turns are interrupted, so nothing waits on main any more.
       disposed ??= engine.close().finally(() => models.close());

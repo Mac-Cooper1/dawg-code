@@ -1,4 +1,5 @@
 import { DOCK_WIDTH, SIDEBAR_WIDTH } from "../../shared/bridge.ts";
+import { RewindDialogContainer } from "../rewind/RewindDialog.tsx";
 import { SidebarContainer } from "../sidebar/SidebarContainer.tsx";
 import { selectChrome, selectSelectedSessionId, selectTitleBar } from "../state/selectors.ts";
 import { useActions, useAppStore } from "../state/store.ts";
@@ -87,6 +88,7 @@ export function MainWindow() {
         )}
       </div>
       <NewSessionDialogContainer />
+      <RewindDialogContainer />
     </div>
   );
 }

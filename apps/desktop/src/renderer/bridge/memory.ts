@@ -17,6 +17,7 @@ import {
   BadgeCountSchema,
   BRIDGE_VERSION,
   ChooseFolderOptionsSchema,
+  ConfigFilePathSchema,
   type DawgBridge,
   DEFAULT_SETTINGS,
   DEFAULT_WINDOW_STATE,
@@ -49,6 +50,7 @@ import {
   type FakeSettingsFile,
 } from "./fake-permissions.ts";
 import { createFakeTerminal, type FakeTerminal } from "./fake-terminal.ts";
+import { createFakeWeb, type FakeWeb, type FakeWebOptions } from "./fake-web.ts";
 import {
   createFakeWorkspace,
   type FakeWorkspace,
@@ -93,6 +95,8 @@ export interface MemoryBridgeOptions {
    * Default: a few lived-in ones under the home folder and ~/code/tally.
    */
   permissionFiles?: Record<string, FakeSettingsFile>;
+  /** Settings → Web's starting point (see fake-web.ts). Default: no search service. */
+  web?: FakeWebOptions;
 }
 
 /** An in-memory bridge, also used by tests. */
@@ -107,6 +111,8 @@ export interface MemoryBridge extends DawgBridge {
   readonly fakeTerminal: FakeTerminal;
   /** The settings files behind `permissions`. */
   readonly fakePermissions: FakePermissions;
+  /** The search settings behind `web`. */
+  readonly fakeWeb: FakeWeb;
   /** Every notification shown (by main's rules: notifications on, the page not focused). */
   readonly notificationsShown: NotifyInput[];
   /** Every count given to the Dock badge, in order. */
@@ -117,6 +123,8 @@ export interface MemoryBridge extends DawgBridge {
   readonly menuModel: MenuModel | null;
   /** Test helper: the person chose a menu item meant for this page. */
   chooseMenuItem(actionId: string): void;
+  /** Every agent, skill or command file the page asked to open, in order. */
+  readonly openedConfigFiles: string[];
 }
 
 export const BROWSER_HOME_DIR = "/Users/you";
@@ -162,10 +170,12 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     homeDir: platform.homeDir,
     files: options.permissionFiles ?? browserPermissionFiles(platform.homeDir),
   });
+  const fakeWeb = createFakeWeb(options.web);
   const notificationsShown: NotifyInput[] = [];
   const badgeCounts: number[] = [];
   const openSessionListeners = new Set<(sessionId: string) => void>();
   let menuModel: MenuModel | null = null;
+  const openedConfigFiles: string[] = [];
   const menuActionListeners = new Set<(actionId: string) => void>();
 
   /** The engine sides of the ports handed out, closed on a simulated restart. */
@@ -249,6 +259,7 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
       onOpenSession: (listener) => subscribe(openSessionListeners, listener),
     },
     permissions: fakePermissions.api,
+    web: fakeWeb.api,
     dialogs: {
       chooseFolder: async (folderOptions) => {
         validate(ChooseFolderOptionsSchema, folderOptions, "folder options");
@@ -259,6 +270,10 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
       openExternal: async (url) => {
         const valid = validate(ExternalUrlSchema, url, "link");
         globalThis.window?.open(valid, "_blank", "noopener,noreferrer");
+      },
+      // A plain browser has no editor to hand a file to: the path is checked and kept.
+      openConfigFile: async (file) => {
+        openedConfigFiles.push(validate(ConfigFilePathSchema, file, "file"));
       },
     },
     menu: {
@@ -273,10 +288,12 @@ export function createMemoryBridge(options: MemoryBridgeOptions = {}): MemoryBri
     chooseMenuItem(actionId) {
       for (const listener of [...menuActionListeners]) listener(actionId);
     },
+    openedConfigFiles,
     modelManager,
     fakeWorkspace,
     fakeTerminal,
     fakePermissions,
+    fakeWeb,
     notificationsShown,
     badgeCounts,
     openSessionFromNotification(sessionId) {

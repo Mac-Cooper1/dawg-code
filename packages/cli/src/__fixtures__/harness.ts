@@ -70,6 +70,10 @@ export async function startHarness(
     TMPDIR: root,
     LANG: "en_US.UTF-8",
     NO_COLOR: "1",
+    // MCP sign-ins go to a file in the data root above, never to the person's Keychain, and no
+    // run opens a browser.
+    DAWG_CREDENTIAL_STORE: "file",
+    BROWSER: "none",
   };
 
   const start = (args: string[], opts: { env?: Record<string, string>; cwd?: string } = {}): Child => {

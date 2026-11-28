@@ -16,6 +16,12 @@ export {
 } from "./event-log.ts";
 export { type CreateEngineOptions, createEngine } from "./factory.ts";
 export { knownDate, knownMode, localDate } from "./known.ts";
+export {
+  type RewindInput,
+  type RewindOutcome,
+  rewindSession,
+  rewoundTitle,
+} from "./rewind.ts";
 export { SessionRuntime, TRIM_SUMMARY } from "./session.ts";
 export { readSidecar, type Sidecar } from "./sidecar.ts";
 export { cleanTitle, generateTitle, TITLE_INSTRUCTIONS } from "./title.ts";

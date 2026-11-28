@@ -1,0 +1,24 @@
+{
+  "query": "vitest fake timers",
+  "follow_up_questions": null,
+  "answer": null,
+  "images": [],
+  "results": [
+    {
+      "url": "https://vitest.dev/guide/mocking/timers",
+      "title": "Timers | Vitest",
+      "content": "Use vi.useFakeTimers() to control time in tests.",
+      "score": 0.91,
+      "raw_content": null
+    },
+    {
+      "url": "https://github.com/vitest-dev/vitest/discussions/1234",
+      "title": "Fake timers and promises",
+      "content": "A discussion about advancing timers with pending promises.",
+      "score": 0.72,
+      "raw_content": null
+    }
+  ],
+  "response_time": 1.2,
+  "request_id": "fixture-0001"
+}

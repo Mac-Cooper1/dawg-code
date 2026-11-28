@@ -7,6 +7,7 @@
  * answer from `repos`; terminals are fake shells a test writes output to (`terminalOutput`) and
  * ends (`endTerminal`).
  */
+import { fakeMemoryDirectory } from "../../bridge/fake-workspace.ts";
 import {
   type BranchList,
   type ChangeSet,
@@ -55,6 +56,7 @@ import {
   type FakePermissions,
   type FakeSettingsFile,
 } from "../../bridge/fake-permissions.ts";
+import { createFakeWeb, type FakeWeb, type FakeWebOptions } from "../../bridge/fake-web.ts";
 import { HOME } from "./streams.ts";
 
 export interface PortServer {
@@ -91,6 +93,8 @@ export interface FakeBridgeOptions {
   diffs?: Record<string, FileDiff>;
   /** Settings files for `permissions`, by absolute path. Default: none exist. */
   permissionFiles?: Record<string, FakeSettingsFile>;
+  /** Settings → Web's starting point (bridge/fake-web.ts). Default: no search service. */
+  web?: FakeWebOptions;
 }
 
 /** A fake shell. */
@@ -156,6 +160,8 @@ export interface FakeBridge extends DawgBridge {
   openSessionFromNotification(sessionId: string): void;
   /** The settings files behind `permissions`, its writes, and a way to make one fail. */
   readonly fakePermissions: FakePermissions;
+  /** The search settings behind `web`. */
+  readonly fakeWeb: FakeWeb;
   /** Every menu model the window sent, in order, validated as main does. */
   readonly menuModels: MenuModel[];
   /** The person chooses a menu item: `menu.onAction` hears its action id. */
@@ -181,6 +187,7 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
   const saved: WindowState[] = [];
   const settingsUpdates: DesktopSettingsPatch[] = [];
   const initialModels = options.modelsState ?? mockModelsState();
+  const fakeWeb = createFakeWeb(options.web);
   const fakePermissions = createFakePermissions({
     homeDir: HOME,
     files: options.permissionFiles ?? {},
@@ -360,7 +367,9 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
       track: async (input) => {
         const parsed = TrackSessionInputSchema.parse(input);
         tracked.push(parsed);
-        return workspaceInfo(parsed);
+        const info = workspaceInfo(parsed);
+        // `/memory`: main finds the project's memory folder, as `fakeMemoryDirectory` says.
+        return parsed.memory ? { ...info, memoryDirectory: fakeMemoryDirectory(parsed.projectDir) } : info;
       },
       untrack: async (sessionId) => {
         untracked.push(sessionId);
@@ -490,11 +499,13 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
       onOpenSession: (listener) => subscribe(openSessionListeners, listener),
     },
     permissions: fakePermissions.api,
+    web: fakeWeb.api,
     dialogs: {
       chooseFolder: async () => (options.folder === undefined ? null : options.folder),
     },
     shell: {
       openExternal: async () => {},
+      openConfigFile: async () => {},
     },
     menu: {
       update: (model) => {
@@ -522,6 +533,7 @@ export function createFakeBridge(options: FakeBridgeOptions): FakeBridge {
     },
     modelManager,
     fakePermissions,
+    fakeWeb,
     tracked,
     untracked,
     reverts,

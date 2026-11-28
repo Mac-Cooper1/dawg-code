@@ -27,6 +27,7 @@ import { sidebarOrder } from "../state/sidebar-order.ts";
 import type { AppState } from "../state/types.ts";
 import { Button, Icon, IconButton, Tag, type TagTone } from "../ui/index.ts";
 import styles from "./PermissionsPage.module.css";
+import { SandboxSection } from "./SandboxSection.tsx";
 import settingsStyles from "./Settings.module.css";
 
 type RuleList = "allow" | "ask" | "deny";
@@ -313,6 +314,8 @@ export function PermissionsPage(props: PermissionsPageProps) {
               />
             );
           })}
+
+          <SandboxSection state={state} homeDir={homeDir} save={save} />
         </>
       )}
     </div>

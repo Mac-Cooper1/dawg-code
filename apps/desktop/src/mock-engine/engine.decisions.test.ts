@@ -538,6 +538,11 @@ function defaultAnswer(sessionId: string, request: PendingRequest) {
           response: { decision: "approve" as const },
         },
       };
+    case "elicitation":
+      return {
+        method: "elicitation.respond" as const,
+        params: { sessionId, requestId: request.requestId, action: "decline" as const },
+      };
   }
 }
 
@@ -556,6 +561,8 @@ describe("the engine's whole output", () => {
         if (answer.method === "permission.respond")
           await peer.request(answer.method, answer.params);
         else if (answer.method === "question.respond")
+          await peer.request(answer.method, answer.params);
+        else if (answer.method === "elicitation.respond")
           await peer.request(answer.method, answer.params);
         else await peer.request(answer.method, answer.params);
         await h.runAll();

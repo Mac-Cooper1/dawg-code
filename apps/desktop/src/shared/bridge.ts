@@ -60,6 +60,11 @@ export const DesktopSettingsSchema = z.object({
   /** Settings → General → Notifications: the Dock icon counts the sessions that need the person. */
   dockBadge: z.boolean().default(true),
   newSessionWorktree: NewSessionWorktreeSchema.default("ask"),
+  /**
+   * Projects (absolute folders) whose Claude Code setup the window has told the person about,
+   * once, when a session there was first opened (Settings → Project setup has the details).
+   */
+  projectSetupNoticed: z.array(z.string().min(1)).default([]),
 });
 export type DesktopSettings = z.infer<typeof DesktopSettingsSchema>;
 
@@ -69,6 +74,7 @@ export const DesktopSettingsPatchSchema = z.strictObject({
   notifications: z.boolean().optional(),
   dockBadge: z.boolean().optional(),
   newSessionWorktree: NewSessionWorktreeSchema.optional(),
+  projectSetupNoticed: z.array(z.string().min(1)).optional(),
 });
 export type DesktopSettingsPatch = z.infer<typeof DesktopSettingsPatchSchema>;
 
@@ -271,6 +277,63 @@ export const ServerInfoSchema = z.object({
 export type ServerInfo = z.infer<typeof ServerInfoSchema>;
 
 /**
+ * The helper model: a tiny catalog model that answers side requests (session titles, WebFetch's
+ * page summaries) in its own llama-server beside the main model, whatever the main model is. It
+ * is never in `installed` or the model picker, and never the default. Download, pause, cancel and
+ * remove it with the usual calls and its `id`.
+ */
+export const HelperInfoSchema = z.object({
+  /** The catalog entry's id ("minicpm5-1b-q8"). */
+  id: z.string().min(1),
+  /** "MiniCPM5 1B (8-bit)". */
+  displayName: z.string(),
+  licence: z.object({ spdx: z.string(), url: z.string() }),
+  /** Download size. */
+  sizeBytes: z.number().int().nonnegative(),
+  /**
+   * Memory it uses while it runs: its weights, its cache and its runtime. The main model's window
+   * is chosen with this already taken, while the helper is downloaded and on.
+   */
+  memoryBytes: z.number().int().nonnegative(),
+  /** Its window in tokens: what one side request (a page to summarise) can hold. */
+  contextWindow: z.number().int().positive(),
+  /** The catalog offers it on this Mac: first run downloads it with the recommended model. */
+  recommended: z.boolean(),
+  /** Whether it fits this Mac's memory and free disk space beside a main model. */
+  fits: z.boolean(),
+  /** Why it does not fit, as a sentence; else null. */
+  fitNote: z.string().nullable(),
+  /**
+   * Where it stands. "available": not downloaded. "downloading", "paused", "failed": its
+   * download (the details are in `downloads`, by `id`). "ready": downloaded, not running (it
+   * starts with the main model). "starting": loading. "running": answering side requests.
+   * "error": it could not start; side requests use the main model (`message` says why).
+   */
+  state: z.enum([
+    "available",
+    "downloading",
+    "paused",
+    "failed",
+    "ready",
+    "starting",
+    "running",
+    "error",
+  ]),
+  /** False when the person chose the main model for side requests instead. */
+  enabled: z.boolean(),
+  /** A short line about its state ("Turned off: the main model answers side requests"), or null. */
+  message: z.string().nullable(),
+  /** Memory its runtime uses now, while running; null otherwise or when unknown. */
+  runtimeMemoryBytes: z.number().int().nonnegative().nullable(),
+  /** Set when another app already has its file, so `useExisting` can adopt it. */
+  foundIn: z.enum(["lmstudio", "ollama", "huggingface"]).nullable(),
+});
+export type HelperInfo = z.infer<typeof HelperInfoSchema>;
+
+/** `models.setHelperEnabled`'s argument. */
+export const HelperEnabledSchema = z.boolean();
+
+/**
  * Everything Settings → Models and the welcome screen show, sent whole on every change. The
  * welcome screen shows while `installed` is empty.
  */
@@ -288,6 +351,8 @@ export const ModelsStateSchema = z.object({
   defaultModelId: z.string().nullable(),
   /** Unload the bundled runtime's model after this many idle minutes; null never. */
   idleUnloadMinutes: z.number().int().positive().nullable(),
+  /** The helper model for side requests; null when the catalog has none. */
+  helper: HelperInfoSchema.nullable().default(null),
 });
 export type ModelsState = z.infer<typeof ModelsStateSchema>;
 
@@ -350,6 +415,12 @@ export const TrackSessionInputSchema = z.strictObject({
   /** The project the session belongs to (equals `cwd` unless it runs in a worktree). */
   projectDir: AbsolutePathSchema,
   additionalDirectories: z.array(AbsolutePathSchema).max(64).default([]),
+  /**
+   * Also show the project's memory folder (after `/memory`), read and write like the session's
+   * folders. Main finds the folder itself from `projectDir` and the data root; no path for it
+   * ever comes from a window.
+   */
+  memory: z.boolean().optional(),
 });
 export type TrackSessionInput = z.input<typeof TrackSessionInputSchema>;
 
@@ -387,6 +458,8 @@ export const WorkspaceInfoSchema = z.object({
       worktree: WorktreeInfoSchema.nullable(),
     })
     .nullable(),
+  /** The project's memory folder, a root of the session's files, when `memory` was asked for. */
+  memoryDirectory: z.string().nullable().optional(),
 });
 export type WorkspaceInfo = z.infer<typeof WorkspaceInfoSchema>;
 
@@ -690,6 +763,34 @@ export interface PermissionSettingsFile {
   deny: string[];
   /** What is wrong with the file or one of its rules, as sentences. */
   problems: string[];
+  /** Added (Phase 4, sandbox): the file's `sandbox` key, or null when it has none. */
+  sandbox?: SandboxFileSettings | null;
+}
+
+/** Added (Phase 4, sandbox): the parts of one file's `sandbox` key Settings shows and edits. */
+export interface SandboxFileSettings {
+  /** Null where the file does not say. */
+  enabled: boolean | null;
+  autoAllowBashIfSandboxed: boolean | null;
+  allowUnsandboxedCommands: boolean | null;
+  /** `sandbox.network.allowedDomains`. */
+  allowedDomains: string[];
+  excludedCommands: string[];
+}
+
+/** Added (Phase 4, sandbox): the sandbox a new session gets, every file merged. */
+export interface SandboxSettingsSummary {
+  enabled: boolean;
+  /** The file whose `enabled` is in force; null when none sets it (off by default). */
+  enabledBy: string | null;
+  autoAllowBashIfSandboxed: boolean;
+  allowUnsandboxedCommands: boolean;
+  allowedDomains: string[];
+  deniedDomains: string[];
+  excludedCommands: string[];
+  /** Whether the sandbox can run on this Mac; `unavailableReason` says why not. */
+  available: boolean;
+  unavailableReason: string | null;
 }
 
 export interface PermissionSettingsState {
@@ -704,7 +805,22 @@ export interface PermissionSettingsState {
   defaultMode: DefaultMode;
   /** A file turns the bypass mode off (`permissions.disableBypassPermissionsMode`). */
   bypassDisabled: boolean;
+  /** Added (Phase 4, sandbox): absent from a main that predates it. */
+  sandbox?: SandboxSettingsSummary;
 }
+
+/** A host as `sandbox.network.allowedDomains` lists it: `github.com`, `*.npmjs.org:443`. */
+export const SandboxDomainSchema = z.string().trim().min(1).max(260);
+
+/** Added (Phase 4, sandbox): what a write changes in the file's `sandbox` key. */
+export const SandboxWriteSchema = z.strictObject({
+  /** Each boolean given sets the key; null removes it; left out keeps it. */
+  enabled: z.boolean().nullable().optional(),
+  autoAllowBashIfSandboxed: z.boolean().nullable().optional(),
+  allowUnsandboxedCommands: z.boolean().nullable().optional(),
+  /** Replaces the file's list; an empty one removes it; left out keeps it. */
+  allowedDomains: z.array(SandboxDomainSchema).max(500).optional(),
+});
 
 /** `permissions.read`: a project folder, or null for only the person's own files. */
 export const PermissionsProjectSchema = AbsolutePathSchema.nullable();
@@ -719,8 +835,65 @@ export const PermissionsWriteInputSchema = z.strictObject({
   allow: z.array(PermissionRuleTextSchema).max(1000).optional(),
   ask: z.array(PermissionRuleTextSchema).max(1000).optional(),
   deny: z.array(PermissionRuleTextSchema).max(1000).optional(),
+  /** Added (Phase 4, sandbox): changes to the file's `sandbox` key. */
+  sandbox: SandboxWriteSchema.optional(),
 });
 export type PermissionsWriteInput = z.input<typeof PermissionsWriteInputSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Web (Settings → Web: the search service WebSearch uses)
+//
+// WebFetch needs no setup. WebSearch has no built-in service: the person picks one and gives it
+// their own key (Brave Search, Tavily) or an address (SearXNG). Main keeps the choice in
+// `<data root>/web-search.json` and keys in the Keychain (`search-keys.json`, encrypted), and
+// hands the engine host the service with its key (`web-config` in engine-host-messages.ts).
+// Keys go into main and never come back out.
+// ---------------------------------------------------------------------------------------------
+
+export const SearchProviderIdSchema = z.enum(["brave", "tavily", "searxng"]);
+export type SearchProviderId = z.infer<typeof SearchProviderIdSchema>;
+
+/** The services that take a key. */
+export const KeyedSearchProviderSchema = z.enum(["brave", "tavily"]);
+export type KeyedSearchProvider = z.infer<typeof KeyedSearchProviderSchema>;
+
+export interface WebSettingsState {
+  /** The service WebSearch uses; null when web search is off. */
+  provider: SearchProviderId | null;
+  /** The SearXNG address saved, or null. */
+  searxngUrl: string | null;
+  /** Which services have a key stored. */
+  keys: Record<KeyedSearchProvider, boolean>;
+  /** False when keys cannot be stored safely on this Mac (no Keychain). */
+  keychainAvailable: boolean;
+}
+
+/** A search API key, as typed. Stored in the Keychain, never on disk in the clear. */
+export const SearchApiKeySchema = z.string().trim().min(1).max(4096);
+
+export const WebSettingsInputSchema = z.strictObject({
+  /** Null turns web search off; stored keys are kept. */
+  provider: SearchProviderIdSchema.nullable(),
+  /** A new key for `provider`; left out keeps the stored one. */
+  apiKey: SearchApiKeySchema.optional(),
+  /** SearXNG's address; null forgets it, left out keeps it. */
+  searxngUrl: ServerUrlSchema.nullable().optional(),
+});
+export type WebSettingsInput = z.input<typeof WebSettingsInputSchema>;
+
+/** "Check it works": one search with these settings (a key left out means the stored one). */
+export const WebCheckInputSchema = z.strictObject({
+  provider: SearchProviderIdSchema,
+  apiKey: SearchApiKeySchema.optional(),
+  searxngUrl: ServerUrlSchema.optional(),
+});
+export type WebCheckInput = z.input<typeof WebCheckInputSchema>;
+
+export interface WebCheckResult {
+  ok: boolean;
+  /** A sentence: "Brave Search answered with 10 results." or what went wrong. */
+  message: string;
+}
 
 // ---------------------------------------------------------------------------------------------
 // The menu bar and the Dock menu
@@ -851,6 +1024,16 @@ export const ExternalUrlSchema = z
     }
   }, "Only http and https links can be opened");
 
+/**
+ * An agent, skill or command file to open in the person's own editor: an absolute `.md` path.
+ * Main also checks it is under an `agents`, `skills` or `commands` folder of `.claude` or `.dawg`
+ * and is a regular file (main/config-files.ts), since opening a file can start a program.
+ */
+export const ConfigFilePathSchema = AbsolutePathSchema.refine(
+  (value) => value.toLowerCase().endsWith(".md"),
+  "Only Markdown files can be opened",
+);
+
 // ---------------------------------------------------------------------------------------------
 // The API
 // ---------------------------------------------------------------------------------------------
@@ -925,6 +1108,11 @@ export interface DawgBridge {
     /** The model new sessions use. */
     setDefault(modelId: string): Promise<void>;
     setIdleUnload(minutes: number | null): Promise<void>;
+    /**
+     * Whether side requests (titles, page summaries) go to the helper model (true, the default)
+     * or to the main model (false). Turning it off stops the helper.
+     */
+    setHelperEnabled(enabled: boolean): Promise<void>;
     /** Asks for a GGUF model file with the native picker and adds it. Null when cancelled. */
     addModelFile(): Promise<AddedModelFile | null>;
     /** Adds a remote server, after checking it answers, or replaces its key. */
@@ -1021,6 +1209,21 @@ export interface DawgBridge {
     checkRule(rule: string): Promise<string | null>;
   };
 
+  /** Settings → Web: the search service WebSearch uses. */
+  readonly web: {
+    read(): Promise<WebSettingsState>;
+    /**
+     * Saves the choice (and a new key, in the Keychain) and hands it to the engine host:
+     * sessions opened from then on offer WebSearch when a service is set. Rejects with a
+     * sentence when the service lacks what it needs (a key, an address).
+     */
+    write(input: WebSettingsInput): Promise<WebSettingsState>;
+    /** Forgets a service's stored key. When it is the service in use, web search turns off. */
+    removeKey(provider: KeyedSearchProvider): Promise<WebSettingsState>;
+    /** Runs one search with the given settings. Never rejects for a failed search. */
+    check(input: WebCheckInput): Promise<WebCheckResult>;
+  };
+
   readonly dialogs: {
     /** The native folder picker. Resolves to an absolute path, or null when cancelled. */
     chooseFolder(options?: ChooseFolderOptions): Promise<string | null>;
@@ -1029,6 +1232,11 @@ export interface DawgBridge {
   readonly shell: {
     /** Opens an http(s) URL in the system browser. Other schemes reject. */
     openExternal(url: string): Promise<void>;
+    /**
+     * Opens an agent, skill or command file (`.md` under `agents`, `skills` or `commands` of a
+     * `.claude` or `.dawg` folder) in the app macOS opens Markdown with. Anything else rejects.
+     */
+    openConfigFile(path: string): Promise<void>;
   };
 
   /** The menu bar and the Dock menu, built in the window from the action registry. */
@@ -1076,6 +1284,7 @@ export const IPC = {
   modelsStop: "dawg:models:stop",
   modelsSetDefault: "dawg:models:set-default",
   modelsSetIdleUnload: "dawg:models:set-idle-unload",
+  modelsSetHelperEnabled: "dawg:models:set-helper-enabled",
   modelsAddFile: "dawg:models:add-file",
   modelsConnectServer: "dawg:models:connect-server",
   modelsRemoveServer: "dawg:models:remove-server",
@@ -1106,8 +1315,13 @@ export const IPC = {
   permissionsRead: "dawg:permissions:read",
   permissionsWrite: "dawg:permissions:write",
   permissionsCheckRule: "dawg:permissions:check-rule",
+  webRead: "dawg:web:read",
+  webWrite: "dawg:web:write",
+  webRemoveKey: "dawg:web:remove-key",
+  webCheck: "dawg:web:check",
   chooseFolder: "dawg:dialogs:choose-folder",
   openExternal: "dawg:shell:open-external",
+  openConfigFile: "dawg:shell:open-config-file",
   menuUpdate: "dawg:menu:update",
   menuAction: "dawg:menu:action",
   platform: "dawg:platform",

@@ -139,6 +139,30 @@ const GPT_OSS: ModelProfileDetails = {
   chatTemplateKwargs: null,
 };
 
+/**
+ * MiniCPM5-1B, the catalog's helper: it answers side requests (titles, WebFetch's page
+ * summaries), never a conversation. Sources: https://huggingface.co/openbmb/MiniCPM5-1B, its
+ * chat_template.jinja and generation_config.json, read on 2026-11-27.
+ */
+const MINICPM5: ModelProfileDetails = {
+  id: "minicpm5",
+  // Card, "Think / No Think": No Think uses temperature=0.7, top_p=0.95. Card, llama.cpp section:
+  // llama.cpp's default min_p 0.05 "can lead to repetitive output", so min_p=0.0. No top_k is
+  // given; the server's default stays. (Side requests send their own low temperature anyway.)
+  sampling: { temperature: 0.7, topP: 0.95, minP: 0.0 },
+  defaultEffort: null,
+  // No source gives a value. A side request asks for far less (a title 256, a page answer 2,048);
+  // this is only a ceiling.
+  maxOutputTokens: 8_192,
+  compactionThreshold: 0.65,
+  // A helper is never given tools.
+  parallelToolCalls: false,
+  // chat_template.jinja: with enable_thinking false the template opens and closes an empty
+  // <think> block, so the model answers at once. Left unset it may think first, which a title or
+  // a page summary does not need.
+  chatTemplateKwargs: { enable_thinking: false },
+};
+
 /** For models not in the catalog (a GGUF loaded by hand, a remote endpoint). */
 export const DEFAULT_PROFILE: ModelProfileDetails = {
   id: "default",
@@ -155,7 +179,7 @@ export const DEFAULT_PROFILE: ModelProfileDetails = {
 };
 
 const PROFILES: ReadonlyMap<string, ModelProfileDetails> = new Map(
-  [QWEN38, QWEN36, LAGUNA_XS_21, GPT_OSS].map((p) => [p.id, p]),
+  [QWEN38, QWEN36, LAGUNA_XS_21, GPT_OSS, MINICPM5].map((p) => [p.id, p]),
 );
 
 /** The profile ids we ship, in a fixed order. */

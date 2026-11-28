@@ -108,6 +108,8 @@ describe("tools", () => {
     );
     expect(permissionNeed({ toolName: "Bash" })).toBe("run a command");
     expect(permissionNeed({ toolName: "Edit" })).toBe("edit a file");
-    expect(permissionNeed({ toolName: "mcp__github__create_issue" })).toBe("use a tool");
+    expect(permissionNeed({ toolName: "mcp__github__create_issue" })).toBe(
+      "use github’s create_issue",
+    );
   });
 });

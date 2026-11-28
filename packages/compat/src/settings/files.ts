@@ -5,6 +5,7 @@
  */
 import { resolve } from "node:path";
 import type { PermissionMode } from "@dawg/protocol";
+import { defaultSandboxSettings, type SandboxSettings } from "../sandbox/settings.ts";
 import type { SettingsProblem } from "../types.ts";
 import { mergeSettings, type SettingsFileSpec, settingsFilePaths } from "./load.ts";
 import { type ParsedSettings, type ReadSettingsResult, readSettingsFile } from "./parse.ts";
@@ -32,6 +33,8 @@ export interface SettingsFilesState {
   defaultMode: PermissionMode | null;
   /** A file turns the bypass mode off. */
   bypassDisabled: boolean;
+  /** Added (Phase 4, sandbox): the sandbox settings a new session gets, every file merged. */
+  sandbox: SandboxSettings;
 }
 
 export interface ReadSettingsFilesOptions {
@@ -92,6 +95,7 @@ export async function readSettingsFiles(
       additionalDirectories: read.additionalDirectories,
       bypassDisabled: read.bypassDisabled,
       env: read.env,
+      sandbox: read.sandbox,
       ignoredKeys: read.ignoredKeys,
       // The merged list holds each file's own problems and those found while merging.
       problems: merged.problems.filter((problem) => problem.path === spec.path),
@@ -102,6 +106,7 @@ export async function readSettingsFiles(
     files,
     defaultMode: merged.permissions.defaultMode,
     bypassDisabled: merged.permissions.bypassDisabled,
+    sandbox: merged.sandbox ?? defaultSandboxSettings(),
   };
 }
 
@@ -114,6 +119,7 @@ function emptyRead(): ReadSettingsResult {
     additionalDirectories: [],
     bypassDisabled: false,
     env: {},
+    sandbox: null,
     ignoredKeys: [],
     problems: [],
     exists: false,

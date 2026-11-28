@@ -190,6 +190,71 @@ describe("the real engine in the engine host", () => {
     expect(conversation("Qwen3.6-35B-A3B-Q4")).toEqual(getModelProfile("qwen3.6").sampling);
   });
 
+  it("sends titles to the helper model the grant names, with the helper's profile", async () => {
+    const sent: { url: string; system: string; extraBody: unknown; slot: unknown }[] = [];
+    const main: Request[] = [];
+    hosted = createRealEngine({
+      dataRoot: path.join(root, "data"),
+      homeDir: root,
+      ripgrepPath: null,
+      send: (message) => main.push(message),
+      log: () => {},
+      createClient: (endpoint): ModelClient => ({
+        endpoint,
+        async *stream(request) {
+          const first = request.messages[0];
+          sent.push({
+            url: endpoint.baseUrl,
+            system: first?.role === "system" ? String(first.content) : "",
+            extraBody: request.extraBody,
+            slot: request.slot,
+          });
+          const isTitle = first?.role === "system" && String(first.content).includes("short title");
+          yield { type: "finished", reply: reply(isTitle ? "Say hello" : "Hello.") };
+        },
+        countTokens: async () => null,
+      }),
+    });
+    const engine = hosted.engine;
+    const creating = engine.createSession({ cwd: project });
+    await vi.waitFor(() => expect(main).toHaveLength(1));
+    hosted.receive({
+      type: "model-grant",
+      requestId: (main[0] as Request).requestId,
+      grant: {
+        modelId: "qwen3.8-27b-q8",
+        endpoint: { ...ENDPOINT, kind: "bundled", model: "qwen3.8-27b-q8" },
+        slots: { conversation: [0], utility: [1] },
+        generation: 1,
+        profile: "qwen3.8",
+        helper: {
+          modelId: "minicpm5-1b-q8",
+          endpoint: {
+            ...ENDPOINT,
+            kind: "bundled",
+            baseUrl: "http://127.0.0.1:10/v1",
+            model: "minicpm5-1b-q8",
+            contextWindow: 32_768,
+          },
+          slots: [0],
+          profile: "minicpm5",
+        },
+      },
+    });
+    const session = await creating;
+    await session.run({ content: [{ type: "text", text: "say hello" }] });
+    await vi.waitFor(() => expect(session.summary().title).toBe("Say hello"));
+    const title = sent.find((s) => s.system.includes("short title"));
+    expect(title).toMatchObject({
+      url: "http://127.0.0.1:10/v1",
+      slot: 0,
+      extraBody: { chat_template_kwargs: { enable_thinking: false } },
+    });
+    const turn = sent.find((s) => !s.system.includes("short title"));
+    expect(turn).toMatchObject({ url: "http://127.0.0.1:9/v1", slot: 0 });
+    await session.close();
+  });
+
   it("fails to start, with the reason, when the data root cannot be made", async () => {
     const blocker = path.join(root, "a-file");
     await writeFile(blocker, "");

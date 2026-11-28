@@ -12,6 +12,8 @@ import {
   ConnectServerInputSchema,
   type DawgBridge,
   type DownloadState,
+  HelperEnabledSchema,
+  type HelperInfo,
   IdleUnloadSchema,
   ModelIdSchema,
   type ModelOption,
@@ -52,6 +54,8 @@ export interface FakeModelManager {
   finishLoad(error?: string): void;
   /** Replaces the runtime's status, as a crash or an idle unload would. */
   setStatus(status: ModelStatus): void;
+  /** Changes the helper model, as main's would (it fails to start, say); null removes it. */
+  setHelper(helper: Partial<HelperInfo> | null): void;
   /** Stops its timers. */
   dispose(): void;
 }
@@ -161,7 +165,49 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
     state = { ...state, downloads: [...others, next] };
   }
 
+  /** Downloaded and kept: ready, starting, running, or failed to start. */
+  function isHelperInstalled(helper: HelperInfo): boolean {
+    return ["ready", "starting", "running", "error"].includes(helper.state);
+  }
+
+  function isHelper(modelId: string): boolean {
+    return state.helper?.id === modelId;
+  }
+
+  /** Installed, the helper runs while a model runs and it is on; main does the same. */
+  function installedHelperState(helper: HelperInfo): HelperInfo["state"] {
+    return helper.enabled && state.status.state === "ready" ? "running" : "ready";
+  }
+
+  /** Puts the helper in a state, with the memory and line that go with it. */
+  function setHelperState(helperState: HelperInfo["state"]): void {
+    const helper = state.helper;
+    if (!helper) return;
+    state = {
+      ...state,
+      helper: {
+        ...helper,
+        state: helperState,
+        runtimeMemoryBytes: helperState === "running" ? Math.round(helper.memoryBytes * 0.8) : null,
+        message: helper.enabled
+          ? null
+          : "Turned off: the main model answers titles and page summaries",
+      },
+    };
+  }
+
+  /** A running model brings the installed helper up with it; a stopped one takes it down. */
+  function followHelper(): void {
+    const helper = state.helper;
+    if (!helper) return;
+    if (["ready", "running"].includes(helper.state)) setHelperState(installedHelperState(helper));
+  }
+
   function setEntryState(modelId: string, entryState: CatalogModel["state"]): void {
+    if (isHelper(modelId) && state.helper) {
+      setHelperState(entryState === "installed" ? installedHelperState(state.helper) : entryState);
+      return;
+    }
     state = {
       ...state,
       catalog: state.catalog.map((entry) =>
@@ -202,7 +248,8 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
       error: null,
     });
     setEntryState(download.modelId, "installed");
-    install(optionFor(entryOf(download.modelId), "catalog"));
+    // The helper is never a model to chat with: it does not join `installed`.
+    if (!isHelper(download.modelId)) install(optionFor(entryOf(download.modelId), "catalog"));
   }
 
   function tick(): void {
@@ -262,6 +309,7 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
           memoryBytes: entry?.memoryBytes ?? 12 * GIB,
         },
       };
+      followHelper();
       emit();
       pending.resolve();
     } else {
@@ -295,7 +343,16 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
 
     async download(modelId) {
       const id = validate(ModelIdSchema, modelId, "model id");
-      const entry = entryOf(id);
+      const helper = isHelper(id) ? state.helper : null;
+      const entry = helper
+        ? {
+            displayName: helper.displayName,
+            sizeBytes: helper.sizeBytes,
+            fits: helper.fits,
+            fitNote: helper.fitNote,
+            state: isHelperInstalled(helper) ? "installed" : "available",
+          }
+        : entryOf(id);
       if (entry.state === "installed") return;
       if (!entry.fits)
         throw new Error(entry.fitNote ?? `${entry.displayName} does not fit this Mac`);
@@ -348,6 +405,14 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
     },
     async useExisting(modelId) {
       const id = validate(ModelIdSchema, modelId, "model id");
+      const helper = isHelper(id) ? state.helper : null;
+      if (helper) {
+        if (helper.foundIn === null)
+          throw new Error(`No other app has a copy of ${helper.displayName}`);
+        setEntryState(id, "installed");
+        emit();
+        return;
+      }
       const entry = entryOf(id);
       if (entry.foundIn === null)
         throw new Error(`No other app has a copy of ${entry.displayName}`);
@@ -358,6 +423,13 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
     },
     async remove(modelId) {
       const id = validate(ModelIdSchema, modelId, "model id");
+      const helper = isHelper(id) ? state.helper : null;
+      if (helper) {
+        if (!isHelperInstalled(helper)) throw new Error(`${helper.displayName} is not on this Mac`);
+        setHelperState("available");
+        emit();
+        return;
+      }
       const option = installedOption(id);
       if (!option.removable)
         throw new Error(`dawg did not download ${option.label}, so it leaves it`);
@@ -420,6 +492,7 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
           memoryBytes: null,
         },
       };
+      followHelper();
       emit();
     },
     async setDefault(modelId) {
@@ -431,6 +504,17 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
     },
     async setIdleUnload(minutes) {
       state = { ...state, idleUnloadMinutes: validate(IdleUnloadSchema, minutes, "idle time") };
+      emit();
+    },
+    async setHelperEnabled(enabled) {
+      const valid = validate(HelperEnabledSchema, enabled, "helper setting");
+      const helper = state.helper;
+      if (!helper) return;
+      state = { ...state, helper: { ...helper, enabled: valid } };
+      // Off stops it; on starts it again beside a running model, as main does.
+      setHelperState(
+        isHelperInstalled(helper) ? installedHelperState(state.helper as HelperInfo) : helper.state,
+      );
       emit();
     },
     async addModelFile() {
@@ -521,6 +605,13 @@ export function createFakeModelManager(options: FakeModelManagerOptions = {}): F
         });
         setEntryState(modelId, "downloading");
       }
+      emit();
+    },
+    setHelper(helper) {
+      state = {
+        ...state,
+        helper: helper === null || state.helper === null ? null : { ...state.helper, ...helper },
+      };
       emit();
     },
     failDownload(modelId, error) {

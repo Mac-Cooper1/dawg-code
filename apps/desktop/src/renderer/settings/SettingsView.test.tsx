@@ -116,6 +116,12 @@ describe.each(THEMES)("SettingsView (%s)", (theme) => {
       "General",
       "Models",
       "Permissions",
+      "Project setup",
+      "Hooks",
+      "Skills and commands",
+      "Subagents",
+      "MCP servers",
+      "Web",
       "Shortcuts",
     ]);
     expect(within(nav).getByRole("button", { name: "General" })).toHaveAttribute(

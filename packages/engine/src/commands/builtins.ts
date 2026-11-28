@@ -14,10 +14,14 @@ import {
   type SessionSummary,
   type Usage,
 } from "@dawg/protocol";
+import { agentsCommand } from "../agents/command.ts";
+import { mcpCommand } from "../mcp/command.ts";
 import { RuntimeError } from "../runtime/errors.ts";
 import type { SessionRuntime } from "../runtime/session.ts";
 import { chooseInstructionFile, initPrompt } from "./init.ts";
+import { memoryCommand } from "./memory.ts";
 import { splitArguments } from "./registry.ts";
+import { rewindCommand } from "./rewind.ts";
 import {
   type CommandContext,
   CommandError,
@@ -106,6 +110,14 @@ function describeUsage(usage: Usage | null): string | null {
 // Reading
 // ---------------------------------------------------------------------------------------------
 
+/** Where a custom command or skill comes from, for `/help <name>`; "" for dawg's own. */
+function sourceLine(command: SlashCommand): string {
+  const what = command.kind === "skill" ? "A skill" : "A custom command";
+  if (command.source === "user") return `${what} from your own files (~/.claude or ~/.dawg).`;
+  if (command.source === "project") return `${what} from the project's files.`;
+  return "";
+}
+
 const help: SlashCommand = {
   name: "help",
   description: "Show the commands, or details of one",
@@ -125,11 +137,13 @@ const help: SlashCommand = {
         command.aliases && command.aliases.length > 0
           ? `\nAlso: ${command.aliases.map((a) => `/${a}`).join(", ")}`
           : "";
-      return output(`${usage}\n${command.description}.${aliases}`);
+      const from = sourceLine(command);
+      return output(`${usage}\n${command.description}.${aliases}${from === "" ? "" : `\n${from}`}`);
     }
     const rows = ctx.registry.list().map((c) => {
       const usage = `/${c.name}${c.argumentHint === null ? "" : ` ${c.argumentHint}`}`;
-      return { usage, description: c.description };
+      const tag = c.source === "user" ? " (personal)" : c.source === "project" ? " (project)" : "";
+      return { usage, description: `${c.description}${tag}` };
     });
     const width = Math.max(...rows.map((r) => r.usage.length));
     const lines = rows.map((r) => `  ${r.usage.padEnd(width)}  ${r.description}`);
@@ -654,4 +668,8 @@ export const BUILTIN_COMMANDS: readonly SlashCommand[] = [
   init,
   status,
   permissions,
+  rewindCommand,
+  memoryCommand,
+  mcpCommand,
+  agentsCommand,
 ].map((c) => ({ ...c, source: "builtin" }));

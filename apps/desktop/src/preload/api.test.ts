@@ -50,6 +50,8 @@ describe("preload API", () => {
       api.dialogs.chooseFolder({ multiple: true }),
       api.shell.openExternal("file:///etc/passwd"),
       api.shell.openExternal("javascript:alert(1)"),
+      api.shell.openConfigFile("/Applications/Calculator.app"),
+      api.shell.openConfigFile("agents/x.md"),
     ];
     for (const call of bad) await expect(call).rejects.toThrow(/^Invalid /);
     expect(invoked).toEqual([]);

@@ -18,6 +18,13 @@ export function looseName(name: string): string {
  */
 const NAMESPACE_PREFIX = /^functions\./;
 
+/**
+ * The tool that calls an MCP server's tool by name (../mcp/search.ts). A session that offers its
+ * MCP tools only through it may still see the model call one by its own name, `mcp__s__t`, as
+ * listed: such a call is made through it.
+ */
+export const MCP_DISPATCHER = "CallMcpTool";
+
 export type ToolNameMatch =
   | { found: true; tool: ToolSchema; correctedFrom: string | null }
   | { found: false; suggestion: string | null };

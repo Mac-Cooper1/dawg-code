@@ -7,7 +7,9 @@ import { CommandRegistry } from "./registry.ts";
 
 export { BUILTIN_COMMANDS, showPath } from "./builtins.ts";
 export { chooseInstructionFile, type InitTarget, initPrompt } from "./init.ts";
+export { memoryCommand } from "./memory.ts";
 export { CommandRegistry, parseSlashCommand, splitArguments } from "./registry.ts";
+export { rewindCommand, SHELL_CAVEAT } from "./rewind.ts";
 export {
   type CommandContext,
   CommandError,

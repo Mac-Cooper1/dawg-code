@@ -26,6 +26,14 @@ import {
   type ToolOutput,
   type ToolProbeContext,
 } from "../../contracts/tools.ts";
+import type { WrappedCommand } from "../../sandbox/runtime.ts";
+import {
+  displayForPlan,
+  getSessionSandbox,
+  type SandboxPlan,
+  type SessionSandbox,
+} from "../../sandbox/session.ts";
+import { PERMISSION_ERROR } from "../../sandbox/violations.ts";
 import { OutputCollector } from "../exec/output.ts";
 import { delay, groupAlive, type OutputStream, spawnInGroup } from "../exec/process.ts";
 import { EscapeStripper } from "../exec/terminal.ts";
@@ -45,6 +53,8 @@ export interface BashInput {
   timeout?: number;
   description?: string;
   run_in_background?: boolean;
+  /** Added (Phase 4, sandbox): run outside the sandbox, after the person approves. */
+  dangerouslyDisableSandbox?: boolean;
 }
 
 export interface BashToolOptions {
@@ -77,7 +87,8 @@ const DESCRIPTION = `Run a shell command with bash and get back its output and e
 - timeout is in milliseconds: ${limits.bashDefaultTimeoutMs} (${limits.bashDefaultTimeoutMs / 60_000} minutes) by default, at most ${limits.bashMaxTimeoutMs} (${limits.bashMaxTimeoutMs / 60_000} minutes); a larger value is lowered to that. A command still running at its timeout is stopped.
 - Set run_in_background for servers, watchers and other commands that keep running. The call returns at once with a task id and the path of a file that collects the output: read that file to check on the task, and stop it with TaskStop when it is no longer needed. Do not add "&" yourself. With run_in_background, timeout (up to ${BACKGROUND_MAX_TIMEOUT_MS} ms, 2 hours) stops the task after that long; without it the task runs until it ends or is stopped.
 - description: a few words on what the command does, for example "Run the unit tests".
-- To read, edit, create or search files, use the Read, Edit, Write, Glob and Grep tools rather than cat, sed, echo, find or grep.`;
+- To read, edit, create or search files, use the Read, Edit, Write, Glob and Grep tools rather than cat, sed, echo, find or grep.
+- When the sandbox is on, commands can write only in the working directories and $TMPDIR and reach only the allowed hosts; the result says when the sandbox blocked something. Only then, and only if the command really needs it, set dangerouslyDisableSandbox to run it again outside the sandbox: the person is asked first. Otherwise leave it out.`;
 
 const INPUT_SCHEMA = {
   type: "object",
@@ -98,6 +109,11 @@ const INPUT_SCHEMA = {
       type: "boolean",
       description: "Start the command in the background and return at once.",
     },
+    dangerouslyDisableSandbox: {
+      type: "boolean",
+      description:
+        "Run outside the sandbox. Only after the sandbox blocked this command; the person is asked.",
+    },
   },
   required: ["command"],
   additionalProperties: false,
@@ -113,7 +129,16 @@ export function createBashTool(options: BashToolOptions = {}): ToolDefinition<Ba
     readOnly: false,
 
     permission(input: BashInput, ctx: ToolProbeContext): PermissionSubject {
-      return { kind: "command", command: input.command, cwd: nextCommandCwd(ctx.state, ctx.cwd) };
+      const cwd = nextCommandCwd(ctx.state, ctx.cwd);
+      const plan = planFor(input, ctx, cwd);
+      // A command the sandbox refuses to run is judged as if it ran inside: it never runs.
+      if (plan === null) return { kind: "command", command: input.command, cwd };
+      return {
+        kind: "command",
+        command: input.command,
+        cwd,
+        sandbox: plan.run === "refused" ? { run: "inside", autoAllow: false } : plan,
+      };
     },
 
     async execute(input: BashInput, ctx: ToolContext): Promise<ToolOutput> {
@@ -129,15 +154,43 @@ export function createBashTool(options: BashToolOptions = {}): ToolDefinition<Ba
       }
       const env = buildShellEnv(process.env, ctx.env, state.cwd);
       const shell = options.bashPath ?? findBash(env.PATH);
+      const plan = planFor(input, ctx, state.cwd);
+      if (plan?.run === "refused") return errorOutput(plan.why);
+      const sandbox = plan === null ? null : { plan, session: getSessionSandbox(ctx.state) };
       if (input.run_in_background) {
-        return startInBackground(input, ctx, { shell, env, cwd: state.cwd, killGraceMs, notes });
+        return startInBackground(input, ctx, {
+          shell,
+          env,
+          cwd: state.cwd,
+          killGraceMs,
+          notes,
+          sandbox,
+        });
       }
-      return runInForeground(input, ctx, { shell, env, killGraceMs, drainGraceMs, notes });
+      return runInForeground(input, ctx, { shell, env, killGraceMs, drainGraceMs, notes, sandbox });
     },
   };
 }
 
 export const bashTool: ToolDefinition<BashInput> = createBashTool();
+
+/** Where a call runs with respect to the session's sandbox; null when the sandbox is off. */
+function planFor(input: BashInput, ctx: ToolProbeContext, cwd: string): SandboxPlan | null {
+  const sandbox = getSessionSandbox(ctx.state);
+  if (sandbox === null) return null;
+  return sandbox.plan(input.command, input.dangerouslyDisableSandbox === true, cwd);
+}
+
+/** The session's sandbox and where this call runs; null when the sandbox is off. */
+type CallSandbox = { plan: SandboxPlan; session: SessionSandbox | null } | null;
+
+/** The sandbox the call runs inside, or null when it runs without one. */
+function insideSandbox(sandbox: CallSandbox): SessionSandbox | null {
+  return sandbox !== null && sandbox.plan.run === "inside" ? sandbox.session : null;
+}
+
+/** How long to wait for the system's sandbox log to report a refusal a command printed. */
+const VIOLATION_WAIT_MS = 600;
 
 async function runInForeground(
   input: BashInput,
@@ -148,6 +201,7 @@ async function runInForeground(
     killGraceMs: number;
     drainGraceMs: number;
     notes: string[];
+    sandbox: CallSandbox;
   },
 ): Promise<ToolOutput> {
   const state = getShellState(ctx.state, ctx.cwd);
@@ -157,9 +211,20 @@ async function runInForeground(
     ctx.limits.bashDefaultTimeoutMs,
     ctx.limits.bashMaxTimeoutMs,
   );
-  const scratch = await mkdtemp(path.join(tmpdir(), "dawg-shell-"));
+  const inside = insideSandbox(run.sandbox);
+  if (inside !== null) {
+    try {
+      await inside.host.start();
+    } catch (error) {
+      return errorOutput(sandboxStartFailure(error, inside));
+    }
+  }
+  // A sandboxed shell can write only to the sandbox's temp folder, so its scratch lives there.
+  const scratchRoot = inside?.host.tempDir ?? tmpdir();
+  const scratch = await mkdtemp(path.join(scratchRoot, "dawg-shell-"));
   const cwdFile = path.join(scratch, "cwd");
   const started = Date.now();
+  let wrapped: WrappedCommand | null = null;
 
   let timedOut = false;
   let interrupted = false;
@@ -189,7 +254,25 @@ async function runInForeground(
       stdout: new EscapeStripper(),
       stderr: new EscapeStripper(),
     };
-    const handle = spawnInGroup(run.shell, ["-c", buildScript(input.command, cwdFile)], {
+    let script = buildScript(input.command, cwdFile);
+    if (inside !== null) {
+      try {
+        wrapped = await inside.wrap({
+          script,
+          commandText: input.command,
+          shell: run.shell,
+          cwd: runCwd,
+          workingDirectories: ctx.workingDirectories,
+          signal: ctx.signal,
+        });
+      } catch (error) {
+        if (ctx.signal.aborted) throw ctx.signal.reason ?? error;
+        await collector.finish();
+        return errorOutput(sandboxStartFailure(error, inside));
+      }
+      script = wrapped.command;
+    }
+    const handle = spawnInGroup(run.shell, ["-c", script], {
       cwd: runCwd,
       env: run.env,
       onOutput: (stream, text) => {
@@ -265,6 +348,7 @@ async function runInForeground(
     strippers.stdout.flush();
     strippers.stderr.flush();
     const collected = await collector.finish();
+    wrapped?.release();
 
     const cwdNote = await updateCwd(cwdFile, ctx);
     if (cwdNote) run.notes.push(cwdNote);
@@ -309,7 +393,39 @@ async function runInForeground(
     notes.push(...run.notes);
 
     const body = collected.text.replace(/\n+$/, "");
-    const footerText = (exitLine === null ? notes : [exitLine, ...notes]).join("\n");
+    let sandboxDisplay = displayForPlan(run.sandbox?.plan ?? null);
+    const modelNotes: string[] = [];
+    if (inside !== null && wrapped !== null) {
+      const failed = timedOut || interrupted || exit.signal !== null || exit.code !== 0;
+      const commandId = wrapped.commandId;
+      if (PERMISSION_ERROR.test(body)) {
+        // The system's sandbox log can arrive just after the command ends: wait until it has
+        // said something and then gone quiet, for a moment at most.
+        const until = Date.now() + VIOLATION_WAIT_MS;
+        let seen = inside.host.violations(commandId).length;
+        let quiet = 0;
+        while (Date.now() < until && (seen === 0 || quiet < 2)) {
+          await delay(50);
+          const now = inside.host.violations(commandId).length;
+          quiet = now === seen ? quiet + 1 : 0;
+          seen = now;
+        }
+      }
+      const outcome = inside.outcome({
+        commandId,
+        commandText: input.command,
+        failed,
+        output: body,
+      });
+      sandboxDisplay = outcome.display;
+      // For the model only: the card shows what was blocked from `display.sandbox`.
+      modelNotes.push(...outcome.notes);
+    } else if (run.sandbox?.plan.run === "outside" && run.sandbox.plan.why === "unavailable") {
+      notes.push(unavailableNote(run.sandbox.session));
+    }
+    const footerText = [...(exitLine === null ? [] : [exitLine]), ...notes, ...modelNotes].join(
+      "\n",
+    );
     const text = body
       ? footerText
         ? `${body}\n\n${footerText}`
@@ -328,6 +444,7 @@ async function runInForeground(
       outputPath: collected.truncated ? collected.outputPath : null,
       output: body,
       notes,
+      ...(sandboxDisplay === undefined ? {} : { sandbox: sandboxDisplay }),
     };
     return {
       content: [{ type: "text", text }],
@@ -335,8 +452,24 @@ async function runInForeground(
       display,
     };
   } finally {
+    wrapped?.release();
     await rm(scratch, { recursive: true, force: true });
   }
+}
+
+/** Why a sandboxed command could not start, for the model. */
+function sandboxStartFailure(error: unknown, sandbox: SessionSandbox): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const retry = sandbox.settings().allowUnsandboxedCommands
+    ? " To run it anyway, run it again with dangerouslyDisableSandbox set to true; the person is asked first."
+    : "";
+  return `The sandbox could not start, so the command did not run (${detail}).${retry}`;
+}
+
+/** Said when the sandbox is on but cannot run here, and commands run without it. */
+function unavailableNote(sandbox: SessionSandbox | null): string {
+  const reason = sandbox?.host.availability().reason ?? "The sandbox cannot run here.";
+  return `${reason} The sandbox is on in the settings, so this command ran without it.`;
 }
 
 /** Reads where the shell ended up and decides where the next command starts. */
@@ -366,16 +499,42 @@ async function startInBackground(
     cwd: string;
     killGraceMs: number;
     notes: string[];
+    sandbox: CallSandbox;
   },
 ): Promise<ToolOutput> {
   const { shell, env, cwd, killGraceMs, notes } = run;
   const tasks = getBackgroundTasks(ctx.state);
-  const outputPath = await ctx.saveOutput("bash-background.txt", "");
+  const inside = insideSandbox(run.sandbox);
+  let wrapped: WrappedCommand | null = null;
+  if (inside !== null) {
+    try {
+      wrapped = await inside.wrap({
+        script: input.command,
+        commandText: input.command,
+        shell,
+        cwd,
+        workingDirectories: ctx.workingDirectories,
+        signal: ctx.signal,
+      });
+    } catch (error) {
+      if (ctx.signal.aborted) throw ctx.signal.reason ?? error;
+      return errorOutput(sandboxStartFailure(error, inside));
+    }
+  } else if (run.sandbox?.plan.run === "outside" && run.sandbox.plan.why === "unavailable") {
+    notes.push(unavailableNote(run.sandbox.session));
+  }
+  const outputPath = await ctx.saveOutput("bash-background.txt", "").catch((error: unknown) => {
+    wrapped?.release();
+    throw error;
+  });
   const timeLimitMs =
     input.timeout !== undefined && input.timeout > 0
       ? Math.min(Math.floor(input.timeout), BACKGROUND_MAX_TIMEOUT_MS)
       : undefined;
+  const release = wrapped?.release;
   const info = tasks.start({
+    ...(wrapped === null ? {} : { script: wrapped.command }),
+    ...(release === undefined ? {} : { onEnded: release }),
     command: input.command,
     description: input.description?.trim() || null,
     cwd,
@@ -408,6 +567,7 @@ async function startInBackground(
     // Nothing printed yet; the client follows the task through its output file.
     output: null,
     notes: [],
+    ...(run.sandbox === null ? {} : { sandbox: displayForPlan(run.sandbox.plan) }),
   };
   return { content: [{ type: "text", text: lines.join("\n") }], display };
 }

@@ -47,6 +47,7 @@ export class Attachments {
       permissionPrompts: all.some((c) => c.permissionPrompts),
       questions: all.some((c) => c.questions),
       planApproval: all.some((c) => c.planApproval),
+      elicitation: all.some((c) => c.elicitation),
     };
   }
 

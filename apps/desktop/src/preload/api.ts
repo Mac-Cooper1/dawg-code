@@ -13,6 +13,7 @@ import {
   type BranchList,
   type ChangeSet,
   ChooseFolderOptionsSchema,
+  ConfigFilePathSchema,
   ConnectServerInputSchema,
   CreateWorktreeInputSchema,
   type DesktopSettings,
@@ -25,8 +26,10 @@ import {
   FileRefSchema,
   FindFilesInputSchema,
   type FindFilesResult,
+  HelperEnabledSchema,
   IdleUnloadSchema,
   IPC,
+  KeyedSearchProviderSchema,
   MenuModelSchema,
   ModelIdSchema,
   type ModelOption,
@@ -53,6 +56,10 @@ import {
   TerminalSizeSchema,
   TrackSessionInputSchema,
   type Unsubscribe,
+  WebCheckInputSchema,
+  type WebCheckResult,
+  WebSettingsInputSchema,
+  type WebSettingsState,
   type WindowState,
   WindowStateSchema,
   type WorkspaceChangedEvent,
@@ -157,6 +164,10 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
       setIdleUnload: async (minutes) => {
         const valid = validate(IdleUnloadSchema, minutes, "idle unload time");
         await ipc.invoke(IPC.modelsSetIdleUnload, valid);
+      },
+      setHelperEnabled: async (enabled) => {
+        const valid = validate(HelperEnabledSchema, enabled, "helper setting");
+        await ipc.invoke(IPC.modelsSetHelperEnabled, valid);
       },
       addModelFile: async () => (await ipc.invoke(IPC.modelsAddFile)) as AddedModelFile | null,
       connectServer: async (input) => {
@@ -294,6 +305,24 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
         "rule",
       ),
     },
+    web: {
+      read: async () => (await ipc.invoke(IPC.webRead)) as WebSettingsState,
+      write: invokeWith<typeof WebSettingsInputSchema, WebSettingsState>(
+        IPC.webWrite,
+        WebSettingsInputSchema,
+        "web settings",
+      ),
+      removeKey: invokeWith<typeof KeyedSearchProviderSchema, WebSettingsState>(
+        IPC.webRemoveKey,
+        KeyedSearchProviderSchema,
+        "search service",
+      ),
+      check: invokeWith<typeof WebCheckInputSchema, WebCheckResult>(
+        IPC.webCheck,
+        WebCheckInputSchema,
+        "web settings",
+      ),
+    },
     dialogs: {
       chooseFolder: async (options) => {
         const valid = validate(ChooseFolderOptionsSchema, options, "folder options");
@@ -304,6 +333,10 @@ export function createPreloadApi(ipc: IpcRendererLike, platform: PlatformInfo): 
       openExternal: async (url) => {
         const valid = validate(ExternalUrlSchema, url, "link");
         await ipc.invoke(IPC.openExternal, valid);
+      },
+      openConfigFile: async (path) => {
+        const valid = validate(ConfigFilePathSchema, path, "file");
+        await ipc.invoke(IPC.openConfigFile, valid);
       },
     },
     menu: {

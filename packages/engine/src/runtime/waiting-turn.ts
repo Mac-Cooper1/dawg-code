@@ -38,9 +38,9 @@ export interface WaitingTurn {
   lastText: string | null;
 }
 
-/** The tool call a request is about. */
+/** The tool call a request is about ("" for an MCP server's request that names none). */
 export function requestCallId(request: PendingRequest): string {
-  return request.kind === "permission" ? request.request.toolCallId : request.toolCallId;
+  return request.kind === "permission" ? request.request.toolCallId : (request.toolCallId ?? "");
 }
 
 export function requestIdOf(request: PendingRequest): string {
@@ -55,6 +55,9 @@ function allowed(kind: PendingRequest["kind"], capabilities: ClientCapabilities)
       return capabilities.questions;
     case "plan":
       return capabilities.planApproval;
+    case "elicitation":
+      // The server's request went with the process that held its connection.
+      return false;
   }
 }
 
@@ -67,7 +70,9 @@ function raised(event: LoggedEvent): PendingRequest | null {
         ? "question"
         : event.event === "plan.proposed"
           ? "plan"
-          : null;
+          : event.event === "elicitation.requested"
+            ? "elicitation"
+            : null;
   if (kind === null) return null;
   const parsed = PendingRequestSchema.safeParse({ ...event.payload, kind });
   return parsed.success ? parsed.data : null;

@@ -423,8 +423,11 @@ export function makeEnv(overrides: Partial<TranscriptEnv> = {}): TranscriptEnv {
     respondPermission: vi.fn(),
     respondQuestion: vi.fn(),
     respondPlan: vi.fn(),
+    respondElicitation: vi.fn(),
     openLink: vi.fn(),
     openInChanges: null,
+    reviewProjectCode: null,
+    openSubagent: null,
     ...overrides,
   };
 }
@@ -440,6 +443,7 @@ export function makeProps(overrides: Partial<TranscriptProps> = {}): TranscriptP
     onRespondPermission: vi.fn(),
     onRespondQuestion: vi.fn(),
     onRespondPlan: vi.fn(),
+    onRespondElicitation: vi.fn(),
     onOpenLink: vi.fn(),
     ...overrides,
   };

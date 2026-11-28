@@ -3,6 +3,7 @@ import type { FileMatch } from "../../shared/bridge.ts";
 import menu from "../app/menu.module.css";
 import { Icon } from "../ui/index.ts";
 import styles from "./Composer.module.css";
+import { isResourceMatch } from "./mcpResources.ts";
 import type { FileSearch } from "./useFileSearch.ts";
 
 export interface MentionMenuProps {
@@ -83,7 +84,11 @@ export function MentionMenu(props: MentionMenuProps) {
             role="option"
             aria-selected={index === props.active}
             aria-label={
-              match.kind === "directory" ? `${match.relativePath}, folder` : match.relativePath
+              isResourceMatch(match)
+                ? `${match.relativePath}, ${match.resource.name}, MCP resource`
+                : match.kind === "directory"
+                  ? `${match.relativePath}, folder`
+                  : match.relativePath
             }
             tabIndex={-1}
             className={`${menu.item} ${menu.simple}`}
@@ -98,7 +103,12 @@ export function MentionMenu(props: MentionMenuProps) {
             }}
           >
             <span className={menu.icon}>
-              <Icon name={match.kind === "directory" ? "folder" : "file"} size={14} />
+              <Icon
+                name={
+                  isResourceMatch(match) ? "server" : match.kind === "directory" ? "folder" : "file"
+                }
+                size={14}
+              />
             </span>
             <HighlightedPath match={match} />
           </div>

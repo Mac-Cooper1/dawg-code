@@ -40,7 +40,7 @@ export interface OpenTool {
 
 export class SessionState {
   status: SessionStatus = "idle";
-  waitingOn: "permission" | "question" | "plan" | null = null;
+  waitingOn: "permission" | "question" | "plan" | "elicitation" | null = null;
   statusMessage: string | null = null;
   /** Set while the turn waits for a model busy with other sessions (1 = next). */
   queuePosition: number | null = null;
@@ -157,6 +157,11 @@ export class SessionState {
         });
         return;
       }
+      case "elicitation.requested": {
+        const { sessionId: _s, seq: _q, time: _t, ...ask } = event.payload;
+        this.pending.set(ask.requestId, { kind: "elicitation", ...ask });
+        return;
+      }
       case "request.resolved": {
         const request = this.pending.get(event.payload.requestId);
         this.pending.delete(event.payload.requestId);
@@ -184,9 +189,9 @@ export class SessionState {
   }
 }
 
-/** The tool call a pending request is about. */
+/** The tool call a pending request is about ("" for an MCP server's request that names none). */
 export function toolCallOf(request: PendingRequest): string {
-  return request.kind === "permission" ? request.request.toolCallId : request.toolCallId;
+  return request.kind === "permission" ? request.request.toolCallId : (request.toolCallId ?? "");
 }
 
 /** The request's id, wherever its kind keeps it. */

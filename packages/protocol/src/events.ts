@@ -7,6 +7,7 @@
 import { z } from "zod";
 import {
   BackgroundTaskSchema,
+  CompatSourceSchema,
   ContentPartSchema,
   EffortSchema,
   ErrorInfoSchema,
@@ -28,6 +29,8 @@ import {
   ToolProgressSchema,
   UsageSchema,
 } from "./common.ts";
+import * as elicitation from "./elicitation.ts";
+import * as subagents from "./subagents.ts";
 
 const IdSchema = z.string().min(1);
 
@@ -73,11 +76,12 @@ export const PlanAskSchema = z.object({
   modeBeforePlan: PermissionModeSchema.nullable().default(null),
 });
 
-/** A permission, question or plan request that has not been answered yet. */
+/** A permission, question, plan or MCP elicitation request that has not been answered yet. */
 export const PendingRequestSchema = z.discriminatedUnion("kind", [
   PermissionAskSchema.extend({ kind: z.literal("permission") }),
   QuestionAskSchema.extend({ kind: z.literal("question") }),
   PlanAskSchema.extend({ kind: z.literal("plan") }),
+  elicitation.ElicitationAskSchema.extend({ kind: z.literal("elicitation") }),
 ]);
 export type PendingRequest = z.infer<typeof PendingRequestSchema>;
 
@@ -88,7 +92,7 @@ export type PendingRequest = z.infer<typeof PendingRequestSchema>;
 export const SessionStatusEventSchema = EventBaseSchema.extend({
   status: SessionStatusSchema,
   /** What the session waits on when `status` is "waiting"; otherwise null. */
-  waitingOn: z.enum(["permission", "question", "plan"]).nullable(),
+  waitingOn: z.enum(["permission", "question", "plan", "elicitation"]).nullable(),
   /** A short line for the sidebar, for example "Waiting for the model". */
   message: z.string().nullable(),
   /**
@@ -246,6 +250,13 @@ export const RequestResolvedEventSchema = z.discriminatedUnion("kind", [
     outcome: ResolutionOutcomeSchema,
     response: PlanResponseSchema.nullable(),
   }),
+  EventBaseSchema.extend({
+    kind: z.literal("elicitation"),
+    turnId: IdSchema,
+    requestId: IdSchema,
+    outcome: ResolutionOutcomeSchema,
+    response: elicitation.ElicitationResponseSchema.nullable(),
+  }),
 ]);
 
 export const TasksUpdatedEventSchema = EventBaseSchema.extend({
@@ -298,6 +309,50 @@ export const CompactionFinishedEventSchema = EventBaseSchema.extend({
   error: ErrorInfoSchema.nullable(),
 });
 
+/**
+ * A hook ran (Phase 4): one handler for one event, with what came of it. Shown in the
+ * transcript where it ran.
+ */
+export const HookRanEventSchema = EventBaseSchema.extend({
+  /** The turn it ran in, or null (session start and end). */
+  turnId: IdSchema.nullable(),
+  /** The tool call it ran for (PreToolUse, PostToolUse), or null. */
+  toolCallId: IdSchema.nullable(),
+  hook: z.object({
+    /** The documented event name: "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"... */
+    event: z.string().min(1),
+    /** As written in the settings file; null when the hook has none. */
+    matcher: z.string().nullable(),
+    /** The handler type, "command" in this phase. */
+    type: z.string().min(1),
+    /** What it runs, as written. */
+    command: z.string(),
+    source: CompatSourceSchema,
+  }),
+  /** blocked: it stopped the action (exit 2, or a deny or block decision). */
+  outcome: z.enum(["success", "blocked", "error", "timeout"]),
+  exitCode: z.number().int().nullable(),
+  durationMs: z.number().int().nonnegative(),
+  /** What it decided about a tool call or a prompt, when it decided. */
+  decision: z.enum(["allow", "deny", "ask", "block"]).nullable(),
+  /** Its message for the person or the model (the reason it gave, stderr on a block), cut short. */
+  message: z.string().nullable(),
+});
+
+/**
+ * Hooks were held back because they wait for the person's consent (Phase 4, project trust). Sent
+ * once per session for each state of the definitions, so it is a quiet notice, not an alarm: the
+ * person can review them (`project.inspect`, `project.trust`).
+ */
+export const HookSkippedEventSchema = EventBaseSchema.extend({
+  /** The turn they would have run in, or null (session start and end). */
+  turnId: IdSchema.nullable(),
+  /** The project whose setup holds them, for `project.inspect`. Null for only the person's own files. */
+  projectDir: z.string().nullable(),
+  /** The settings files whose hooks were held back. */
+  sources: z.array(CompatSourceSchema),
+});
+
 export const ErrorEventSchema = EventBaseSchema.extend({
   /** The turn it happened in, or null. */
   turnId: IdSchema.nullable(),
@@ -326,8 +381,12 @@ export const events = {
   "question.asked": QuestionAskedEventSchema,
   "plan.proposed": PlanProposedEventSchema,
   "request.resolved": RequestResolvedEventSchema,
+  "elicitation.requested": elicitation.ElicitationRequestedEventSchema,
   "tasks.updated": TasksUpdatedEventSchema,
   "background.updated": BackgroundUpdatedEventSchema,
+  "subagent.updated": subagents.SubagentUpdatedEventSchema,
+  "hook.ran": HookRanEventSchema,
+  "hook.skipped": HookSkippedEventSchema,
   "usage.updated": UsageUpdatedEventSchema,
   "prompt.progress": PromptProgressEventSchema,
   "compaction.started": CompactionStartedEventSchema,

@@ -11,7 +11,12 @@ import {
   PermissionsWriteInputSchema,
 } from "../shared/bridge.ts";
 import type { PermissionSettingsService } from "./ipc-handlers.ts";
-import { createPermissionSettingsService, loadRuleChecks, ruleError } from "./permissions.ts";
+import {
+  createPermissionSettingsService,
+  loadRuleChecks,
+  ruleError,
+  sandboxAvailability,
+} from "./permissions.ts";
 
 let root: string;
 let home: string;
@@ -77,6 +82,7 @@ describe("read", () => {
           ask: [],
           deny: [],
           problems: [],
+          sandbox: null,
         },
         {
           scope: "user",
@@ -89,10 +95,22 @@ describe("read", () => {
           ask: [],
           deny: [],
           problems: [],
+          sandbox: null,
         },
       ],
       defaultMode: "default",
       bypassDisabled: false,
+      // Added (Phase 4): the sandbox is off until a file turns it on.
+      sandbox: {
+        enabled: false,
+        enabledBy: null,
+        autoAllowBashIfSandboxed: false,
+        allowUnsandboxedCommands: true,
+        allowedDomains: [],
+        deniedDomains: [],
+        excludedCommands: [],
+        ...sandboxAvailability(),
+      },
     });
   });
 
@@ -294,5 +312,79 @@ describe("checkRule", () => {
     expect(ruleError(checks, "Read(!./src/**)", "allow")).toBe(
       "A ! pattern only carves exceptions out of deny and ask rules.",
     );
+  });
+});
+
+describe("the sandbox", () => {
+  it("reads each file's sandbox key and every file merged", async () => {
+    await put(files.claudeUser(), {
+      sandbox: { enabled: true, network: { allowedDomains: ["github.com"] } },
+    });
+    await put(files.dawgProject(), {
+      sandbox: { excludedCommands: ["docker *"], network: { deniedDomains: ["x.github.com"] } },
+    });
+    const state = await service.read(project);
+    expect(state.files.find((f) => f.path === files.claudeUser())?.sandbox).toEqual({
+      enabled: true,
+      autoAllowBashIfSandboxed: null,
+      allowUnsandboxedCommands: null,
+      allowedDomains: ["github.com"],
+      excludedCommands: [],
+    });
+    expect(state.sandbox).toMatchObject({
+      enabled: true,
+      enabledBy: files.claudeUser(),
+      allowedDomains: ["github.com"],
+      deniedDomains: ["x.github.com"],
+      excludedCommands: ["docker *"],
+    });
+  });
+
+  it("writes the sandbox key of dawg's file, keeping the rest", async () => {
+    await put(files.dawgLocal(), { permissions: { allow: ["Bash(ls)"] }, theme: "dark" });
+    const state = await write({
+      scope: "local",
+      projectDir: project,
+      sandbox: {
+        enabled: true,
+        autoAllowBashIfSandboxed: true,
+        allowedDomains: ["registry.npmjs.org"],
+      },
+    });
+    expect(state.sandbox).toMatchObject({
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+      allowedDomains: ["registry.npmjs.org"],
+    });
+    expect(await json(files.dawgLocal())).toEqual({
+      permissions: { allow: ["Bash(ls)"] },
+      theme: "dark",
+      sandbox: {
+        enabled: true,
+        autoAllowBashIfSandboxed: true,
+        network: { allowedDomains: ["registry.npmjs.org"] },
+      },
+    });
+  });
+
+  it("refuses auto-allow in a project's shared file, and a bad host", async () => {
+    await expect(
+      write({ scope: "project", projectDir: project, sandbox: { autoAllowBashIfSandboxed: true } }),
+    ).rejects.toThrow("Only your own settings can run sandboxed commands without asking");
+    await expect(
+      write({ scope: "user", projectDir: null, sandbox: { allowedDomains: ["https://a.com"] } }),
+    ).rejects.toThrow("is a URL");
+  });
+
+  it("says where the sandbox can run", () => {
+    expect(sandboxAvailability("darwin", () => true)).toEqual({
+      available: true,
+      unavailableReason: null,
+    });
+    expect(sandboxAvailability("darwin", () => false).available).toBe(false);
+    expect(sandboxAvailability("linux", () => true)).toEqual({
+      available: false,
+      unavailableReason: "The sandbox runs on macOS only in the app.",
+    });
   });
 });

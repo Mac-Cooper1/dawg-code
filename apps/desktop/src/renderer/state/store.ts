@@ -66,6 +66,8 @@ export function initialAppState(
       fromQueueTurns: {},
       stoppedByUser: {},
       interruptedTurns: {},
+      openSubagent: null,
+      memoryShown: {},
     },
     settings: DEFAULT_SETTINGS,
     models: [],
@@ -75,7 +77,10 @@ export function initialAppState(
     notices: [],
     workspaces: {},
     newSessionOffer: null,
+    trustReview: null,
+    rewind: null,
     liveBatches: {},
+    subagentTranscripts: {},
   };
 }
 

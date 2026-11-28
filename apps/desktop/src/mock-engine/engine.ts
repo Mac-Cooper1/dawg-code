@@ -9,9 +9,12 @@
  */
 import {
   createServer,
+  type ElicitationContent,
+  type ElicitationResponse,
   type EngineEvent,
   ErrorCodes,
   EVENT_NAMES,
+  elicitationIssues,
   type ForkPoint,
   type Handlers,
   METHOD_NAMES,
@@ -26,8 +29,17 @@ import {
 import { findMockModel, MOCK_DEFAULT_MODEL_ID } from "../shared/mock-models.ts";
 import type { MockClock, MockConnection, MockEngine, MockEngineOptions } from "./api.ts";
 import { byteLength, outputPage } from "./background.ts";
+import {
+  memoryText,
+  mockCheckpoint,
+  mockCheckpoints,
+  mockRestore,
+  rewindText,
+} from "./checkpoints.ts";
 import { realClock } from "./clock.ts";
 import { contextText, helpText } from "./commands.ts";
+import { mockSetupItems, sortReportItems } from "./compat.ts";
+import { asksForElicitation, elicitationTurn } from "./elicitation.ts";
 import { type LoadedScenario, pickBranch } from "./format.ts";
 import {
   breakdownAfter,
@@ -41,10 +53,12 @@ import {
   interruptTurn,
   modeAfterPlan,
   type Pace,
+  promptText,
   titleFrom,
   WORKING,
 } from "./generate.ts";
 import { idsIn, newSessionId } from "./ids.ts";
+import { MockMcp } from "./mcp.ts";
 import { expandHome } from "./paths.ts";
 import { Player, type Step, scaledDelay } from "./player.ts";
 import {
@@ -53,7 +67,11 @@ import {
   type SessionSettings,
   type Subscriber,
 } from "./session.ts";
+import { mockSkills } from "./skills.ts";
 import { requestIdOf, toolCallOf } from "./state.ts";
+import { MockSubagentFiles } from "./subagent-files.ts";
+import { asksForAgent, MockAgents } from "./subagents.ts";
+import { MockTrust } from "./trust.ts";
 import { compactAtFor } from "./usage.ts";
 
 /**
@@ -96,6 +114,14 @@ class Engine implements MockEngine {
   readonly #sessions = new Map<string, MockSession>();
   readonly #connections = new Set<Connection>();
   readonly #pace: Pace;
+  /** Hooks and the consent the project's code has (trust.ts). */
+  readonly #trust: MockTrust;
+  /** Subagents a prompt asks for, and their own sessions (subagents.ts). */
+  readonly #agents: MockAgents;
+  /** MCP servers (mcp.ts). */
+  readonly #mcp: MockMcp;
+  /** Subagent definitions and the files the "New subagent" form writes (subagent-files.ts). */
+  readonly #agentFiles: MockSubagentFiles;
   /** Sessions made from scenarios, in the order given. */
   readonly #scenarioSessions: MockSession[];
   #playbackStarted = false;
@@ -106,6 +132,14 @@ class Engine implements MockEngine {
     const speed = options.speed ?? 1;
     this.#speed = speed > 0 ? speed : 1;
     this.#homeDir = options.homeDir;
+    this.#trust = new MockTrust(options.homeDir);
+    this.#mcp = new MockMcp(options.homeDir);
+    this.#agentFiles = new MockSubagentFiles(options.homeDir);
+    this.#agents = new MockAgents({
+      clock: this.#clock,
+      speed: this.#speed,
+      onBackgroundEnded: (parent, prompt) => this.#agentTurn(parent, prompt),
+    });
     this.#engineInfo = options.engineInfo ?? DEFAULT_ENGINE_INFO;
     this.#pace = { speed: this.#speed, random: seededRandom(0x5eed) };
     const start = this.#clock.now();
@@ -416,8 +450,13 @@ class Engine implements MockEngine {
       "session.setEffort": (params) =>
         this.#setEffort(this.#openHere(connection, params.sessionId), params.effort),
       "session.command": (params) => this.#command(connection, params),
+      // Checkpoints and rewind (checkpoints.ts).
+      "session.checkpoints": (params) =>
+        mockCheckpoints(this.#openHere(connection, params.sessionId).log),
+      "session.rewind": (params) => this.#rewind(connection, params),
       "session.replay": (params) => {
-        const session = this.#get(params.sessionId);
+        // A subagent's own session is never listed or opened, but it can be read.
+        const session = this.#agents.child(params.sessionId) ?? this.#get(params.sessionId);
         const after = session.log.filter((event) => event.payload.seq > params.afterSeq);
         const page = params.limit === undefined ? after : after.slice(0, params.limit);
         return { events: page, lastSeq: session.lastSeq, hasMore: page.length < after.length };
@@ -447,12 +486,47 @@ class Engine implements MockEngine {
         });
         return { stopped: true };
       },
+      // Hooks and project trust, as the real engine answers them (trust.ts).
+      "project.inspect": (params) => {
+        // Hooks and consent from trust.ts, and the rest of the setup from compat.ts.
+        const found = this.#trust.inspect(params.projectDir);
+        const items = mockSetupItems(params.projectDir, this.#homeDir);
+        return { ...found, items: sortReportItems([...items, ...found.items]) };
+      },
+      "project.trust": (params) =>
+        this.#trust.trust(params.projectDir, params.hash, params.approved),
+      "hooks.list": (params) => this.#trust.list(params.projectDir),
+      "hooks.setEnabled": (params) =>
+        this.#trust.setEnabled(params.projectDir, params.id, params.enabled),
+      // Subagents (subagents.ts).
+      "subagent.stop": (params) =>
+        this.#agents.stop(this.#openHere(connection, params.sessionId), params.agentId),
+      // Settings → Skills and commands (skills.ts).
+      "project.skills": (params) => mockSkills(params.projectDir, this.#homeDir),
+      // Settings → Subagents (subagent-files.ts).
+      "project.subagents": (params) => this.#agentFiles.list(params.projectDir),
+      "subagent.create": (params) => this.#agentFiles.create(params),
+      // MCP servers, as the real engine answers for them (mcp.ts).
+      "mcp.list": (params) => this.#mcp.list(params.projectDir, params.sessionId),
+      "mcp.signIn": (params) => this.#mcp.signIn(params.projectDir, params.name, params.sessionId),
+      "mcp.signOut": (params) =>
+        this.#mcp.signOut(params.projectDir, params.name, params.sessionId),
+      "mcp.cancelSignIn": (params) =>
+        this.#mcp.cancelSignIn(params.projectDir, params.name, params.sessionId),
+      "mcp.restart": (params) => this.#mcp.restart(params.projectDir, params.name),
+      "mcp.setEnabled": (params) =>
+        this.#mcp.setEnabled(params.projectDir, params.name, params.enabled),
+      "mcp.importPreview": () => this.#mcp.importPreview(),
+      "mcp.import": (params) => this.#mcp.import(params.hash),
+      "mcp.session": (params) =>
+        this.#mcp.session(this.#openHere(connection, params.sessionId).summary().cwd),
       "permission.respond": (params) =>
         this.#respond(connection, params, { kind: "permission", response: params.response }),
       "question.respond": (params) =>
         this.#respond(connection, params, { kind: "question", response: params.response }),
       "plan.respond": (params) =>
         this.#respond(connection, params, { kind: "plan", response: params.response }),
+      "elicitation.respond": (params) => this.#respondElicitation(connection, params),
     };
   }
 
@@ -531,6 +605,8 @@ class Engine implements MockEngine {
       archived: false,
       additionalDirectories: params.additionalDirectories ?? [],
     });
+    // The session's own MCP servers come from the person: no approval (mcp.ts).
+    this.#mcp.setSessionServers(session.id, params.mcpServers, params.strictMcpConfig);
     return this.#open(connection, session).snapshot();
   }
 
@@ -584,9 +660,49 @@ class Engine implements MockEngine {
       });
       return { turnId: session.state.turn?.turnId ?? "" };
     }
+    // The project's UserPromptSubmit hook runs before the prompt becomes a turn, as in the real
+    // engine: its line comes first, outside the turn.
+    const ran = this.#trust.promptHookRan(session.settings.projectDir, 24);
+    if (ran !== null) session.emit("hook.ran", ran);
+    const text = promptText(prompt);
+    if (asksForAgent(text)) {
+      // A scripted Agent call (subagents.ts).
+      const { turnId, steps } = this.#agents.turn(session, text);
+      this.#play(session, steps);
+      return { turnId };
+    }
+    if (asksForElicitation(text)) {
+      // A scripted MCP server's request for input (elicitation.ts).
+      const { turnId, steps } = elicitationTurn(session, this.#pace.speed, text);
+      this.#play(session, steps);
+      return { turnId };
+    }
     const { turnId, steps } = genericTurn(session, this.#pace, prompt);
     this.#play(session, steps);
     return { turnId };
+  }
+
+  /**
+   * A background agent ended while its session was idle: the engine starts a turn by itself so
+   * the model can act on the result, as the real engine does. Not while a turn runs.
+   */
+  #agentTurn(session: MockSession, prompt: string): void {
+    if (session.busy || !this.#sessions.has(session.id)) return;
+    session.emit("session.status", { ...WORKING, message: "Working" });
+    const turnId = session.ids.fresh("turn");
+    session.emit("turn.started", {
+      turnId,
+      prompt: { content: [{ type: "text", text: prompt }], mentions: [] },
+      command: null,
+    });
+    this.#play(
+      session,
+      this.#agents.reply(
+        session,
+        turnId,
+        "The background agent found it: settings come from the environment, then `config.toml`.",
+      ),
+    );
   }
 
   #interrupt(session: MockSession): boolean {
@@ -611,6 +727,7 @@ class Engine implements MockEngine {
     const wasQueued = session.queue !== null;
     session.queue = null;
     interruptTurn(session, this.#clock.now());
+    this.#agents.interrupted(session);
     if (wasQueued) this.#reportQueue();
     return true;
   }
@@ -669,6 +786,12 @@ class Engine implements MockEngine {
     switch (params.name) {
       case "help":
         return { ...none, output: helpText(params.args) };
+      case "rewind":
+        return { ...none, output: rewindText(session.log) };
+      case "memory":
+        return { ...none, output: memoryText(session.settings.projectDir) };
+      case "agents":
+        return { ...none, output: this.#agentFiles.text(session.settings.projectDir) };
       case "context":
         return { ...none, output: contextText(session) };
       case "compact":
@@ -692,6 +815,28 @@ class Engine implements MockEngine {
           `There is no command /${params.name}. Type /help for the list.`,
         );
     }
+  }
+
+  /** `session.rewind`: files reported, the conversation forked, or a summary from the prompt. */
+  #rewind(connection: Connection, params: ParsedParams<"session.rewind">) {
+    const session = this.#openHere(connection, params.sessionId);
+    this.#requireIdle(session, "Rewinding");
+    const checkpoint = mockCheckpoint(session.log, params.checkpointId);
+    const done = { outcome: "done" as const, conflicts: [], files: null, session: null };
+    if (params.action === "summarize") {
+      this.#compact(session, params.instructions?.trim() || null);
+      return { ...done, prompt: checkpoint.prompt };
+    }
+    const files =
+      params.action === "files" || params.action === "both" ? mockRestore(checkpoint) : null;
+    if (params.action === "files") return { ...done, files, prompt: null };
+    const title = session.settings.title === null ? null : `${session.settings.title} (rewound)`;
+    const fork = this.#fork(connection, {
+      sessionId: session.id,
+      point: { position: "beforeTurn", turnId: checkpoint.turnId },
+      ...(title === null ? {} : { title }),
+    });
+    return { ...done, files, session: fork, prompt: checkpoint.prompt };
   }
 
   #requireIdle(session: MockSession, what: string): void {
@@ -755,6 +900,35 @@ class Engine implements MockEngine {
         },
       },
     ]);
+  }
+
+  /** An answer to a server's request for input, checked against its form as the engine does. */
+  #respondElicitation(
+    connection: Connection,
+    params: {
+      sessionId: string;
+      requestId: string;
+      action: ElicitationResponse["action"];
+      content?: ElicitationContent | undefined;
+    },
+  ): Record<string, never> {
+    const session = this.#openHere(connection, params.sessionId);
+    const request = session.state.pending.get(params.requestId);
+    const form =
+      request?.kind === "elicitation" && request.mode === "form" && params.action === "accept";
+    if (form) {
+      const issues = elicitationIssues(request.fields, params.content ?? {});
+      if (issues.length > 0) {
+        throw new RpcError(
+          ErrorCodes.InvalidParams,
+          `The answer does not fit the form. ${issues.map((i) => `${i.field ?? "form"}: ${i.message}`).join(" ")}`,
+        );
+      }
+    }
+    return this.#respond(connection, params, {
+      kind: "elicitation",
+      response: { action: params.action, content: form ? (params.content ?? {}) : null },
+    });
   }
 
   #respond(
@@ -832,6 +1006,13 @@ function emitAnswer(
     case "plan":
       session.emit("request.resolved", { ...base, kind: "plan", response: decision.response });
       return;
+    case "elicitation":
+      session.emit("request.resolved", {
+        ...base,
+        kind: "elicitation",
+        response: decision.response,
+      });
+      return;
   }
 }
 
@@ -842,6 +1023,7 @@ function raisedRequestId(event: EngineEvent): string | null {
       return event.payload.request.requestId;
     case "question.asked":
     case "plan.proposed":
+    case "elicitation.requested":
       return event.payload.requestId;
     default:
       return null;

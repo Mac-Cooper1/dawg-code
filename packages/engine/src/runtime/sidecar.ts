@@ -24,7 +24,7 @@ export interface Sidecar {
    * session opens again and the request is answered, so a listing reports it "waiting".
    * Absent in files written before engines kept it.
    */
-  waitingOn?: "permission" | "question" | "plan" | null;
+  waitingOn?: "permission" | "question" | "plan" | "elicitation" | null;
 }
 
 export function sidecarPath(sessionDir: string): string {

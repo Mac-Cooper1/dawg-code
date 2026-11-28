@@ -21,12 +21,33 @@ export type PermissionSubject =
    * (absolute); it differs from the session's working directory after an earlier `cd`. When it is
    * absent the session's working directory is assumed.
    */
-  | { kind: "command"; command: string; cwd?: string }
+  | {
+      kind: "command";
+      command: string;
+      cwd?: string;
+      /** Added (Phase 4, sandbox): where the command runs while the sandbox is on; absent when off. */
+      sandbox?: CommandSandboxPlan;
+    }
   /**
    * Anything else. Rules match on the tool's name and, when there is one, on the specifier text
    * (the part inside the brackets of `Tool(specifier)`).
    */
   | { kind: "other"; specifier: string | null };
+
+/**
+ * Added (Phase 4, sandbox): where a shell command runs while the sandbox is on.
+ *
+ * - inside: in the sandbox. With `autoAllow` (`sandbox.autoAllowBashIfSandboxed`) the engine
+ *   allows it where only the mode would have asked, outside plan mode, since the sandbox confines
+ *   what it can write and reach. Deny rules, ask rules that name commands, critical removals,
+ *   protected paths and commands that cannot be analysed still decide as usual; a bare `Bash` ask
+ *   rule does not.
+ * - outside: without the sandbox, for the reason given; judged like any command. A retry outside
+ *   is never allowed just for being read-only: the sandbox may be what kept it from reading.
+ */
+export type CommandSandboxPlan =
+  | { run: "inside"; autoAllow: boolean }
+  | { run: "outside"; why: "excluded" | "retry" | "unavailable" };
 
 export interface PermissionQuery {
   toolName: string;
@@ -42,6 +63,13 @@ export interface PermissionState {
   /** `cwd` plus any added directories (absolute). */
   workingDirectories: readonly string[];
   homeDir: string;
+  /**
+   * Folders the engine keeps memory in for this session (absolute): the project's memory folder,
+   * a subagent's memory scope. The file tools read and change files inside them without asking,
+   * in every mode but plan; deny rules and ask rules still apply, and so do protected names
+   * inside them (`.git`, `.dawg`...). Shell commands get nothing from them. Absent: none.
+   */
+  memoryDirectories?: readonly string[];
 }
 
 export type PermissionReason =
@@ -64,7 +92,9 @@ export type PermissionReason =
   /** The permission check itself failed. The safe outcome (ask or deny) was chosen. */
   | { type: "internal_error" }
   /** The call needs no permission. */
-  | { type: "not_needed" };
+  | { type: "not_needed" }
+  /** Added (Phase 4, sandbox): it runs in the sandbox, whose settings allow that without asking. */
+  | { type: "sandbox" };
 
 export type PermissionDecision =
   | { behavior: "allow"; reason: PermissionReason }

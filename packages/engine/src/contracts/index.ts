@@ -22,6 +22,7 @@ export {
   type ToolSchema,
 } from "./model.ts";
 export type {
+  CommandSandboxPlan,
   PermissionDecision,
   PermissionEngine,
   PermissionQuery,
@@ -43,6 +44,7 @@ export type {
 export {
   type AnyTool,
   DEFAULT_TOOL_LIMITS,
+  type ElicitationRequest,
   type SessionServices,
   type SessionStateBag,
   type ToolContext,
@@ -52,3 +54,12 @@ export {
   type ToolProbeContext,
   type ToolProgress,
 } from "./tools.ts";
+export {
+  type EngineServices,
+  SearchError,
+  type SearchProvider,
+  type SearchQuery,
+  type SearchResult,
+  type UtilityModel,
+  type UtilityRequest,
+} from "./web.ts";

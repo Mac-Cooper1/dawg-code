@@ -13,6 +13,7 @@ import type { PermissionRule } from "@dawg/compat";
 import type { PermissionMode } from "@dawg/protocol";
 import picomatch from "picomatch";
 import type {
+  CommandSandboxPlan,
   PermissionDecision,
   PermissionEngine,
   PermissionQuery,
@@ -32,6 +33,7 @@ import {
   nodeFsProbe,
   PathResolver,
   protectedKind,
+  relativeWithin,
   WorkingDirectories,
 } from "./paths.ts";
 import {
@@ -189,6 +191,12 @@ class Judge {
   private readonly rules: CompiledRules;
   private readonly readOnlyCommands: boolean;
   private readonly families = new Map<RuleList, Families>();
+  /** The session's memory folders, resolved (see `PermissionState.memoryDirectories`). */
+  private readonly memoryRoots: readonly string[];
+  /** Added (Phase 4, sandbox): the command runs sandboxed with auto-allow on (`decideCommand`). */
+  private sandboxAutoAllow = false;
+  /** Added (Phase 4, sandbox): the command is a retry outside the sandbox. */
+  private retryOutside = false;
 
   constructor(query: PermissionQuery, state: PermissionState, options: PermissionEngineOptions) {
     this.query = query;
@@ -201,6 +209,7 @@ class Judge {
     );
     this.rules = compileRules(state.rules);
     this.readOnlyCommands = options.readOnlyCommandsNeverAsk ?? true;
+    this.memoryRoots = new WorkingDirectories(state.memoryDirectories ?? [], this.resolver).list();
   }
 
   decide(): Outcome {
@@ -213,7 +222,7 @@ class Judge {
       case "edit":
         return this.decideEdit(subject.paths);
       case "command":
-        return this.decideCommand(subject.command, subject.cwd);
+        return this.decideCommand(subject.command, subject.cwd, subject.sandbox);
       case "other":
         return this.decideOther(subject.specifier);
       default:
@@ -350,6 +359,20 @@ class Judge {
     return strictly ? this.wds.containsStrictly(c.real) : this.wds.contains(c.real);
   }
 
+  /**
+   * Whether a path really leads into one of the session's memory folders, with no protected name
+   * on the way inside it. `strictly`: not the folder itself (a file to change must be inside).
+   */
+  private inMemory(c: Candidates, strictly: boolean): boolean {
+    if (c.real === null) return false;
+    for (const root of this.memoryRoots) {
+      const rel = relativeWithin(c.real, root);
+      if (rel === null || (strictly && rel === "")) continue;
+      return rel === "" || protectedKind(`/${rel}`) === null;
+    }
+    return false;
+  }
+
   private protectedReason(c: Candidates): PermissionReason | null {
     for (const p of c.all) {
       const kind = protectedKind(p);
@@ -400,7 +423,7 @@ class Judge {
     let usedRule: CompiledRule | null = null;
     const outside: Candidates[] = [];
     for (const c of all) {
-      if (this.inside(c)) continue;
+      if (this.inside(c) || this.inMemory(c, false)) continue;
       const r = allowTool ?? this.pathRule("allow", "read", c);
       if (r !== null) {
         usedRule ??= r;
@@ -431,6 +454,10 @@ class Judge {
     for (const c of all) {
       const r = this.pathRule("ask", "edit", c);
       if (r !== null) return ask(ruleReason(r));
+    }
+    // The session's memory folders are the engine's to keep: no prompt (../memory).
+    if (all.length > 0 && all.every((c) => this.inMemory(c, true))) {
+      return allow({ type: "not_needed" });
     }
     if (this.mode === "bypassPermissions") return allow({ type: "mode", mode: this.mode });
     if (all.length === 0) return ask({ type: "mode", mode: this.mode });
@@ -472,7 +499,8 @@ class Judge {
         if (!toolNameMatches(r, this.query.toolName)) continue;
         if (r.kind === "tool") return r;
         if (r.kind === "other" && specifier !== null && r.parsed.specifier !== null) {
-          if (specifierMatches(r.parsed.specifier, specifier, list)) return r;
+          const pattern = domainPattern(this.query.toolName, r.parsed.specifier);
+          if (specifierMatches(pattern, specifier, list)) return r;
         }
       }
       return null;
@@ -498,9 +526,16 @@ class Judge {
   // Commands
   // -------------------------------------------------------------------------------------------
 
-  private decideCommand(command: string, shellCwd: string | undefined): Outcome {
+  private decideCommand(
+    command: string,
+    shellCwd: string | undefined,
+    sandbox: CommandSandboxPlan | undefined,
+  ): Outcome {
     const denyRule = this.toolRule("deny");
     if (denyRule !== null) return deny(ruleReason(denyRule));
+    // The sandbox (Phase 4): see `CommandSandboxPlan`.
+    this.sandboxAutoAllow = sandbox?.run === "inside" && sandbox.autoAllow && this.mode !== "plan";
+    this.retryOutside = sandbox?.run === "outside" && sandbox.why === "retry";
 
     // Relative paths in the command resolve against the shell's directory, which differs from
     // the session's after a `cd` in an earlier call.
@@ -521,7 +556,8 @@ class Judge {
       if (r.behavior === "deny") return deny(wrap(parts[i] as CommandPart, r.reason));
     }
     const askRule = this.toolRule("ask");
-    if (askRule !== null) return ask(ruleReason(askRule));
+    // A bare `Bash` ask rule does not stop an auto-allowed sandboxed command (documented).
+    if (askRule !== null && !this.sandboxAutoAllow) return ask(ruleReason(askRule));
 
     let best: { priority: number; reason: PermissionReason } | null = null;
     if (analysis.unparseable !== null) {
@@ -543,6 +579,8 @@ class Judge {
       .map((r, i) => ({ r, part: parts[i] as CommandPart }))
       .filter((x) => x.r.behavior === "needs");
     const first = needs[0];
+    // Only the mode would ask: the sandbox, set to allow sandboxed commands, answers instead.
+    if (first !== undefined && this.sandboxAutoAllow) return allow({ type: "sandbox" });
     if (first !== undefined) {
       let suggestions: string[] = [];
       if (needs.every((x) => x.r.behavior === "needs" && x.r.fixable)) {
@@ -661,7 +699,9 @@ class Judge {
         part.coveredBy === null ? null : (earlier[part.coveredBy]?.commandRule ?? null);
       commandRule = coverer ?? this.toolRule("allow") ?? this.commandRule("allow", part);
       if (commandRule !== null) by = "rule";
-      else if (part.readOnly && (this.readOnlyCommands || mode === "plan")) by = "readonly";
+      else if (part.readOnly && (this.readOnlyCommands || mode === "plan") && !this.retryOutside) {
+        by = "readonly";
+      }
     }
 
     let asked: PartResult | null = null;
@@ -688,6 +728,8 @@ class Judge {
           continue;
         }
         if (!this.inside(c, t.removal)) {
+          // The sandbox decides what an auto-allowed command may write outside them.
+          if (this.sandboxAutoAllow) continue;
           asked ??= askOf(
             about(t, {
               type: "protected",
@@ -732,7 +774,7 @@ class Judge {
         continue;
       }
       for (const c of targets(t)) {
-        if (this.inside(c)) continue;
+        if (this.inside(c) || this.sandboxAutoAllow) continue;
         if (by === "rule" && t.via === "operand") continue;
         if (this.pathRule("allow", "read", c) !== null) continue;
         needs.push({
@@ -848,6 +890,16 @@ function segmentsMayMeet(shellSegment: string, ruleSegment: string): boolean {
 
 function ruleReason(rule: CompiledRule): PermissionReason {
   return { type: "rule", list: rule.list, rule: rule.source };
+}
+
+/**
+ * A WebFetch rule's `domain:` pattern as the tool's own specifier is written: lower case, without
+ * a trailing dot, since the documented matching is case-insensitive and ignores that dot
+ * (code.claude.com/docs/en/permissions, "WebFetch"). Other specifiers are left as they are.
+ */
+function domainPattern(toolName: string, pattern: string): string {
+  if (toolName !== "WebFetch" || !/^domain:/i.test(pattern)) return pattern;
+  return `domain:${pattern.slice("domain:".length).trim().toLowerCase().replace(/\.$/, "")}`;
 }
 
 function allow(reason: PermissionReason): Outcome {

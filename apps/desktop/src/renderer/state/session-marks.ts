@@ -85,6 +85,13 @@ function needSubtitle(
       return "Needs you: answer a question";
     case "plan":
       return "Needs you: approve a plan";
+    case "elicitation": {
+      const item = ref ? items[indexOfId(items, itemIds.elicitation(ref.requestId))] : undefined;
+      if (item?.kind !== "elicitation") return "Needs you: answer an MCP server";
+      return item.mode === "url"
+        ? `Needs you: open a page for ${item.server}`
+        : `Needs you: fill in ${item.server}’s form`;
+    }
     case "permission": {
       const item = ref ? items[indexOfId(items, itemIds.permission(ref.requestId))] : undefined;
       return item?.kind === "permission"

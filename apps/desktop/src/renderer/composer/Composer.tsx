@@ -31,12 +31,15 @@ import {
 import { MentionMenu } from "./MentionMenu.tsx";
 import { ModelMenu } from "./ModelMenu.tsx";
 import { ModeMenu } from "./ModeMenu.tsx";
+import { isResourceMatch } from "./mcpResources.ts";
 import { activeMention, applyMention, resolveMentions } from "./mentions.ts";
 import { imagesNotKeptText, QueueList } from "./QueueList.tsx";
 import { useFileSearch } from "./useFileSearch.ts";
 
 /** How long a one-line notice about attaching stays. */
 const NOTICE_MS = 8000;
+/** Esc twice within this long, with the field empty and nothing running, opens rewind. */
+export const REWIND_ESCAPE_MS = 500;
 
 export interface ComposerProps {
   view: ComposerView;
@@ -76,6 +79,8 @@ export interface ComposerProps {
   onRemoveQueued(id: string): void;
   /** "Manage models…": Settings → Models. */
   onManageModels(): void;
+  /** Esc twice with the field empty while nothing runs: the rewind dialog. */
+  onRewind?(): void;
 }
 
 /** A value that belongs to one session: it reads as `initial` in any other. */
@@ -116,6 +121,8 @@ export function Composer(props: ComposerProps) {
   const [dismissedMention, setDismissedMention] = useSessionValue<number | null>(sessionId, null);
   /** Paths the `@` menu showed, per session: typed out in full, they count as mentions too. */
   const found = useRef(new Map<string, Set<string>>());
+  /** When Esc was last pressed with the field empty and nothing running (for Esc twice). */
+  const lastEscape = useRef<number | null>(null);
   /** Images being prepared, per session (the work goes on if the person switches away). */
   const preparingRef = useRef<Record<string, number>>({});
   const [preparingCounts, setPreparingCounts] = useState<Record<string, number>>({});
@@ -217,7 +224,8 @@ export function Composer(props: ComposerProps) {
     if (!mention) return;
     const browse = how === "tab" && match.kind === "directory";
     const next = applyMention(view.draft, mention, match.relativePath, { browse });
-    if (!browse) props.onRememberMention(match.relativePath);
+    // A resource is read by the engine from its `@server:uri` text, not sent as a file mention.
+    if (!browse && !isResourceMatch(match)) props.onRememberMention(match.relativePath);
     pendingCaret.current = next.caret;
     setCaret(next.caret);
     changeDraft(next.text);
@@ -304,6 +312,25 @@ export function Composer(props: ComposerProps) {
         else if (mention) setDismissedMention(mention.start);
         return;
       }
+    }
+
+    if (event.key === "Escape" && plain && !event.shiftKey) {
+      // Esc twice, with the field empty and nothing running, opens rewind (as in Claude Code).
+      const idle = view.status === "idle" || view.status === "error";
+      if (idle && view.draft.trim() === "" && props.onRewind) {
+        const now = Date.now();
+        if (lastEscape.current !== null && now - lastEscape.current <= REWIND_ESCAPE_MS) {
+          lastEscape.current = null;
+          event.preventDefault();
+          props.onRewind();
+          return;
+        }
+        lastEscape.current = now;
+      } else {
+        lastEscape.current = null;
+      }
+    } else {
+      lastEscape.current = null;
     }
 
     if (event.key === "Tab" && event.shiftKey && plain) {

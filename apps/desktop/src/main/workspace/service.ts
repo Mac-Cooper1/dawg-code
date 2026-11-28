@@ -6,7 +6,17 @@
  * resolving symlinks. Git runs through `execFile` with literal pathspecs. Base commits are kept in
  * `<data root>/workspace.json` (see `store.ts`).
  */
-import { lstat, mkdtemp, readdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { z } from "zod";
@@ -74,6 +84,11 @@ export interface WorkspaceServiceOptions {
   maxWaitMs?: number;
   /** The bundled ripgrep, which lists files for `@` mentions outside git. */
   ripgrepPath?: string | null;
+  /**
+   * The project's memory folder for a session's project (`memoryDirectory` from the engine, with
+   * the data root), for a track that asks for it. Absent: memory is never a root.
+   */
+  memoryDirectory?: (projectDir: string) => Promise<string>;
 }
 
 export interface WorkspaceService {
@@ -262,6 +277,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
         log(`Session ${input.sessionId}: skipping the missing folder ${dir}.`);
       }
     }
+    const memoryDirectory = input.memory ? await memoryRoot(input, roots) : null;
     const git = await gitStateFor(input.sessionId, realCwd, roots);
 
     const existing = sessions.get(input.sessionId);
@@ -292,6 +308,7 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
     return {
       sessionId: session.id,
       cwd: session.cwd,
+      ...(input.memory ? { memoryDirectory } : {}),
       git: git && {
         root: git.root.logical,
         branch: await currentBranch(realCwd),
@@ -300,6 +317,24 @@ export function createWorkspaceService(options: WorkspaceServiceOptions): Worksp
         worktree: git.worktree,
       },
     };
+  }
+
+  /**
+   * Adds the project's memory folder to `roots` (made when there is none yet), and returns it;
+   * null when there is no memory or it cannot be made. The path comes from main, never a window.
+   */
+  async function memoryRoot(input: ParsedTrackInput, roots: Root[]): Promise<string | null> {
+    if (options.memoryDirectory === undefined) return null;
+    try {
+      const dir = await options.memoryDirectory(input.projectDir);
+      await mkdir(dir, { recursive: true });
+      const real = await realPathOf(dir);
+      if (!roots.some((root) => root.real === real)) roots.push({ logical: dir, real });
+      return dir;
+    } catch (error) {
+      log(`Session ${input.sessionId}: no memory folder (${messageOf(error)}).`);
+      return null;
+    }
   }
 
   function forget(session: Session): void {

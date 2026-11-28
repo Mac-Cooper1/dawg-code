@@ -26,7 +26,10 @@ import { findItemIndex, findPermissionIndex, itemsMoved } from "./item-index.ts"
 import type {
   AssistantTextItem,
   CompactionItem,
+  ElicitationItem,
   ErrorItem,
+  HookItem,
+  HookSkippedItem,
   NoteItem,
   PendingRef,
   PermissionItem,
@@ -61,11 +64,14 @@ export const itemIds = {
   permission: (requestId: string) => `permission:${requestId}`,
   question: (requestId: string) => `question:${requestId}`,
   plan: (requestId: string) => `plan:${requestId}`,
+  elicitation: (requestId: string) => `elicitation:${requestId}`,
   compaction: (compactionId: string) => `compaction:${compactionId}`,
   error: (seq: number) => `error:${seq}`,
   turnError: (turnId: string) => `error:turn:${turnId}`,
   note: (turnId: string) => `note:${turnId}`,
   summary: (turnId: string) => `summary:${turnId}`,
+  hook: (seq: number) => `hook:${seq}`,
+  hookSkipped: (seq: number) => `hook-skipped:${seq}`,
 } as const;
 
 const ZERO_TOTALS: UsageTotals = Object.freeze({ requests: 0, promptTokens: 0, cachedTokens: 0 });
@@ -143,7 +149,24 @@ export function turnStarted(
     mentions: p.prompt.mentions,
     command: p.command,
   };
+  if (startedForAgent(session, text, p.command)) item.fromAgent = true;
   items.push(item);
+}
+
+/** How the engine words the prompt of a turn it starts because a background agent ended. */
+export const BACKGROUND_AGENT_PROMPT = "Background agent";
+
+/**
+ * Whether the engine started this turn by itself, for a background agent that ended while the
+ * session was idle: its prompt starts with the engine's words and such an agent has ended.
+ */
+function startedForAgent(
+  session: MutableSession,
+  text: string,
+  command: EventPayload<"turn.started">["command"],
+): boolean {
+  if (command !== null || !text.startsWith(BACKGROUND_AGENT_PROMPT)) return false;
+  return session.subagents.some((agent) => agent.background && agent.endedAt !== null);
 }
 
 /**
@@ -194,6 +217,7 @@ export function closeTurnItems(
       case "permission":
       case "question":
       case "plan":
+      case "elicitation":
         if (item.state === "pending") {
           replace(index, { ...item, state: "cancelled" });
           removePending(draft, session.id, item.requestId);
@@ -468,7 +492,7 @@ export function toolStarted(
     return;
   }
   if (toolIndex(readItems(draft, session.id), p.toolCallId) !== -1) return;
-  insertToolItem(writeItems(draft, session.id), {
+  const item: ToolCallItem = {
     kind: "tool",
     id: itemIds.tool(p.toolCallId),
     turnId: p.turnId,
@@ -485,7 +509,26 @@ export function toolStarted(
     startedAt: p.time,
     durationMs: null,
     permissionRequestId: null,
-  });
+  };
+  // The agent's first update may come before its call's start.
+  const agent = session.subagents.findLast((candidate) => candidate.toolCallId === p.toolCallId);
+  if (agent) item.agent = agent;
+  insertToolItem(writeItems(draft, session.id), item);
+}
+
+/** A subagent moved on: the card of the call that started its current task shows it. */
+export function subagentUpdated(
+  draft: Draft,
+  session: MutableSession,
+  p: EventPayload<"subagent.updated">,
+): void {
+  const { agent } = p;
+  if (agent.toolCallId === null) return;
+  const index = toolIndex(readItems(draft, session.id), agent.toolCallId);
+  if (index === -1) return;
+  const items = writeItems(draft, session.id);
+  const item = items[index] as ToolCallItem;
+  items[index] = { ...item, agent };
 }
 
 export function toolProgress(
@@ -671,6 +714,39 @@ export function planProposed(
   addPending(draft, session.id, { kind: "plan", requestId: p.requestId, turnId: p.turnId });
 }
 
+/** An MCP server asks for input: the card goes after the call that is waiting on it. */
+export function elicitationRequested(
+  draft: Draft,
+  session: MutableSession,
+  p: EventPayload<"elicitation.requested">,
+): void {
+  const id = itemIds.elicitation(p.requestId);
+  if (indexOfId(readItems(draft, session.id), id) === -1) {
+    const item: ElicitationItem = {
+      kind: "elicitation",
+      id,
+      turnId: p.turnId,
+      seq: p.seq,
+      requestId: p.requestId,
+      toolCallId: p.toolCallId,
+      server: p.server,
+      message: p.message,
+      mode: p.mode,
+      fields: p.fields,
+      url: p.url,
+      ...(p.agent === undefined ? {} : { agent: p.agent }),
+      state: "pending",
+      response: null,
+    };
+    writeItems(draft, session.id).push(item);
+  }
+  addPending(draft, session.id, {
+    kind: "elicitation",
+    requestId: p.requestId,
+    turnId: p.turnId,
+  });
+}
+
 export function requestResolved(
   draft: Draft,
   session: MutableSession,
@@ -687,6 +763,8 @@ export function requestResolved(
   } else if (item?.kind === "question" && p.kind === "question") {
     items[index] = { ...item, state, response: p.response };
   } else if (item?.kind === "plan" && p.kind === "plan") {
+    items[index] = { ...item, state, response: p.response };
+  } else if (item?.kind === "elicitation" && p.kind === "elicitation") {
     items[index] = { ...item, state, response: p.response };
   }
 }
@@ -773,4 +851,86 @@ export function errorRaised(draft: Draft, session: MutableSession, p: EventPaylo
   if (indexOfId(items, id) !== -1) return;
   const item: ErrorItem = { kind: "error", id, turnId: p.turnId, seq: p.seq, error: p.error };
   items.push(item);
+}
+
+// --- Hooks -------------------------------------------------------------------------------------
+
+/** Whether an item belongs to a tool call: its card, or a hook that ran for it. */
+function ofCall(item: TranscriptItem | undefined, toolCallId: string): boolean {
+  if (item === undefined) return false;
+  if (item.kind === "tool") return item.toolCallId === toolCallId;
+  return item.kind === "hook" && item.toolCallId === toolCallId;
+}
+
+/**
+ * Where a hook that ran for a tool call goes: a PreToolUse hook ran before the call (and before
+ * its permission card, which is put directly before the call when it comes), so just before the
+ * card; any other, after the card and the hooks already after it. -1 appends (the call is not in
+ * the transcript: a hidden tool, or a stream that lost its start).
+ */
+function hookPosition(items: readonly TranscriptItem[], toolCallId: string, event: string): number {
+  const index = toolIndex(items, toolCallId);
+  if (index === -1) return -1;
+  // PreToolUse and PermissionRequest hooks ran before the call did.
+  if (event === "PreToolUse" || event === "PermissionRequest") {
+    const permission = permissionIndexForCall(items, toolCallId);
+    return permission !== -1 && permission < index ? permission : index;
+  }
+  let after = index + 1;
+  while (after < items.length && ofCall(items[after], toolCallId)) after += 1;
+  return after;
+}
+
+export function hookRan(draft: Draft, session: MutableSession, p: EventPayload<"hook.ran">): void {
+  const id = itemIds.hook(p.seq);
+  if (indexOfId(readItems(draft, session.id), id) !== -1) return;
+  const items = writeItems(draft, session.id);
+  let toolName: string | null = null;
+  if (p.toolCallId !== null) {
+    const tool = items[toolIndex(items, p.toolCallId)];
+    toolName =
+      tool?.kind === "tool"
+        ? tool.toolName
+        : (session.internals.hiddenCalls[p.toolCallId]?.toolName ?? null);
+  }
+  const item: HookItem = {
+    kind: "hook",
+    id,
+    turnId: p.turnId,
+    seq: p.seq,
+    toolCallId: p.toolCallId,
+    toolName,
+    hook: p.hook,
+    outcome: p.outcome,
+    exitCode: p.exitCode,
+    durationMs: p.durationMs,
+    decision: p.decision,
+    message: p.message,
+    time: p.time,
+  };
+  const at = p.toolCallId === null ? -1 : hookPosition(items, p.toolCallId, p.hook.event);
+  if (at === -1 || at >= items.length) {
+    items.push(item);
+    return;
+  }
+  items.splice(at, 0, item);
+  itemsMoved(items);
+}
+
+export function hookSkipped(
+  draft: Draft,
+  session: MutableSession,
+  p: EventPayload<"hook.skipped">,
+): void {
+  const id = itemIds.hookSkipped(p.seq);
+  if (indexOfId(readItems(draft, session.id), id) !== -1) return;
+  const item: HookSkippedItem = {
+    kind: "hook-skipped",
+    id,
+    turnId: p.turnId,
+    seq: p.seq,
+    projectDir: p.projectDir,
+    sources: p.sources,
+  };
+  writeItems(draft, session.id).push(item);
 }

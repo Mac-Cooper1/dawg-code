@@ -1,7 +1,8 @@
 /**
- * The Tasks pane: dawg's task list and its background commands, live. A background command's
- * output can be read (and followed while it runs), and a running one stopped after a
- * confirmation.
+ * The Tasks pane: dawg's task list, its background commands and its background agents, live. A
+ * background command's output can be read (and followed while it runs), and a running one
+ * stopped after a confirmation. An agent's transcript opens in place of the session's, and a
+ * queued or running agent can be stopped the same way.
  */
 import type { TaskItem } from "@dawg/protocol";
 import { useCallback, useEffect, useId, useState } from "react";
@@ -11,6 +12,7 @@ import { useActions, useAppStore } from "../../state/store.ts";
 import { Icon } from "../../ui/index.ts";
 import { PaneEmpty } from "../PaneEmpty.tsx";
 import type { PaneProps } from "../types.ts";
+import { AgentRow } from "./AgentRow.tsx";
 import { BackgroundRow } from "./BackgroundRow.tsx";
 import styles from "./Tasks.module.css";
 
@@ -70,18 +72,28 @@ export function TasksPane({ sessionId }: PaneProps) {
   const view = useAppStore((state) => selectTasksPane(state, sessionId));
   const actions = useActions();
   const headingId = useId();
+  const agentsHeadingId = useId();
   const background = view?.background ?? [];
+  const agents = view?.agents ?? [];
   const now = useClock(background.some((task) => task.status === "running"));
   const onStop = useCallback(
     (taskId: string) => run(actions.stopBackground(sessionId, taskId)),
     [actions, sessionId],
   );
+  const onOpenAgent = useCallback(
+    (agentId: string) => actions.openSubagent(sessionId, agentId),
+    [actions, sessionId],
+  );
+  const onStopAgent = useCallback(
+    (agentId: string) => run(actions.stopSubagent(sessionId, agentId)),
+    [actions, sessionId],
+  );
 
-  if (!view || (view.tasks.length === 0 && background.length === 0)) {
+  if (!view || (view.tasks.length === 0 && background.length === 0 && agents.length === 0)) {
     return (
       <PaneEmpty pane="tasks" title="No tasks yet">
-        When dawg works through a list of steps, or leaves a command running in the background, it
-        shows here.
+        When dawg works through a list of steps, or leaves a command or an agent running in the
+        background, it shows here.
       </PaneEmpty>
     );
   }
@@ -110,6 +122,23 @@ export function TasksPane({ sessionId }: PaneProps) {
           </ul>
         )}
       </section>
+      {agents.length > 0 && (
+        <section className={styles.section} aria-labelledby={agentsHeadingId}>
+          <h3 id={agentsHeadingId} className={styles.heading}>
+            Background agents
+          </h3>
+          <ul className={styles.card} aria-labelledby={agentsHeadingId}>
+            {agents.map((agent) => (
+              <AgentRow
+                key={agent.agentId}
+                agent={agent}
+                onOpen={onOpenAgent}
+                onStop={onStopAgent}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
